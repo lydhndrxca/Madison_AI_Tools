@@ -1,0 +1,93 @@
+@import "tailwindcss";
+@import "./lib/tokens.css";
+
+@theme {
+  --color-background: #3C3C3C;
+  --color-foreground: #E0E0E0;
+  --color-card: #4F4F4F;
+  --color-surface: #454545;
+  --color-muted: #4F4F4F;
+  --color-muted-foreground: #C0C0C0;
+  --color-border: #3A3A3A;
+  --color-border-hover: #6A6A6A;
+  --color-accent: #5A5A5A;
+  --color-accent-hover: #6A6A6A;
+  --color-destructive: #8B3A3A;
+  --color-success: #4A7C4A;
+  --color-warning: #B8860B;
+
+  --radius-sm: 0.1875rem;
+  --radius-md: 0.25rem;
+  --radius-lg: 0.375rem;
+  --radius-xl: 0.5rem;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+.animate-shimmer {
+  animation: shimmer 2s linear infinite;
+  background-size: 200% 100%;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Focus visible ring */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 1px solid var(--color-border-hover);
+  outline-offset: 1px;
+}
+
+/* Input focus border */
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--color-border-hover) !important;
+}
+
+/* Smooth page transitions */
+main > * {
+  animation: fade-in 0.15s ease-out;
+}
+
+/* Panel resize handle hover */
+[data-panel-resize-handle-id]:hover {
+  background-color: var(--color-border-hover) !important;
+}
+
+/* Generating button glow pulse (OKDO-style) */
+@keyframes btn-glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(0, 200, 255, 0.3), 0 0 20px rgba(108, 99, 255, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 14px rgba(0, 200, 255, 0.6), 0 0 30px rgba(108, 99, 255, 0.35);
+  }
+}
+
+.btn-generating {
+  animation: btn-glow-pulse 1.5s ease-in-out infinite;
+  border-color: rgba(0, 200, 255, 0.5) !important;
+  position: relative;
+}

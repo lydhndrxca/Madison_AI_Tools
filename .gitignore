@@ -28,6 +28,8 @@ saves/
 config/keys.json
 ALL GENERATED IMAGES/
 last_character_prompt.txt
+backend.log
+**/window_state.json
 
 # Auto-copied weapon assets (regenerated from reference_guns/ at startup)
 src/pubg_madison_ai_suite/assets/Weapon_Generator/*.png
@@ -39,3 +41,7 @@ default_api_key.txt
 
 # Bundled runtime (not needed in repo)
 runtime/
+
+# Frontend build output
+frontend/dist/
+frontend/node_modules/

@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pubg-madison-ai-suite"
-version = "2.1.0"
-description = "PUBG Madison AI Suite – internal image-generation tools"
+version = "3.0.0"
+description = "PUBG Madison AI Suite – Electron + React frontend with FastAPI backend"
 requires-python = ">=3.9"
 dependencies = [
   "google-generativeai>=0.8.0",
@@ -14,16 +14,17 @@ dependencies = [
   "rembg>=2.0.50",
   "PyPDF2>=3.0.0",
   "pywin32>=306; platform_system == 'Windows'",
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.34.0",
+  "requests>=2.31.0",
 ]
-
-[project.scripts]
-pubg_madison_ai_suite = "pubg_madison_ai_suite.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pubg_madison_ai_suite"]
 include = [
   "src/pubg_madison_ai_suite/assets/**",
   "src/pubg_madison_ai_suite/tools/**",
+  "src/pubg_madison_ai_suite/api/**",
 ]
 
 [tool.hatch.build.targets.sdist]
