@@ -142,32 +142,121 @@ class GeminiClientText:
 _4K_CAPABLE = {"gemini-3-pro-image-preview", "gemini-3.1-flash-image-preview"}
 
 
-def _weapon_gen_gemini_image(api_key, contents, aspect_ratio="16:9", image_size="4K"):
-    """Generate image using google.genai SDK with image_config for full resolution."""
-    from google import genai as _genai
-    from google.genai import types as _types
+def _rest_generate(api_key, model_name, contents_raw, gen_config, timeout=180, max_retries=2, cancel_event=None):
+    """Direct REST call to Gemini API with retry and cancel support."""
+    import requests, base64, time as _time
+    import io as _io
+
+    if cancel_event and cancel_event.is_set():
+        raise RuntimeError("Cancelled by user")
+
+    parts = []
+    for item in contents_raw:
+        if isinstance(item, str):
+            parts.append({"text": item})
+        elif isinstance(item, Image.Image):
+            buf = _io.BytesIO()
+            item.save(buf, format="PNG")
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            parts.append({"inlineData": {"mimeType": "image/png", "data": b64}})
+
+    body = {
+        "contents": [{"parts": parts}],
+        "generationConfig": gen_config,
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
+
+    for attempt in range(max_retries):
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("Cancelled by user")
+        resp = requests.post(url, json=body, headers=headers, timeout=timeout)
+        if resp.status_code == 200:
+            for part in resp.json().get("candidates", [{}])[0].get("content", {}).get("parts", []):
+                if "inlineData" in part:
+                    img_bytes = base64.b64decode(part["inlineData"]["data"])
+                    return Image.open(_io.BytesIO(img_bytes))
+            return None
+        err = resp.json().get("error", {})
+        code = resp.status_code
+        is_transient = code in (500, 503) or "UNAVAILABLE" in str(err) or "INTERNAL" in str(err)
+        if is_transient and attempt < max_retries - 1:
+            wait = 5 * (attempt + 1)
+            print(f"  [{code}] retrying in {wait}s (attempt {attempt+1}/{max_retries})...", flush=True)
+            for _ in range(wait * 10):
+                if cancel_event and cancel_event.is_set():
+                    raise RuntimeError("Cancelled by user")
+                _time.sleep(0.1)
+            continue
+        raise RuntimeError(f"{code} {err.get('status','')}: {err.get('message','')[:150]}")
+
+
+def _weapon_gen_gemini_image(api_key, contents, aspect_ratio="16:9", image_size="4K", cancel_event=None):
+    """Generate image via direct REST calls with aggressive cross-model fallback and cancel support."""
+    import time as _time
 
     selected = os.environ.get("PUBG_IMAGE_MODEL", "gemini-3-pro-image-preview")
     model_name = selected if selected.startswith("gemini-") else "gemini-3-pro-image-preview"
-    effective_size = image_size if model_name in _4K_CAPABLE else "1K"
 
-    client = _genai.Client(api_key=api_key)
-    config = _types.GenerateContentConfig(
-        temperature=1.0,
-        response_modalities=["TEXT", "IMAGE"],
-        image_config=_types.ImageConfig(
-            image_size=effective_size,
-            aspect_ratio=aspect_ratio,
-        ),
-    )
-    result = client.models.generate_content(
-        model=model_name,
-        contents=contents,
-        config=config,
-    )
-    for part in result.parts:
-        if part.inline_data is not None:
-            return part.as_image()
+    steps = []
+    if model_name in _4K_CAPABLE:
+        alt_model = next((m for m in _4K_CAPABLE if m != model_name), None)
+        steps.append((model_name, "4K", {"imageSize": image_size, "aspectRatio": aspect_ratio}))
+        if alt_model:
+            steps.append((alt_model, f"4K-alt({alt_model.split('-')[1]})", {"imageSize": image_size, "aspectRatio": aspect_ratio}))
+        steps.append((model_name, "2K", {"imageSize": "2K", "aspectRatio": aspect_ratio}))
+        steps.append((model_name, "1K", {"imageSize": "1K", "aspectRatio": aspect_ratio}))
+        steps.append((model_name, "default", None))
+    else:
+        steps.append((model_name, "1K", {"imageSize": "1K", "aspectRatio": aspect_ratio}))
+        steps.append((model_name, "default", None))
+
+    targets = [s[1] for s in steps]
+    print(f"[ImageGen] Model={model_name}  aspect={aspect_ratio}  chain={targets}")
+    last_err = None
+    for step_model, label, img_cfg in steps:
+        if cancel_event and cancel_event.is_set():
+            print("[ImageGen] Cancelled by user")
+            raise RuntimeError("Cancelled by user")
+        gen_config = {"responseModalities": ["TEXT", "IMAGE"]}
+        if img_cfg is not None:
+            gen_config["imageConfig"] = img_cfg
+        try:
+            print(f"[ImageGen] Trying {label} on {step_model}...", end=" ", flush=True)
+            t0 = _time.time()
+            img = _rest_generate(api_key, step_model, contents, gen_config, timeout=180, cancel_event=cancel_event)
+            elapsed = _time.time() - t0
+            if img is not None:
+                print(f"OK  {img.size[0]}x{img.size[1]}  ({elapsed:.1f}s)")
+                return img
+            print(f"no image in response ({elapsed:.1f}s)")
+        except RuntimeError as e:
+            if "Cancelled" in str(e):
+                raise
+            elapsed = _time.time() - t0
+            last_err = e
+            err_str = str(e)
+            short_err = err_str[:150].replace("\n", " ")
+            if "503" in err_str or "500" in err_str or "UNAVAILABLE" in err_str or "INTERNAL" in err_str:
+                print(f"FAILED  {short_err}  ({elapsed:.1f}s)")
+                continue
+            print(f"ERROR  {short_err}  ({elapsed:.1f}s)")
+            raise
+        except Exception as e:
+            elapsed = _time.time() - t0
+            last_err = e
+            err_str = str(e)
+            short_err = err_str[:150].replace("\n", " ")
+            if "503" in err_str or "500" in err_str or "UNAVAILABLE" in err_str or "INTERNAL" in err_str:
+                print(f"FAILED  {short_err}  ({elapsed:.1f}s)")
+                continue
+            print(f"ERROR  {short_err}  ({elapsed:.1f}s)")
+            raise
+    if last_err:
+        raise last_err
     return None
 
 
@@ -182,7 +271,7 @@ class GeminiClientImage:
             model_name = selected if selected.startswith("gemini-") else "gemini-3-pro-image-preview"
             print(f"[WeaponGen] Image model: {model_name} (4K={'yes' if model_name in _4K_CAPABLE else 'no'})")
 
-    def generate(self, prompt, base_img=None):
+    def generate(self, prompt, base_img=None, cancel_event=None):
         from PIL import Image
         if not self._api_key:
             return Image.new("RGB", (1400, 800), (40, 40, 40))
@@ -193,19 +282,23 @@ class GeminiClientImage:
         contents.append(prompt)
 
         try:
-            img = _weapon_gen_gemini_image(self._api_key, contents, aspect_ratio="16:9", image_size="4K")
+            img = _weapon_gen_gemini_image(self._api_key, contents, aspect_ratio="16:9", image_size="4K", cancel_event=cancel_event)
             if img is not None:
                 return img.convert("RGBA")
+        except RuntimeError as e:
+            if "Cancelled" in str(e):
+                raise
+            print(f"[ERROR] Image generation failed: {e}")
+            import traceback; traceback.print_exc()
         except Exception as e:
             print(f"[ERROR] Image generation failed: {e}")
-            import traceback
-            traceback.print_exc()
+            import traceback; traceback.print_exc()
 
         if base_img:
             return base_img
         return Image.new("RGB", (1400, 800), (40, 40, 40))
 
-    def generate_with_refs(self, prompt, base_img=None, ref_images=None):
+    def generate_with_refs(self, prompt, base_img=None, ref_images=None, cancel_event=None):
         """Generate using Gemini with optional reference images at 4K."""
         from PIL import Image
         if not self._api_key:
@@ -219,13 +312,17 @@ class GeminiClientImage:
         contents.append(prompt)
 
         try:
-            img = _weapon_gen_gemini_image(self._api_key, contents, aspect_ratio="16:9", image_size="4K")
+            img = _weapon_gen_gemini_image(self._api_key, contents, aspect_ratio="16:9", image_size="4K", cancel_event=cancel_event)
             if img is not None:
                 return img.convert("RGBA")
+        except RuntimeError as e:
+            if "Cancelled" in str(e):
+                raise
+            print(f"[ERROR] Image generation failed: {e}")
+            import traceback; traceback.print_exc()
         except Exception as e:
             print(f"[ERROR] Image generation failed: {e}")
-            import traceback
-            traceback.print_exc()
+            import traceback; traceback.print_exc()
 
         if base_img:
             return base_img
@@ -1906,16 +2003,24 @@ class App:
         
         # Run async generation
         def generate_async():
-            refs = self._collect_ref_images(focused_prompt)
-            if base is not None:
-                if refs:
-                    self.status.set("Merging references with Gemini 3...")
-                    result = self.image_ai.generate_with_refs(focused_prompt, base, refs)
+            _ce = getattr(progress, "_cancel_event", None)
+            try:
+                refs = self._collect_ref_images(focused_prompt)
+                if base is not None:
+                    if refs:
+                        self.status.set("Merging references with Gemini 3...")
+                        result = self.image_ai.generate_with_refs(focused_prompt, base, refs, cancel_event=_ce)
+                    else:
+                        result = self.image_ai.generate(focused_prompt, base, cancel_event=_ce)
                 else:
-                    result = self.image_ai.generate(focused_prompt, base)
-            else:
-                result = self._generate_imagen(focused_prompt)
-            self.root.after(0, lambda: self._on_gen_done(progress, result, active_view))
+                    result = self._generate_imagen(focused_prompt)
+                self.root.after(0, lambda: self._on_gen_done(progress, result, active_view))
+            except RuntimeError as e:
+                if "Cancelled" in str(e):
+                    self.root.after(0, lambda: self._close_progress(progress))
+                    self.root.after(0, lambda: self.status.set("Generation cancelled."))
+                    return
+                raise
         import threading
         threading.Thread(target=generate_async, daemon=True).start()
 
@@ -2459,7 +2564,9 @@ class App:
         self.status.set(f"Assigned Main → {key}.")
 
     def _show_progress(self, msg="Processing..."):
-        """Display a centered progress dialog with marquee animation."""
+        """Display a centered progress dialog with marquee animation and Cancel button."""
+        import threading as _threading
+
         if self._progress_win and self._progress_win.winfo_exists():
             if self._progress_label:
                 self._progress_label.config(text=msg)
@@ -2471,43 +2578,41 @@ class App:
         win.resizable(False, False)
         win.attributes("-topmost", True)
 
-        # Calculate center position relative to parent window
         win.update_idletasks()
         parent_x = self.root.winfo_x()
         parent_y = self.root.winfo_y()
         parent_w = self.root.winfo_width()
         parent_h = self.root.winfo_height()
-        win_w, win_h = 420, 130
+        win_w, win_h = 420, 160
         pos_x = parent_x + (parent_w // 2 - win_w // 2)
         pos_y = parent_y + (parent_h // 2 - win_h // 2)
         win.geometry(f"{win_w}x{win_h}+{pos_x}+{pos_y}")
 
-        # Create content
         msg_label = tk.Label(
-            win,
-            text=msg,
-            fg=DarkTheme.TEXT_FG,
-            bg=DarkTheme.WINDOW_BG,
-            wraplength=380,
-            justify="center",
-            font=("Segoe UI", 10)
+            win, text=msg, fg=DarkTheme.TEXT_FG, bg=DarkTheme.WINDOW_BG,
+            wraplength=380, justify="center", font=("Segoe UI", 10)
         )
-        msg_label.pack(pady=(20, 10))
+        msg_label.pack(pady=(15, 8))
         self._progress_label = msg_label
 
-        # Add a marquee-style progress bar
-        progress = ttk.Progressbar(
-            win,
-            mode="indeterminate",
-            length=300
-        )
-        progress.pack(pady=(0, 20))
-        progress.start(10)  # Speed of animation
+        progress = ttk.Progressbar(win, mode="indeterminate", length=300)
+        progress.pack(pady=(0, 8))
+        progress.start(10)
 
-        # Prevent user interaction while open
+        win._cancel_event = _threading.Event()
+
+        def _on_cancel():
+            win._cancel_event.set()
+            cancel_btn.config(text="Cancelling...", state="disabled")
+            msg_label.config(text="Cancelling — waiting for current request...")
+            print("[ImageGen] Cancel requested by user")
+
+        cancel_btn = ttk.Button(win, text="Cancel", command=_on_cancel)
+        cancel_btn.pack(pady=(0, 10))
+
+        win.protocol("WM_DELETE_WINDOW", _on_cancel)
         win.grab_set()
 
-        # Return handle for later destruction
         self._progress_win = win
         return win
 

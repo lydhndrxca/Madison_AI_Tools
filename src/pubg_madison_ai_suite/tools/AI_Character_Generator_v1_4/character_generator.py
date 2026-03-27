@@ -1071,34 +1071,130 @@ class GeminiClient:
     # 4K-capable Nano Banana models (Gemini 3 series)
     _4K_MODELS = {"gemini-3-pro-image-preview", "gemini-3.1-flash-image-preview"}
 
-    def _gemini_generate_image(self, contents, aspect_ratio="9:16", image_size="4K"):
-        """Call google.genai SDK with image_config for full-resolution output.
-        
-        contents: list of str / PIL.Image items
-        Returns PIL.Image or raises RuntimeError.
+    @staticmethod
+    def _rest_generate(api_key, model_name, contents_raw, gen_config, timeout=180, max_retries=2, cancel_event=None):
+        """Direct REST call to Gemini API with retry and cancel support."""
+        import requests, base64, time as _time
+
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("Cancelled by user")
+
+        parts = []
+        for item in contents_raw:
+            if isinstance(item, str):
+                parts.append({"text": item})
+            elif isinstance(item, Image.Image):
+                buf = io.BytesIO()
+                item.save(buf, format="PNG")
+                b64 = base64.b64encode(buf.getvalue()).decode()
+                parts.append({"inlineData": {"mimeType": "image/png", "data": b64}})
+
+        body = {
+            "contents": [{"parts": parts}],
+            "generationConfig": gen_config,
+        }
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        }
+
+        for attempt in range(max_retries):
+            if cancel_event and cancel_event.is_set():
+                raise RuntimeError("Cancelled by user")
+            resp = requests.post(url, json=body, headers=headers, timeout=timeout)
+            if resp.status_code == 200:
+                for part in resp.json().get("candidates", [{}])[0].get("content", {}).get("parts", []):
+                    if "inlineData" in part:
+                        img_bytes = base64.b64decode(part["inlineData"]["data"])
+                        return Image.open(io.BytesIO(img_bytes))
+                return None
+            err = resp.json().get("error", {})
+            code = resp.status_code
+            is_transient = code in (500, 503) or "UNAVAILABLE" in str(err) or "INTERNAL" in str(err)
+            if is_transient and attempt < max_retries - 1:
+                wait = 5 * (attempt + 1)
+                print(f"  [{code}] retrying in {wait}s (attempt {attempt+1}/{max_retries})...", flush=True)
+                for _ in range(wait * 10):
+                    if cancel_event and cancel_event.is_set():
+                        raise RuntimeError("Cancelled by user")
+                    _time.sleep(0.1)
+                continue
+            raise RuntimeError(f"{code} {err.get('status','')}: {err.get('message','')[:150]}")
+
+    def _gemini_generate_image(self, contents, aspect_ratio="9:16", image_size="4K", cancel_event=None):
+        """Generate image via direct REST calls with aggressive cross-model fallback.
+
+        Fallback chain for 4K-capable models:
+          1. selected_model @ 4K  (with retry)
+          2. alt_4K_model   @ 4K  (with retry)
+          3. selected_model @ 2K  (with retry)
+          4. selected_model @ 1K  (with retry)
+          5. selected_model @ default (no imageConfig)
         """
+        import time as _time
+
         model_name = self._selected_image_model()
         if not self._is_gemini_model(model_name):
             model_name = "gemini-3-pro-image-preview"
-        effective_size = image_size if model_name in self._4K_MODELS else "1K"
 
-        config = genai_types.GenerateContentConfig(
-            temperature=1.0,
-            response_modalities=["TEXT", "IMAGE"],
-            image_config=genai_types.ImageConfig(
-                image_size=effective_size,
-                aspect_ratio=aspect_ratio,
-            ),
-        )
-        result = self._image_client.models.generate_content(
-            model=model_name,
-            contents=contents,
-            config=config,
-        )
-        for part in result.parts:
-            if part.inline_data is not None:
-                return part.as_image().convert("RGBA")
-        raise RuntimeError(f"No image data in {model_name} response")
+        steps = []
+        if model_name in self._4K_MODELS:
+            alt_model = next((m for m in self._4K_MODELS if m != model_name), None)
+            steps.append((model_name, f"4K", {"imageSize": image_size, "aspectRatio": aspect_ratio}))
+            if alt_model:
+                steps.append((alt_model, f"4K-alt({alt_model.split('-')[1]})", {"imageSize": image_size, "aspectRatio": aspect_ratio}))
+            steps.append((model_name, "2K", {"imageSize": "2K", "aspectRatio": aspect_ratio}))
+            steps.append((model_name, "1K", {"imageSize": "1K", "aspectRatio": aspect_ratio}))
+            steps.append((model_name, "default", None))
+        else:
+            steps.append((model_name, "1K", {"imageSize": "1K", "aspectRatio": aspect_ratio}))
+            steps.append((model_name, "default", None))
+
+        targets = [s[1] for s in steps]
+        print(f"[ImageGen] Model={model_name}  aspect={aspect_ratio}  chain={targets}")
+        last_err = None
+        for step_model, label, img_cfg in steps:
+            if cancel_event and cancel_event.is_set():
+                print("[ImageGen] Cancelled by user")
+                raise RuntimeError("Cancelled by user")
+            gen_config = {"responseModalities": ["TEXT", "IMAGE"]}
+            if img_cfg is not None:
+                gen_config["imageConfig"] = img_cfg
+            try:
+                print(f"[ImageGen] Trying {label} on {step_model}...", end=" ", flush=True)
+                t0 = _time.time()
+                img = self._rest_generate(self.api_key, step_model, contents, gen_config, timeout=180, cancel_event=cancel_event)
+                elapsed = _time.time() - t0
+                if img is not None:
+                    print(f"OK  {img.size[0]}x{img.size[1]}  ({elapsed:.1f}s)")
+                    return img.convert("RGBA")
+                print(f"no image in response ({elapsed:.1f}s)")
+            except RuntimeError as e:
+                if "Cancelled" in str(e):
+                    raise
+                elapsed = _time.time() - t0
+                last_err = e
+                err_str = str(e)
+                short_err = err_str[:150].replace("\n", " ")
+                if "503" in err_str or "500" in err_str or "UNAVAILABLE" in err_str or "INTERNAL" in err_str:
+                    print(f"FAILED  {short_err}  ({elapsed:.1f}s)")
+                    continue
+                print(f"ERROR  {short_err}  ({elapsed:.1f}s)")
+                raise
+            except Exception as e:
+                elapsed = _time.time() - t0
+                last_err = e
+                err_str = str(e)
+                short_err = err_str[:150].replace("\n", " ")
+                if "503" in err_str or "500" in err_str or "UNAVAILABLE" in err_str or "INTERNAL" in err_str:
+                    print(f"FAILED  {short_err}  ({elapsed:.1f}s)")
+                    continue
+                print(f"ERROR  {short_err}  ({elapsed:.1f}s)")
+                raise
+        if last_err:
+            raise last_err
+        raise RuntimeError(f"No image data in response")
 
     def _reset_model_cache(self):
         """Reset the models to clear any cached patterns."""
@@ -1122,7 +1218,7 @@ class GeminiClient:
             except Exception as e:
                 print(f"DEBUG: Failed to reset model cache: {e}")
     
-    def generate_character(self, character_description: str, width: int = 1536, height: int = 2816, reference_image: Optional[Image.Image] = None, edit_prompt: Optional[str] = None, view_type: str = "main", use_valor_lore: bool = False, lore_context_text: Optional[str] = None, lore_image_paths: Optional[list] = None, ref_a_image: Optional[Image.Image] = None, ref_b_image: Optional[Image.Image] = None, ref_c_image: Optional[Image.Image] = None) -> Image.Image:
+    def generate_character(self, character_description: str, width: int = 1536, height: int = 2816, reference_image: Optional[Image.Image] = None, edit_prompt: Optional[str] = None, view_type: str = "main", use_valor_lore: bool = False, lore_context_text: Optional[str] = None, lore_image_paths: Optional[list] = None, ref_a_image: Optional[Image.Image] = None, ref_b_image: Optional[Image.Image] = None, ref_c_image: Optional[Image.Image] = None, cancel_event=None) -> Image.Image:
         """Generate character concept image using Split Model Workflow.
         
         PATH A - Main Stage (Hero Image):
@@ -1172,6 +1268,7 @@ class GeminiClient:
                         [prompt_text],
                         aspect_ratio="9:16",
                         image_size="4K",
+                        cancel_event=cancel_event,
                     )
                     print(f"DEBUG: [PATH A] Gemini returned Main Stage {image.width}x{image.height}")
                     return image
@@ -1258,6 +1355,7 @@ class GeminiClient:
                     [reference_image, user_prompt],
                     aspect_ratio="9:16",
                     image_size="4K",
+                    cancel_event=cancel_event,
                 )
                 print(f"DEBUG: [PATH B] Gemini returned {view_type} view {image.width}x{image.height}")
                 return image
@@ -1365,6 +1463,7 @@ class GeminiClient:
                     contents,
                     aspect_ratio="9:16",
                     image_size="4K",
+                    cancel_event=cancel_event,
                 )
                 print(f"DEBUG: [PATH C] Gemini returned edited image {image.width}x{image.height}")
                 return image
@@ -2089,60 +2188,64 @@ class FullScreenImageViewer:
 
 
 class ProgressDialog:
-    """Progress dialog with animated progress bar for AI operations."""
-    
+    """Progress dialog with animated progress bar and Cancel button for AI operations."""
+
     def __init__(self, parent, title="AI Processing", message="Working..."):
+        import threading as _threading
+        self.cancelled = _threading.Event()
+
         self.dialog = tk.Toplevel(parent)
         self.dialog.title(title)
-        self.dialog.geometry("400x150")
+        self.dialog.geometry("400x180")
         self.dialog.resizable(False, False)
         self.dialog.transient(parent)
         self.dialog.grab_set()
-        
-        # Center the dialog on screen
+
         self.dialog.update_idletasks()
         width = self.dialog.winfo_width()
         height = self.dialog.winfo_height()
         x = (self.dialog.winfo_screenwidth() // 2) - (width // 2)
         y = (self.dialog.winfo_screenheight() // 2) - (height // 2)
         self.dialog.geometry(f"{width}x{height}+{x}+{y}")
-        
-        
-        # Main frame
+
         main_frame = ttk.Frame(self.dialog, padding=20)
         main_frame.pack(fill="both", expand=True)
-        
-        # Message label
+
         self.message_label = ttk.Label(main_frame, text=message, font=("Arial", 11))
-        self.message_label.pack(pady=(0, 15))
-        
-        # Progress bar (indeterminate mode)
+        self.message_label.pack(pady=(0, 10))
+
         self.progress = ttk.Progressbar(main_frame, mode="indeterminate", length=300)
-        self.progress.pack(pady=(0, 15))
-        self.progress.start(10)  # Start animation
-        
-        # Status label
+        self.progress.pack(pady=(0, 8))
+        self.progress.start(10)
+
         self.status_label = ttk.Label(main_frame, text="Initializing...", font=("Arial", 9), foreground="gray")
-        self.status_label.pack()
-        
-        # Prevent dialog from being closed by user
-        self.dialog.protocol("WM_DELETE_WINDOW", lambda: None)
-        
-        # Update the display
+        self.status_label.pack(pady=(0, 8))
+
+        self.cancel_btn = ttk.Button(main_frame, text="Cancel", command=self._on_cancel)
+        self.cancel_btn.pack()
+
+        self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
         self.dialog.update()
-    
+
+    def _on_cancel(self):
+        self.cancelled.set()
+        self.cancel_btn.config(text="Cancelling...", state="disabled")
+        self.status_label.config(text="Cancelling — waiting for current request...")
+        print("[ImageGen] Cancel requested by user")
+        try:
+            self.dialog.update()
+        except Exception:
+            pass
+
     def update_message(self, message):
-        """Update the main message."""
         self.message_label.config(text=message)
         self.dialog.update()
-    
+
     def update_status(self, status):
-        """Update the status text."""
         self.status_label.config(text=status)
         self.dialog.update()
-    
+
     def close(self):
-        """Close the progress dialog."""
         self.progress.stop()
         self.dialog.destroy()
 
@@ -2744,12 +2847,14 @@ class App:
 
                 # 3️⃣ Generate image from that description
                 self.root.after(0, lambda: self.progress_dialog.update_status("Generating image..."))
+                _cancel = getattr(self.progress_dialog, "cancelled", None)
                 image = self.gemini_client.generate_character(
                     desc,
                     width=1536,
                     height=2816,
                     view_type="main",
-                    use_valor_lore=use_valor_lore
+                    use_valor_lore=use_valor_lore,
+                    cancel_event=_cancel,
                 )
 
                 # 4️⃣ Update UI with generated data
@@ -2780,8 +2885,11 @@ class App:
                 self.root.after(0, finish)
 
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Quick Gen Error", f"Failed: {e}"))
-                self.root.after(0, lambda: self.status.set("Quick generation failed."))
+                if "Cancelled" not in str(e):
+                    self.root.after(0, lambda: messagebox.showerror("Quick Gen Error", f"Failed: {e}"))
+                    self.root.after(0, lambda: self.status.set("Quick generation failed."))
+                else:
+                    self.root.after(0, lambda: self.status.set("Generation cancelled."))
             finally:
                 def cleanup():
                     self.generating = False
@@ -4827,6 +4935,7 @@ Return ONLY the description text, no JSON or formatting."""
                     lore_image_paths = lore_imgs
 
                 # Training context stays internal in Gemini client, don't prepend to user-facing description
+                _cancel = getattr(self.progress_dialog, "cancelled", None) if self.progress_dialog else None
                 image = self.gemini_client.generate_character(
                     description,
                     width=1536,
@@ -4834,7 +4943,8 @@ Return ONLY the description text, no JSON or formatting."""
                     view_type=base_view_type,
                     use_valor_lore=use_valor_lore,
                     lore_context_text=lore_text_summary if lore_text_summary else None,
-                    lore_image_paths=lore_image_paths if lore_image_paths else None
+                    lore_image_paths=lore_image_paths if lore_image_paths else None,
+                    cancel_event=_cancel,
                 )
                 # Save the exact prompt used by the model
                 try:
@@ -5503,17 +5613,19 @@ Return ONLY the description text, no JSON or formatting."""
                 self.root.after(0, lambda: self.progress_dialog.update_status("Applying localized changes while preserving visual identity..."))
                 # Use target view's image as reference and apply ONLY the specific changes in edit_prompt
                 # Pass Ref A/B/C images - they will only be used if mentioned in the prompt
+                _cancel = getattr(self.progress_dialog, "cancelled", None) if self.progress_dialog else None
                 edited_image = self.gemini_client.generate_character(
                     character_description=original_description, 
                     width=1536,
                     height=2816,
-                    reference_image=target_image,  # Use target view's image as reference
-                    edit_prompt=edit_prompt,  # Only apply these specific changes
+                    reference_image=target_image,
+                    edit_prompt=edit_prompt,
                     view_type=target_view if target_view != "stage" else "main",
                     use_valor_lore=use_valor_lore,
                     ref_a_image=ref_a,
                     ref_b_image=ref_b,
-                    ref_c_image=ref_c
+                    ref_c_image=ref_c,
+                    cancel_event=_cancel,
                 )
                 self.root.after(0, lambda res=edited_image, target=target_view: self.on_edit_complete(res, target))
             except Exception as e:
@@ -5718,11 +5830,13 @@ Return ONLY the description text, no JSON or formatting."""
         self.generating = False
         self.generate_btn.configure(text="Generate Character", state="normal")
         
-        # Close progress dialog
         if self.progress_dialog:
             self.progress_dialog.close()
             self.progress_dialog = None
         
+        if "Cancelled" in str(error):
+            self.status.set("Generation cancelled.")
+            return
         self.status.set(f"Generation failed: {error}")
         messagebox.showerror("Generation Error", f"Failed to generate character:\n{error}")
 
@@ -6471,14 +6585,16 @@ Return ONLY the description text, no JSON or formatting."""
                         self.root.after(0, lambda v=view: self.status.set(f"Generating {v} view from Main Stage..."))
                         self.root.after(0, lambda v=view: self._update_ai_progress(f"Rendering {v} view..."))
                         print(f"DEBUG: Starting {view} view generation (reference image: {reference_image.size if reference_image else 'None'})")
+                        _cancel = getattr(self.progress_dialog, "cancelled", None) if self.progress_dialog else None
                         img = self.gemini_client.generate_character(
                             character_description=base_description,
                             width=1536,
                             height=2816,
-                            reference_image=reference_image,  # ALWAYS frozen Main Stage
+                            reference_image=reference_image,
                             edit_prompt=None,
                             view_type=view,
-                            use_valor_lore=use_valor_lore
+                            use_valor_lore=use_valor_lore,
+                            cancel_event=_cancel,
                         )
                         if img:
                             print(f"DEBUG: Successfully generated {view} view ({img.size})")
@@ -6554,17 +6670,19 @@ Return ONLY the description text, no JSON or formatting."""
         def worker():
             try:
                 # Pass Ref A/B images - they will only be used if mentioned in the edit_prompt
+                _cancel = getattr(self.progress_dialog, "cancelled", None) if self.progress_dialog else None
                 img = self.gemini_client.generate_character(
                     character_description=base_description,
                     width=1536,
                     height=2816,
-                    reference_image=reference_image,  # ALWAYS frozen Main Stage
+                    reference_image=reference_image,
                     edit_prompt=edit_prompt,
                     view_type=current_view,
                     use_valor_lore=use_valor_lore,
                     ref_a_image=ref_a,
                     ref_b_image=ref_b,
-                    ref_c_image=ref_c
+                    ref_c_image=ref_c,
+                    cancel_event=_cancel,
                 )
                 if img:
                     self.view_images[current_view] = img

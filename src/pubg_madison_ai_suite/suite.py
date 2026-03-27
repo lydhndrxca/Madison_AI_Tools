@@ -12,6 +12,125 @@ import msvcrt
 from pathlib import Path
 from tkinter import ttk, filedialog, simpledialog, messagebox
 from PIL import Image, ImageTk
+import queue as _queue
+from datetime import datetime as _dt
+
+
+# ── Live Console Window ───────────────────────────────────────
+class ConsoleWindow:
+    """Separate Toplevel window that captures ALL stdout/stderr output."""
+
+    _instance = None
+
+    def __init__(self, root):
+        self._root = root
+        self._win = None
+        self._text = None
+        self._q = _queue.Queue()
+        self._orig_stdout = sys.__stdout__
+        self._orig_stderr = sys.__stderr__
+
+    # --- stream redirector ---
+    class _Stream:
+        def __init__(self, console, original, tag):
+            self._console = console
+            self._original = original
+            self._tag = tag
+
+        def write(self, s):
+            if s:
+                self._console._q.put((self._tag, s))
+                if self._original:
+                    try:
+                        self._original.write(s)
+                        self._original.flush()
+                    except Exception:
+                        pass
+
+        def flush(self):
+            if self._original:
+                try:
+                    self._original.flush()
+                except Exception:
+                    pass
+
+    def install(self):
+        sys.stdout = self._Stream(self, self._orig_stdout, "out")
+        sys.stderr = self._Stream(self, self._orig_stderr, "err")
+        ConsoleWindow._instance = self
+
+    def toggle(self):
+        if self._win and self._win.winfo_exists():
+            self._win.destroy()
+            self._win = None
+        else:
+            self._open()
+
+    def _open(self):
+        self._win = tk.Toplevel(self._root)
+        self._win.title("Madison AI — Console")
+        self._win.geometry("1000x500")
+        self._win.configure(bg="#1a1a1a")
+        try:
+            self._win.iconbitmap(str(ICON_ICO_PATH))
+        except Exception:
+            pass
+
+        toolbar = tk.Frame(self._win, bg="#2a2a2a", height=28)
+        toolbar.pack(fill="x")
+        tk.Button(toolbar, text="Clear", bg="#3a3a3a", fg="#ccc",
+                  relief="flat", padx=8, command=self._clear).pack(side="left", padx=4, pady=2)
+        tk.Button(toolbar, text="Copy All", bg="#3a3a3a", fg="#ccc",
+                  relief="flat", padx=8, command=self._copy).pack(side="left", padx=4, pady=2)
+
+        self._text = tk.Text(self._win, bg="#1a1a1a", fg="#d4d4d4",
+                             insertbackground="#d4d4d4", selectbackground="#264f78",
+                             font=("Consolas", 9), wrap="word", state="disabled",
+                             borderwidth=0, highlightthickness=0)
+        scroll = tk.Scrollbar(self._win, command=self._text.yview)
+        self._text.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self._text.pack(fill="both", expand=True)
+
+        self._text.tag_configure("err", foreground="#f44747")
+        self._text.tag_configure("ts", foreground="#6a9955")
+
+        self._poll()
+
+    def _poll(self):
+        if not self._win or not self._win.winfo_exists():
+            return
+        try:
+            while True:
+                tag, msg = self._q.get_nowait()
+                self._append(msg, tag)
+        except _queue.Empty:
+            pass
+        self._win.after(100, self._poll)
+
+    def _append(self, text, tag="out"):
+        if not self._text:
+            return
+        self._text.configure(state="normal")
+        if text.startswith("DEBUG:") or text.startswith("[") or "\n" == text:
+            ts = _dt.now().strftime("%H:%M:%S")
+            if text.strip():
+                self._text.insert("end", f"[{ts}] ", "ts")
+        self._text.insert("end", text, tag if tag == "err" else "")
+        self._text.see("end")
+        self._text.configure(state="disabled")
+
+    def _clear(self):
+        if self._text:
+            self._text.configure(state="normal")
+            self._text.delete("1.0", "end")
+            self._text.configure(state="disabled")
+
+    def _copy(self):
+        if self._text:
+            content = self._text.get("1.0", "end-1c")
+            self._root.clipboard_clear()
+            self._root.clipboard_append(content)
 
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -80,7 +199,7 @@ IMAGE_MODELS = [
     {
         "id": "gemini-3-pro-image-preview",
         "label": "Nano Banana Pro",
-        "resolution": "4K (up to 5504px)",
+        "resolution": "4K — 2048sq / 5504x3072 / 3072x5504",
         "time_estimate": "~40-90s",
         "multimodal": True,
         "api": "genai",
@@ -90,8 +209,8 @@ IMAGE_MODELS = [
     {
         "id": "gemini-3.1-flash-image-preview",
         "label": "Nano Banana 2",
-        "resolution": "4K (up to 5504px)",
-        "time_estimate": "~20-45s",
+        "resolution": "4K — 2048sq / 5504x3072 / 3072x5504",
+        "time_estimate": "~20-60s",
         "multimodal": True,
         "api": "genai",
         "supports_4k": True,
@@ -99,8 +218,8 @@ IMAGE_MODELS = [
     },
     {
         "id": "gemini-2.5-flash-image",
-        "label": "Nano Banana",
-        "resolution": "1K (1024px)",
+        "label": "Gemini 2.5 Flash",
+        "resolution": "1K — 1024sq / 1408x768 / 768x1408",
         "time_estimate": "~3-8s",
         "multimodal": True,
         "api": "genai",
@@ -110,30 +229,30 @@ IMAGE_MODELS = [
     {
         "id": "imagen-4.0-ultra-generate-001",
         "label": "Imagen 4 Ultra",
-        "resolution": "2K (up to 2816px)",
+        "resolution": "2K — 2048sq / 2816x1536 / 1536x2816",
         "time_estimate": "~15-30s",
         "multimodal": False,
-        "api": "genai",
+        "api": "imagen",
         "supports_4k": False,
         "description": "Maximum fidelity, photorealistic output",
     },
     {
         "id": "imagen-4.0-generate-001",
         "label": "Imagen 4 Standard",
-        "resolution": "2K (up to 2816px)",
+        "resolution": "2K — 2048sq / 2816x1536 / 1536x2816",
         "time_estimate": "~5-10s",
         "multimodal": False,
-        "api": "genai",
+        "api": "imagen",
         "supports_4k": False,
         "description": "Balanced quality and speed",
     },
     {
         "id": "imagen-4.0-fast-generate-001",
         "label": "Imagen 4 Fast",
-        "resolution": "1K (1024px)",
+        "resolution": "1K — 1024sq / 1408x768 / 768x1408",
         "time_estimate": "~2-5s",
         "multimodal": False,
-        "api": "genai",
+        "api": "imagen",
         "supports_4k": False,
         "description": "Rapid prototyping, fastest Imagen",
     },
@@ -480,6 +599,12 @@ def main():
         root.withdraw()
     except Exception:
         pass
+
+    _console = ConsoleWindow(root)
+    _console.install()
+    print("=== Madison AI Console active ===")
+    print(f"Python {sys.version}")
+    print(f"Base dir: {BASE_DIR}")
 
     splash = None
     if not getattr(sys, "frozen", False):
@@ -937,6 +1062,8 @@ def main():
     menubar.add_command(label="How to Use", command=_show_how_to_use)
     menubar.add_command(label="About", command=_show_about)
     menubar.add_command(label="Report Bug", command=_report_bug)
+    if ConsoleWindow._instance:
+        menubar.add_command(label="\u2630 Console", command=ConsoleWindow._instance.toggle)
 
     init_info = get_image_model_info(selected_image_model)
     menubar.add_cascade(label=f"Image Model: {init_info['label']}", menu=model_menu)

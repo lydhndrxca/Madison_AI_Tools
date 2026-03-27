@@ -27,6 +27,10 @@ output/
 saves/
 config/keys.json
 ALL GENERATED IMAGES/
+last_character_prompt.txt
+
+# Auto-copied weapon assets (regenerated from reference_guns/ at startup)
+src/pubg_madison_ai_suite/assets/Weapon_Generator/*.png
 
 # Secrets
 .env
