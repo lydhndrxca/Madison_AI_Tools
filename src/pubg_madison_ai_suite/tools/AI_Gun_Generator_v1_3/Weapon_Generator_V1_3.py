@@ -139,119 +139,89 @@ class GeminiClientText:
             return "Analysis failed."
 
 
+_4K_CAPABLE = {"gemini-3-pro-image-preview", "gemini-3.1-flash-image-preview"}
+
+
+def _weapon_gen_gemini_image(api_key, contents, aspect_ratio="16:9", image_size="4K"):
+    """Generate image using google.genai SDK with image_config for full resolution."""
+    from google import genai as _genai
+    from google.genai import types as _types
+
+    selected = os.environ.get("PUBG_IMAGE_MODEL", "gemini-3-pro-image-preview")
+    model_name = selected if selected.startswith("gemini-") else "gemini-3-pro-image-preview"
+    effective_size = image_size if model_name in _4K_CAPABLE else "1K"
+
+    client = _genai.Client(api_key=api_key)
+    config = _types.GenerateContentConfig(
+        temperature=1.0,
+        response_modalities=["TEXT", "IMAGE"],
+        image_config=_types.ImageConfig(
+            image_size=effective_size,
+            aspect_ratio=aspect_ratio,
+        ),
+    )
+    result = client.models.generate_content(
+        model=model_name,
+        contents=contents,
+        config=config,
+    )
+    for part in result.parts:
+        if part.inline_data is not None:
+            return part.as_image()
+    return None
+
+
 class GeminiClientImage:
-    """Image generation client (Gemini 3 Pro Image Preview)."""
+    """Image generation client using google.genai SDK with 4K support."""
     def __init__(self):
-        import os
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            print("⚠️ No GEMINI_API_KEY – image model stub mode.")
-            self._model = None
-            return
-        genai.configure(api_key=api_key)
-        self._model = genai.GenerativeModel("gemini-3-pro-image-preview")
+        self._api_key = os.getenv("GEMINI_API_KEY")
+        if not self._api_key:
+            print("\u26a0\ufe0f No GEMINI_API_KEY \u2013 image model stub mode.")
+        else:
+            selected = os.environ.get("PUBG_IMAGE_MODEL", "gemini-3-pro-image-preview")
+            model_name = selected if selected.startswith("gemini-") else "gemini-3-pro-image-preview"
+            print(f"[WeaponGen] Image model: {model_name} (4K={'yes' if model_name in _4K_CAPABLE else 'no'})")
 
     def generate(self, prompt, base_img=None):
         from PIL import Image
-        import io
-        
-        if not self._model:
+        if not self._api_key:
             return Image.new("RGB", (1400, 800), (40, 40, 40))
-        
-        parts = [prompt]
+
+        contents = []
         if base_img:
-            buf = io.BytesIO()
-            base_img.save(buf, format="PNG")
-            buf.seek(0)
-            # Use the correct method for current google-generativeai version
-            parts.insert(0, {
-                "mime_type": "image/png",
-                "data": buf.getvalue()
-            })
+            contents.append(base_img)
+        contents.append(prompt)
+
         try:
-            response = self._model.generate_content(parts)
-            print(f"[DEBUG] Image generation response: {type(response)}")
-            print(f"[DEBUG] Response parts: {len(getattr(response, 'parts', []))}")
-            
-            # Check for prompt feedback (safety filters, etc.)
-            if hasattr(response, 'prompt_feedback'):
-                print(f"[DEBUG] Prompt feedback: {response.prompt_feedback}")
-            
-            # Check if response has text (error message) - but don't crash if it's actually an image
-            try:
-                if hasattr(response, 'text'):
-                    text_content = response.text
-                    if text_content:
-                        print(f"[DEBUG] Response text: {text_content[:200]}")
-            except ValueError:
-                # This happens when response contains image data, not text - which is what we want!
-                print("[DEBUG] Response contains non-text data (likely image)")
-            
-            # Try to extract image from response parts
-            for i, part in enumerate(getattr(response, "parts", [])):
-                print(f"[DEBUG] Part {i}: {type(part)}")
-                print(f"[DEBUG] Part {i} dir: {[attr for attr in dir(part) if not attr.startswith('_')]}")
-                
-                # Check for inline_data (image)
-                if hasattr(part, "inline_data") and part.inline_data:
-                    try:
-                        img_data = part.inline_data.data
-                        print(f"[DEBUG] Image data size: {len(img_data) if img_data else 0} bytes")
-                        if img_data:
-                            return Image.open(io.BytesIO(img_data)).convert("RGBA")
-                    except Exception as e:
-                        print(f"[DEBUG] Failed to process inline_data: {e}")
-                        continue
-                
-                # Check for text response
-                if hasattr(part, "text") and part.text:
-                    print(f"[DEBUG] Part {i} contains text: {part.text[:200]}")
-            
-            print("[ERROR] No valid image data found in response")
-            print(f"[ERROR] Full response candidates: {getattr(response, 'candidates', 'N/A')}")
-            
+            img = _weapon_gen_gemini_image(self._api_key, contents, aspect_ratio="16:9", image_size="4K")
+            if img is not None:
+                return img.convert("RGBA")
         except Exception as e:
             print(f"[ERROR] Image generation failed: {e}")
             import traceback
             traceback.print_exc()
-        
-        # If no valid image data found, return base image or create a placeholder
-        print("[FALLBACK] Returning base image or placeholder")
+
         if base_img:
             return base_img
-        else:
-            return Image.new("RGB", (1400, 800), (40, 40, 40))
+        return Image.new("RGB", (1400, 800), (40, 40, 40))
 
     def generate_with_refs(self, prompt, base_img=None, ref_images=None):
-        """Generate using Gemini 3 with optional reference images."""
+        """Generate using Gemini with optional reference images at 4K."""
         from PIL import Image
-        import io
-
-        if not self._model:
+        if not self._api_key:
             return Image.new("RGB", (1400, 800), (40, 40, 40))
 
-        parts = []
+        contents = []
         if base_img:
-            buf = io.BytesIO()
-            base_img.save(buf, format="PNG")
-            buf.seek(0)
-            parts.append({"mime_type": "image/png", "data": buf.getvalue()})
-
+            contents.append(base_img)
         for ref in ref_images or []:
-            buf = io.BytesIO()
-            ref.save(buf, format="PNG")
-            buf.seek(0)
-            parts.append({"mime_type": "image/png", "data": buf.getvalue()})
-
-        parts.append(prompt)
+            contents.append(ref)
+        contents.append(prompt)
 
         try:
-            response = self._model.generate_content(parts)
-            for part in getattr(response, "parts", []):
-                if hasattr(part, "inline_data") and part.inline_data:
-                    img_data = part.inline_data.data
-                    if img_data:
-                        return Image.open(io.BytesIO(img_data)).convert("RGBA")
+            img = _weapon_gen_gemini_image(self._api_key, contents, aspect_ratio="16:9", image_size="4K")
+            if img is not None:
+                return img.convert("RGBA")
         except Exception as e:
             print(f"[ERROR] Image generation failed: {e}")
             import traceback
@@ -738,7 +708,10 @@ class App:
         y = (ch - scaled_h) // 2 + pan_y
         cnv.create_image(x, y, image=self._photo, anchor="nw")
 
-        
+        res_text = f"{iw} \u00d7 {ih}"
+        cnv.create_rectangle(4, ch - 24, len(res_text) * 7 + 18, ch - 4, fill="#111111", outline="")
+        cnv.create_text(10, ch - 14, text=res_text, fill="#CCCCCC",
+                        font=("Consolas", 9), anchor="w")
 
     # ======== Zoom and Pan Integration ========
 
@@ -836,6 +809,22 @@ class App:
         return refs
 
     def _generate_imagen(self, prompt: str) -> Optional[Image.Image]:
+        selected = os.environ.get("PUBG_IMAGE_MODEL", "imagen-4.0-generate-001")
+
+        if selected.startswith("gemini-"):
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                return Image.new("RGB", (1400, 800), (40, 40, 40))
+            try:
+                img = _weapon_gen_gemini_image(api_key, [prompt], aspect_ratio="16:9", image_size="4K")
+                if img is not None:
+                    return img.convert("RGBA")
+                print(f"[WeaponGen] No image in Gemini response from {selected}")
+            except Exception as e:
+                print(f"[ERROR] Gemini image generation failed ({selected}): {e}")
+            return Image.new("RGB", (1400, 800), (40, 40, 40))
+
+        # Imagen API path
         if not self._imagen_client:
             return Image.new("RGB", (1400, 800), (40, 40, 40))
         try:
@@ -844,10 +833,13 @@ class App:
 
             aspect = "16:9"
             size_label = "2K"
-            candidates = [
+            primary = {"name": f"models/{selected}", "supports_image_size": selected != "imagen-4.0-fast-generate-001"}
+            fallbacks = [
                 {"name": "models/imagen-4.0-generate-001", "supports_image_size": True},
                 {"name": "models/imagen-4.0-fast-generate-001", "supports_image_size": False},
             ]
+            candidates = [primary] + [c for c in fallbacks if c["name"] != primary["name"]]
+
             last_error = None
             for candidate in candidates:
                 model_name = candidate["name"]
@@ -876,9 +868,9 @@ class App:
                     last_error = model_err
                     continue
             if last_error:
-                print(f"[ERROR] Imagen 4 generation failed: {last_error}")
+                print(f"[ERROR] Imagen generation failed: {last_error}")
         except Exception as e:
-            print(f"[ERROR] Imagen 4 generation failed: {e}")
+            print(f"[ERROR] Imagen generation failed: {e}")
         return Image.new("RGB", (1400, 800), (40, 40, 40))
 
     def _on_view_tab_changed(self, event=None):

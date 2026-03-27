@@ -447,6 +447,51 @@ class ProcessingPopup:
         self.progress.stop()
         self.window.destroy()
 
+def _get_selected_image_model() -> str:
+    return os.environ.get("PUBG_IMAGE_MODEL", "gemini-3-pro-image-preview")
+
+
+def _get_gemini_image_model_name() -> str:
+    """Return the selected model if it's a Gemini model, otherwise default."""
+    selected = _get_selected_image_model()
+    return selected if selected.startswith("gemini-") else "gemini-3-pro-image-preview"
+
+
+_4K_CAPABLE = {"gemini-3-pro-image-preview", "gemini-3.1-flash-image-preview"}
+
+
+def _gemini_generate_image(api_key: str, contents, aspect_ratio="1:1", image_size="4K"):
+    """Generate image using google.genai SDK with image_config for max resolution.
+    
+    contents: list of str / PIL.Image items
+    Returns PIL.Image or None.
+    """
+    from google import genai as _genai
+    from google.genai import types as _types
+
+    model_name = _get_gemini_image_model_name()
+    effective_size = image_size if model_name in _4K_CAPABLE else "1K"
+    
+    client = _genai.Client(api_key=api_key)
+    config = _types.GenerateContentConfig(
+        temperature=1.0,
+        response_modalities=["TEXT", "IMAGE"],
+        image_config=_types.ImageConfig(
+            image_size=effective_size,
+            aspect_ratio=aspect_ratio,
+        ),
+    )
+    result = client.models.generate_content(
+        model=model_name,
+        contents=contents,
+        config=config,
+    )
+    for part in result.parts:
+        if part.inline_data is not None:
+            return part.as_image()
+    return None
+
+
 class DualModeApp:
     def __init__(self, root, api_key: str, capabilities=None, start_mode="gemini", hide_internal_tabs=False):
         self.root = root
@@ -714,11 +759,10 @@ class DualModeApp:
 
     def _preload_gemini_model(self):
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=self.api_key)
-            genai.GenerativeModel("gemini-3-pro-image-preview")
+            from google import genai as _genai
+            _genai.Client(api_key=self.api_key)
             try:
-                self.root.after(0, self.status_var.set, "Imagen 4 cached and ready.")
+                self.root.after(0, self.status_var.set, f"{_get_gemini_image_model_name()} cached and ready.")
             except Exception:
                 pass
         except Exception as e:
@@ -1161,72 +1205,67 @@ class DualModeApp:
             final_prompt = prompt.strip()
 
             client = genai_images.Client(api_key=self.api_key)
-            if use_imagen3:
-                # --- Gemini 3 Pro Image Preview for ref-based synthesis ---
-                import google.generativeai as genai_legacy
-                genai_legacy.configure(api_key=self.api_key)
-                model = genai_legacy.GenerativeModel("gemini-3-pro-image-preview")
+            selected_model = os.environ.get("PUBG_IMAGE_MODEL", "gemini-3-pro-image-preview")
+            is_gemini = selected_model.startswith("gemini-")
 
-                parts = []
+            if use_imagen3 or (is_gemini and not use_ref_a and not use_ref_b and not use_ref_c):
+                # Use Gemini multimodal model with 4K via google.genai SDK
+                contents = []
                 for key in ["ref_a", "ref_b", "ref_c"]:
                     img = ref_images.get(key)
                     if img:
                         if key.replace("_", " ") in prompt_lower or key.replace("_", "") in prompt_lower:
-                            # Use higher resolution for refs if quality mode is on
                             ref_img = img.copy()
                             max_dim = 2048 if quality_mode else 1024
                             if max(ref_img.size) > max_dim:
                                 ref_img.thumbnail((max_dim, max_dim), Image.LANCZOS)
-                            buf = io.BytesIO()
-                            ref_img.save(buf, format="PNG")
-                            parts.append({"mime_type": "image/png", "data": buf.getvalue()})
+                            contents.append(ref_img)
                 
-                parts.append(final_prompt)
-                self.root.after(0, self.status_var.set, "Merging images with Gemini 3...")
-                result = model.generate_content(parts, generation_config={"temperature": 0.8, "candidate_count": 1})
+                contents.append(final_prompt)
+                self.root.after(0, self.status_var.set, f"Generating with {_get_gemini_image_model_name()} at 4K...")
+                img = _gemini_generate_image(self.api_key, contents, aspect_ratio="1:1", image_size="4K")
                 
-                for part in getattr(result, "parts", []):
-                    if hasattr(part, "inline_data") and part.inline_data:
-                        img_data = part.inline_data.data
-                        if isinstance(img_data, bytes):
-                            img = Image.open(io.BytesIO(img_data)).convert("RGB")
-                            self.root.after(0, self.status_var.set, "Image generated (Gemini 3).")
-                            self.gemini_current_image = img
-                            # Update display IMMEDIATELY before slow labeling/saving
-                            self.root.after(0, lambda: self.gemini_update_display(force_update=True))
-                            self.root.after(0, lambda: self.gemini_prompt_text.delete("1.0", tk.END))
+                if img is not None:
+                    img = img.convert("RGB")
+                    self.root.after(0, self.status_var.set, f"Image generated ({_get_gemini_image_model_name()}).")
+                    self.gemini_current_image = img
+                    self.root.after(0, lambda: self.gemini_update_display(force_update=True))
+                    self.root.after(0, lambda: self.gemini_prompt_text.delete("1.0", tk.END))
 
-                            try:
-                                ai_label = self.gemini_client.describe_image_briefly(img)
-                            except Exception:
-                                ai_label = "image"
-                            
-                            ImageManager.save_gemini_image(img, self.gemini_current_prompt, ai_label=ai_label, generation_type="auto", view_name="main")
-                            self.image_history.append(img)
-                            self.history_index = len(self.image_history) - 1
-                            try:
-                                self.add_edit_history_entry("gemini", self.gemini_current_image, self.gemini_current_prompt)
-                            except Exception:
-                                pass
-                            
-                            self._main_stage_zoom = 1.0
-                            self._main_stage_offset = [0, 0]
-                            # Extra refreshes for UI stability
-                            self.root.after(100, lambda: self.gemini_update_display(force_update=True))
-                            self.root.after(200, lambda: self.gemini_update_display(force_update=True))
-                            return
+                    try:
+                        ai_label = self.gemini_client.describe_image_briefly(img)
+                    except Exception:
+                        ai_label = "image"
+                    
+                    ImageManager.save_gemini_image(img, self.gemini_current_prompt, ai_label=ai_label, generation_type="auto", view_name="main")
+                    self.image_history.append(img)
+                    self.history_index = len(self.image_history) - 1
+                    try:
+                        self.add_edit_history_entry("gemini", self.gemini_current_image, self.gemini_current_prompt)
+                    except Exception:
+                        pass
+                    
+                    self._main_stage_zoom = 1.0
+                    self._main_stage_offset = [0, 0]
+                    self.root.after(100, lambda: self.gemini_update_display(force_update=True))
+                    self.root.after(200, lambda: self.gemini_update_display(force_update=True))
+                    return
                 
-                self.root.after(0, lambda: self.status_var.set("No image returned by Gemini 3."))
+                self.root.after(0, lambda: self.status_var.set("No image returned by Gemini."))
             else:
                 # --- Imagen 4 Path ---
                 aspect = "1:1"
                 size_label = "2K" if quality_mode else "1K"
                 
-                if quality_mode:
-                    # Quality first: standard model at 2K
+                if selected_model.startswith("imagen-"):
+                    model_candidates = [f"models/{selected_model}"]
+                    if selected_model != "imagen-4.0-generate-001":
+                        model_candidates.append("models/imagen-4.0-generate-001")
+                    if selected_model != "imagen-4.0-fast-generate-001":
+                        model_candidates.append("models/imagen-4.0-fast-generate-001")
+                elif quality_mode:
                     model_candidates = ["models/imagen-4.0-generate-001", "models/imagen-4.0-fast-generate-001"]
                 else:
-                    # Speed first: fast model at default 1K
                     model_candidates = ["models/imagen-4.0-fast-generate-001", "models/imagen-4.0-generate-001"]
                 
                 result = None
@@ -1333,6 +1372,11 @@ class DualModeApp:
                                  fill="white", font=("Segoe UI", 9, "bold"), anchor="w")
                 canvas.create_text(10, 28, text="Right-Click: Save/Copy/Paste", 
                                  fill="white", font=("Segoe UI", 9, "bold"), anchor="w")
+            
+            res_text = f"{iw} \u00d7 {ih}"
+            canvas.create_rectangle(4, ch - 24, len(res_text) * 7 + 18, ch - 4, fill="#111111", outline="")
+            canvas.create_text(10, ch - 14, text=res_text, fill="#CCCCCC",
+                               font=("Consolas", 9), anchor="w")
             
             if force_update:
                 canvas.update_idletasks()
@@ -1587,15 +1631,10 @@ class DualModeApp:
                     target_w, target_h = (1024, 1024)
                 img = ImageUtils.fit_to_display(img, target_w, target_h)
 
-                # Step 3. Use Gemini 3 (image-preview) to re-render isolated object
-                import google.generativeai as genai
-                genai.configure(api_key=self.api_key)
-                model = genai.GenerativeModel("gemini-3-pro-image-preview")
-
+                # Step 3. Re-render isolated object via google.genai at 4K
                 description = self.multiview_prompt_text.get("1.0", tk.END).strip()
                 if not description:
                     description = "Isolated subject"
-                # Always apply the isolation + three-quarter-view rule set
                 user_prompt = (
                     f"Take the provided image (if any) or concept described below and recreate it "
                     f"as a clean, isolated 3/4-view studio render. Remove all background elements, "
@@ -1605,26 +1644,19 @@ class DualModeApp:
                     f"Object must float completely isolated against blank background with no shadow underneath or around it.\n\nSubject: {description}"
                 )
 
-                buf = _io.BytesIO()
-                img.save(buf, format="PNG")
-                parts = [{"mime_type": "image/png", "data": buf.getvalue()}, user_prompt]
-                result = model.generate_content(parts)
-
-                if hasattr(result, "parts"):
-                    for part in result.parts:
-                        if hasattr(part, "inline_data") and part.inline_data.data:
-                            output_img = Image.open(_io.BytesIO(part.inline_data.data)).convert("RGB")
-                            self.multiview_main_stage_image = output_img
-                            ImageManager.save_multiview_image(
-                                output_img, "isolated_prop", "threequarter", description
-                            )
-                            try:
-                                self.add_edit_history_entry("multiview", self.multiview_main_stage_image, description)
-                            except Exception:
-                                pass
-                            self.root.after(0, lambda: self.multiview_update_tab_display("main"))
-                            self.root.after(0, lambda: self.status_var.set("✅ Prop isolated and re-rendered."))
-                            break
+                output_img = _gemini_generate_image(self.api_key, [img, user_prompt], aspect_ratio="1:1", image_size="4K")
+                if output_img is not None:
+                    output_img = output_img.convert("RGB")
+                    self.multiview_main_stage_image = output_img
+                    ImageManager.save_multiview_image(
+                        output_img, "isolated_prop", "threequarter", description
+                    )
+                    try:
+                        self.add_edit_history_entry("multiview", self.multiview_main_stage_image, description)
+                    except Exception:
+                        pass
+                    self.root.after(0, lambda: self.multiview_update_tab_display("main"))
+                    self.root.after(0, lambda: self.status_var.set("\u2705 Prop isolated and re-rendered."))
             except Exception as e:
                 print(f"[ERROR] multiview_generate_main failed: {e}")
                 self.root.after(0, lambda: messagebox.showerror("Generate Failed", str(e)))
@@ -1655,44 +1687,38 @@ class DualModeApp:
 
         def run():
             try:
-                import google.generativeai as genai
-                genai.configure(api_key=self.api_key)
-                model = genai.GenerativeModel("gemini-3-pro-image-preview")
+                if target_w > target_h:
+                    ar = "16:9"
+                elif target_h > target_w:
+                    ar = "9:16"
+                else:
+                    ar = "1:1"
 
                 instruction = (
                     f"Create a high-quality, realistic 3/4-view render of a single {prompt}. "
-                    f"The subject should fill the frame naturally within {target_w}×{target_h}, "
+                    f"The subject should fill the frame naturally, "
                     "never cropped, centered on a light gray (#e0e0e0) studio background. "
                     "CRITICAL: ABSOLUTELY NO SHADOWS, NO GROUND SHADOWS, NO DROP SHADOWS, NO CAST SHADOWS, "
                     "NO GROUND PLANE, NO SURFACE, NO FLOOR. Object must float completely isolated against "
                     "blank background with no shadow underneath or around it. Show full form and consistent lighting."
                 )
 
-                result = model.generate_content(
-                    [instruction],
-                    generation_config={"temperature": 0.8, "candidate_count": 1}
-                )
-
-                for part in getattr(result, "parts", []) or []:
-                    if hasattr(part, "inline_data") and part.inline_data:
-                        img_data = part.inline_data.data
-                        if isinstance(img_data, bytes):
-                            img = _PILImage.open(io.BytesIO(img_data)).convert("RGB")
-                            img = autocrop_and_resize(img, (target_w, target_h))
-                            self.multiview_main_stage_image = img
-                            self._mv_zoom["main"] = 1.0
-                            self._mv_offset["main"] = [0, 0]
-                            self.root.after(0, lambda: self.multiview_update_tab_display("main", force_update=True))
-                            self.root.after(100, lambda: self.multiview_update_tab_display("main", force_update=True))
-                            self.root.after(200, lambda: self.multiview_update_tab_display("main", force_update=True))
-                            self.root.after(0, self._update_multiview_isolate_state)
-                            self.root.after(0, lambda: self.status_var.set("✅ New prop generated."))
-                            ImageManager.save_multiview_image(img, prompt.replace(" ", "_"), "threequarter", instruction)
-                            try:
-                                self.add_edit_history_entry("multiview", self.multiview_main_stage_image, prompt)
-                            except Exception:
-                                pass
-                            break
+                img = _gemini_generate_image(self.api_key, [instruction], aspect_ratio=ar, image_size="4K")
+                if img is not None:
+                    img = img.convert("RGB")
+                    self.multiview_main_stage_image = img
+                    self._mv_zoom["main"] = 1.0
+                    self._mv_offset["main"] = [0, 0]
+                    self.root.after(0, lambda: self.multiview_update_tab_display("main", force_update=True))
+                    self.root.after(100, lambda: self.multiview_update_tab_display("main", force_update=True))
+                    self.root.after(200, lambda: self.multiview_update_tab_display("main", force_update=True))
+                    self.root.after(0, self._update_multiview_isolate_state)
+                    self.root.after(0, lambda: self.status_var.set("\u2705 New prop generated."))
+                    ImageManager.save_multiview_image(img, prompt.replace(" ", "_"), "threequarter", instruction)
+                    try:
+                        self.add_edit_history_entry("multiview", self.multiview_main_stage_image, prompt)
+                    except Exception:
+                        pass
             except Exception as e:
                 print(f"[ERROR] multiview_generate_from_text: {e}")
                 self.root.after(0, lambda: messagebox.showerror("Generate Failed", str(e)))
@@ -1718,13 +1744,6 @@ class DualModeApp:
 
         def run():
             try:
-                genai.configure(api_key=self.api_key)
-                model = genai.GenerativeModel("gemini-3-pro-image-preview")
-
-                buf = io.BytesIO()
-                self.multiview_main_stage_image.save(buf, format="PNG")
-                buf.seek(0)
-
                 edit_instruction = (
                     f"Modify the given object according to this instruction: '{prompt}'. "
                     "Recreate the prop in a clean, isolated 3/4-view on a light gray (#e0e0e0) background. "
@@ -1734,26 +1753,27 @@ class DualModeApp:
                     "blank background with no shadow underneath or around it."
                 )
 
-                parts = [{"mime_type": "image/png", "data": buf.getvalue()}, edit_instruction]
-                result = model.generate_content(parts)
-
-                for part in getattr(result, "parts", []):
-                    if hasattr(part, "inline_data") and part.inline_data.data:
-                        img = _PILImage.open(io.BytesIO(part.inline_data.data)).convert("RGB")
-                        self.multiview_main_stage_image = img
-                        self._mv_zoom["main"] = 1.0
-                        self._mv_offset["main"] = [0, 0]
-                        self.root.after(0, lambda: self.multiview_update_tab_display("main", force_update=True))
-                        self.root.after(100, lambda: self.multiview_update_tab_display("main", force_update=True))
-                        self.root.after(200, lambda: self.multiview_update_tab_display("main", force_update=True))
-                        self.root.after(0, self._update_multiview_isolate_state)
-                        self.root.after(0, lambda: self.status_var.set("✅ Edit applied."))
-                        ImageManager.save_multiview_image(img, "edited_prop", "threequarter", prompt)
-                        try:
-                            self.add_edit_history_entry("multiview", self.multiview_main_stage_image, prompt)
-                        except Exception:
-                            pass
-                        break
+                img = _gemini_generate_image(
+                    self.api_key,
+                    [self.multiview_main_stage_image, edit_instruction],
+                    aspect_ratio="1:1",
+                    image_size="4K",
+                )
+                if img is not None:
+                    img = img.convert("RGB")
+                    self.multiview_main_stage_image = img
+                    self._mv_zoom["main"] = 1.0
+                    self._mv_offset["main"] = [0, 0]
+                    self.root.after(0, lambda: self.multiview_update_tab_display("main", force_update=True))
+                    self.root.after(100, lambda: self.multiview_update_tab_display("main", force_update=True))
+                    self.root.after(200, lambda: self.multiview_update_tab_display("main", force_update=True))
+                    self.root.after(0, self._update_multiview_isolate_state)
+                    self.root.after(0, lambda: self.status_var.set("\u2705 Edit applied."))
+                    ImageManager.save_multiview_image(img, "edited_prop", "threequarter", prompt)
+                    try:
+                        self.add_edit_history_entry("multiview", self.multiview_main_stage_image, prompt)
+                    except Exception:
+                        pass
             except Exception as e:
                 print(f"[ERROR] multiview_edit_existing_image: {e}")
                 self.root.after(0, lambda: messagebox.showerror("Edit Failed", str(e)))
@@ -1783,13 +1803,6 @@ class DualModeApp:
 
         def run():
             try:
-                genai.configure(api_key=self.api_key)
-                model = genai.GenerativeModel("gemini-3-pro-image-preview")
-
-                buf = io.BytesIO()
-                self.multiview_main_stage_image.save(buf, format="PNG")
-                buf.seek(0)
-
                 subject = self.multiview_prompt_text.get("1.0", tk.END).strip() or "main object"
                 prompt = (
                     "ISOLATION WITH EXACT RECREATION.\n"
@@ -1801,25 +1814,26 @@ class DualModeApp:
                     "No shadows, no ground plane, no floor, no reflections."
                 )
 
-                parts = [{"mime_type": "image/png", "data": buf.getvalue()}, prompt]
-                result = model.generate_content(parts)
-
-                for part in getattr(result, "parts", []):
-                    if hasattr(part, "inline_data") and part.inline_data.data:
-                        img = Image.open(io.BytesIO(part.inline_data.data)).convert("RGB")
-                        self.multiview_main_stage_image = img
-                        self._mv_zoom["main"] = 1.0
-                        self._mv_offset["main"] = [0, 0]
-                        try:
-                            ImageManager.save_multiview_image(img, "isolated_prop", "threequarter", "background_removed_ai")
-                        except Exception:
-                            pass
-                        self.root.after(0, lambda: self.multiview_update_tab_display("main", force_update=True))
-                        self.root.after(100, lambda: self.multiview_update_tab_display("main", force_update=True))
-                        self.root.after(200, lambda: self.multiview_update_tab_display("main", force_update=True))
-                        self.root.after(0, self._update_multiview_isolate_state)
-                        self.root.after(0, lambda: self.status_var.set("✅ Background removed (AI)."))
-                        break
+                img = _gemini_generate_image(
+                    self.api_key,
+                    [self.multiview_main_stage_image, prompt],
+                    aspect_ratio="1:1",
+                    image_size="4K",
+                )
+                if img is not None:
+                    img = img.convert("RGB")
+                    self.multiview_main_stage_image = img
+                    self._mv_zoom["main"] = 1.0
+                    self._mv_offset["main"] = [0, 0]
+                    try:
+                        ImageManager.save_multiview_image(img, "isolated_prop", "threequarter", "background_removed_ai")
+                    except Exception:
+                        pass
+                    self.root.after(0, lambda: self.multiview_update_tab_display("main", force_update=True))
+                    self.root.after(100, lambda: self.multiview_update_tab_display("main", force_update=True))
+                    self.root.after(200, lambda: self.multiview_update_tab_display("main", force_update=True))
+                    self.root.after(0, self._update_multiview_isolate_state)
+                    self.root.after(0, lambda: self.status_var.set("\u2705 Background removed (AI)."))
             except Exception as e:
                 print(f"[ERROR] multiview_isolate_image: {e}")
                 self.root.after(0, lambda: messagebox.showerror("Isolation Failed", str(e)))
@@ -1918,18 +1932,11 @@ class DualModeApp:
 
         def run():
             try:
-                genai.configure(api_key=self.api_key)
-                model = genai.GenerativeModel("gemini-3-pro-image-preview")
-
-                buf = io.BytesIO()
-                self.multiview_main_stage_image.save(buf, format="PNG")
-                buf.seek(0)
-
                 view_instruction = VIEW_REQUESTS.get(view_key, VIEW_REQUESTS["threequarter"])
                 user_prompt = (
                     f"Use the provided image as a reference. Re-render the same object from the {view_key.upper()} "
                     f"camera view. Maintain identical materials, lighting, and design, but change perspective. "
-                    f"Remove all backgrounds, keep light gray background, and fit within 1024×1024 frame. "
+                    f"Remove all backgrounds, keep light gray background. "
                     f"CRITICAL: ABSOLUTELY NO SHADOWS, NO GROUND SHADOWS, NO DROP SHADOWS, NO CAST SHADOWS, "
                     f"NO GROUND PLANE, NO SURFACE, NO FLOOR. Object must float completely isolated against "
                     f"blank background with no shadow underneath or around it.\n\n"
@@ -1939,23 +1946,22 @@ class DualModeApp:
                 if user_text:
                     user_prompt += f"\n\nAdditional instructions: {user_text}"
 
-                result = model.generate_content([
-                    {"mime_type": "image/png", "data": buf.getvalue()},
-                    user_prompt
-                ], generation_config={"temperature": 0.8, "candidate_count": 1})
-
-                for part in getattr(result, "parts", []):
-                    if hasattr(part, "inline_data") and part.inline_data.data:
-                        img = Image.open(io.BytesIO(part.inline_data.data)).convert("RGB")
-                        self.multiview_generated_views[view_key] = img
-                        self._mv_zoom[view_key] = 1.0
-                        self._mv_offset[view_key] = [0, 0]
-                        ImageManager.save_multiview_image(img, "prop", view_key, user_prompt)
-                        self.root.after(0, lambda k=view_key: self.multiview_update_tab_display(k, force_update=True))
-                        self.root.after(100, lambda k=view_key: self.multiview_update_tab_display(k, force_update=True))
-                        self.root.after(200, lambda k=view_key: self.multiview_update_tab_display(k, force_update=True))
-                        self.root.after(0, lambda k=view_key: self.status_var.set(f"✅ Generated {k} view."))
-                        break
+                img = _gemini_generate_image(
+                    self.api_key,
+                    [self.multiview_main_stage_image, user_prompt],
+                    aspect_ratio="1:1",
+                    image_size="4K",
+                )
+                if img is not None:
+                    img = img.convert("RGB")
+                    self.multiview_generated_views[view_key] = img
+                    self._mv_zoom[view_key] = 1.0
+                    self._mv_offset[view_key] = [0, 0]
+                    ImageManager.save_multiview_image(img, "prop", view_key, user_prompt)
+                    self.root.after(0, lambda k=view_key: self.multiview_update_tab_display(k, force_update=True))
+                    self.root.after(100, lambda k=view_key: self.multiview_update_tab_display(k, force_update=True))
+                    self.root.after(200, lambda k=view_key: self.multiview_update_tab_display(k, force_update=True))
+                    self.root.after(0, lambda k=view_key: self.status_var.set(f"\u2705 Generated {k} view."))
             except Exception as err:
                 print(f"[ERROR] multiview_generate_selected: {err}")
                 self.root.after(0, lambda err=err: messagebox.showerror("Generation Failed", str(err)))
@@ -2036,38 +2042,34 @@ class DualModeApp:
             import google.generativeai as genai
             genai.configure(api_key=self.api_key)
             view_instruction = VIEW_REQUESTS.get(view_key, VIEW_REQUESTS["threequarter"])
-            full_prompt = f"GENERATE IN 1:1 SQUARE (1024x1024). {PROP_STYLE_BASE}\n\nUse provided image as reference.\n\nVIEW:\n{view_instruction}\n"
+            full_prompt = f"GENERATE IN 1:1 SQUARE. {PROP_STYLE_BASE}\n\nUse provided image as reference.\n\nVIEW:\n{view_instruction}\n"
             if user_prompt:
                 full_prompt += f"\nUSER NOTES: {user_prompt}\n"
-            model = genai.GenerativeModel("gemini-3-pro-image-preview")
-            buf = io.BytesIO()
-            self.multiview_main_stage_image.save(buf, format="PNG")
-            parts = [{"mime_type": "image/png", "data": buf.getvalue()}, full_prompt]
-            result = model.generate_content(parts, generation_config={"temperature": 0.8})
-            if result.parts:
-                for part in result.parts:
-                    if hasattr(part, 'inline_data') and part.inline_data:
-                        img_data = part.inline_data.data
-                        if isinstance(img_data, bytes):
-                            img = Image.open(io.BytesIO(img_data)).convert("RGB")
-                            img = autocrop_and_resize(img, (1024, 1024))
-                            self.multiview_generated_views[view_key] = img
-                            self._mv_zoom[view_key] = 1.0
-                            self._mv_offset[view_key] = [0, 0]
-                            try:
-                                ai_label = self.gemini_client.describe_image_briefly(img)
-                            except Exception:
-                                ai_label = "image"
-                            ImageManager.save_multiview_image(img, self.multiview_prop_name, view_key, full_prompt, ai_label=ai_label, generation_type="auto")
-                            self.image_history.append(img)
-                            self.history_index = len(self.image_history) - 1
-                            self.root.after(0, lambda k=view_key: self.multiview_update_tab_display(k, force_update=True))
-                            self.root.after(100, lambda k=view_key: self.multiview_update_tab_display(k, force_update=True))
-                            self.root.after(200, lambda k=view_key: self.multiview_update_tab_display(k, force_update=True))
-                            self.root.after(300, lambda k=view_key: self.multiview_update_tab_display(k, force_update=True))
-                            self.root.after(0, lambda k=view_key: self.status_var.set(f"{k} generated"))
-                            self.multiview_is_generating = False
-                            return
+            img = _gemini_generate_image(
+                self.api_key,
+                [self.multiview_main_stage_image, full_prompt],
+                aspect_ratio="1:1",
+                image_size="4K",
+            )
+            if img is not None:
+                img = img.convert("RGB")
+                self.multiview_generated_views[view_key] = img
+                self._mv_zoom[view_key] = 1.0
+                self._mv_offset[view_key] = [0, 0]
+                try:
+                    ai_label = self.gemini_client.describe_image_briefly(img)
+                except Exception:
+                    ai_label = "image"
+                ImageManager.save_multiview_image(img, self.multiview_prop_name, view_key, full_prompt, ai_label=ai_label, generation_type="auto")
+                self.image_history.append(img)
+                self.history_index = len(self.image_history) - 1
+                self.root.after(0, lambda k=view_key: self.multiview_update_tab_display(k, force_update=True))
+                self.root.after(100, lambda k=view_key: self.multiview_update_tab_display(k, force_update=True))
+                self.root.after(200, lambda k=view_key: self.multiview_update_tab_display(k, force_update=True))
+                self.root.after(300, lambda k=view_key: self.multiview_update_tab_display(k, force_update=True))
+                self.root.after(0, lambda k=view_key: self.status_var.set(f"{k} generated"))
+                self.multiview_is_generating = False
+                return
             self.root.after(0, messagebox.showerror, "Error", "No image generated")
         except Exception as e:
             msg = str(e)
@@ -2121,6 +2123,11 @@ class DualModeApp:
                              fill="white", font=("Segoe UI", 9, "bold"), anchor="w")
             canvas.create_text(10, 28, text="Right-Click: Save/Copy/Paste", 
                              fill="white", font=("Segoe UI", 9, "bold"), anchor="w")
+            
+            res_text = f"{iw} \u00d7 {ih}"
+            canvas.create_rectangle(4, ch - 24, len(res_text) * 7 + 18, ch - 4, fill="#111111", outline="")
+            canvas.create_text(10, ch - 14, text=res_text, fill="#CCCCCC",
+                               font=("Consolas", 9), anchor="w")
             
             if force_update:
                 canvas.update_idletasks()

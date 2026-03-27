@@ -70,6 +70,118 @@ ICON_ICO_PATH = ICON_DIR / "ICON.ico"
 
 RECENT_LIMIT = 8
 RECENT_FILES = []
+
+# ── Image model registry ─────────────────────────────────────
+# Every Gemini-ecosystem image generation model available via the API.
+# "multimodal" means the model accepts image+text input (editing/reference).
+# "api" indicates which SDK path is used: "genai" (google.genai) or "generativeai" (google.generativeai).
+
+IMAGE_MODELS = [
+    {
+        "id": "gemini-3-pro-image-preview",
+        "label": "Nano Banana Pro",
+        "resolution": "4K (up to 5504px)",
+        "time_estimate": "~40-90s",
+        "multimodal": True,
+        "api": "genai",
+        "supports_4k": True,
+        "description": "Studio-quality, complex layouts, precise text rendering",
+    },
+    {
+        "id": "gemini-3.1-flash-image-preview",
+        "label": "Nano Banana 2",
+        "resolution": "4K (up to 5504px)",
+        "time_estimate": "~20-45s",
+        "multimodal": True,
+        "api": "genai",
+        "supports_4k": True,
+        "description": "High-volume, fast iteration, image search grounding",
+    },
+    {
+        "id": "gemini-2.5-flash-image",
+        "label": "Nano Banana",
+        "resolution": "1K (1024px)",
+        "time_estimate": "~3-8s",
+        "multimodal": True,
+        "api": "genai",
+        "supports_4k": False,
+        "description": "Quick drafts, rapid iteration, lowest latency",
+    },
+    {
+        "id": "imagen-4.0-ultra-generate-001",
+        "label": "Imagen 4 Ultra",
+        "resolution": "2K (up to 2816px)",
+        "time_estimate": "~15-30s",
+        "multimodal": False,
+        "api": "genai",
+        "supports_4k": False,
+        "description": "Maximum fidelity, photorealistic output",
+    },
+    {
+        "id": "imagen-4.0-generate-001",
+        "label": "Imagen 4 Standard",
+        "resolution": "2K (up to 2816px)",
+        "time_estimate": "~5-10s",
+        "multimodal": False,
+        "api": "genai",
+        "supports_4k": False,
+        "description": "Balanced quality and speed",
+    },
+    {
+        "id": "imagen-4.0-fast-generate-001",
+        "label": "Imagen 4 Fast",
+        "resolution": "1K (1024px)",
+        "time_estimate": "~2-5s",
+        "multimodal": False,
+        "api": "genai",
+        "supports_4k": False,
+        "description": "Rapid prototyping, fastest Imagen",
+    },
+]
+
+DEFAULT_IMAGE_MODEL = "gemini-3-pro-image-preview"
+
+
+def _load_image_model() -> str:
+    env_val = os.environ.get("PUBG_IMAGE_MODEL", "").strip()
+    if env_val:
+        return env_val
+    kp = CONFIG_ROOT / "keys.json"
+    if kp.exists():
+        try:
+            data = json.loads(kp.read_text(encoding="utf-8"))
+            val = str(data.get("image_model", "")).strip()
+            if val:
+                return val
+        except Exception:
+            pass
+    return DEFAULT_IMAGE_MODEL
+
+
+def _save_image_model(model_id: str):
+    kp = CONFIG_ROOT / "keys.json"
+    kp.parent.mkdir(parents=True, exist_ok=True)
+    data = {}
+    if kp.exists():
+        try:
+            data = json.loads(kp.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    data["image_model"] = model_id
+    kp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.environ["PUBG_IMAGE_MODEL"] = model_id
+
+
+def get_image_model_info(model_id: str = None) -> dict:
+    """Return the registry entry for a model id, or the currently selected one."""
+    if model_id is None:
+        model_id = os.environ.get("PUBG_IMAGE_MODEL", DEFAULT_IMAGE_MODEL)
+    for m in IMAGE_MODELS:
+        if m["id"] == model_id:
+            return m
+    return IMAGE_MODELS[0]
+
+
 TOOLS = {
     "multitool": {
         "path": TOOLS_ROOT / "AI_Multitool_v1_1",
@@ -411,6 +523,9 @@ def main():
     if api_key:
         _apply_api_key(api_key)
 
+    selected_image_model = _load_image_model()
+    os.environ["PUBG_IMAGE_MODEL"] = selected_image_model
+
     os.environ.setdefault("PUBG_SUITE_ROOT", str(BASE_DIR))
     _ensure_generated_image_folders()
     threading.Thread(target=_ensure_weapon_assets_folder, daemon=True).start()
@@ -577,7 +692,7 @@ def main():
         about = tk.Toplevel(root)
         about.title("About AI Models - v2.0")
         about.configure(bg="#2B2B2B")
-        width, height = 550, 600
+        width, height = 700, 680
         x = (about.winfo_screenwidth() - width) // 2
         y = (about.winfo_screenheight() - height) // 2
         about.geometry(f"{width}x{height}+{x}+{y}")
@@ -587,38 +702,42 @@ def main():
 
         tk.Label(about, text="PUBG Madison AI Suite v2.0", font=("Segoe UI", 16, "bold"),
                  bg="#2B2B2B", fg="#FFFFFF", pady=10).pack()
-        tk.Label(about, text="Powered by Google Gemini (multimodal) and Imagen (image generation)",
-                 font=("Segoe UI", 10), bg="#2B2B2B", fg="#AAAAAA").pack(pady=(0, 20))
+        active = get_image_model_info(selected_image_model)
+        tk.Label(about, text=f"Active Image Model: {active['label']}  ({active['id']})",
+                 font=("Segoe UI", 10, "bold"), bg="#2B2B2B", fg="#6CB56C").pack(pady=(0, 4))
+        tk.Label(about, text=f"{active['resolution']}  \u2022  {active['time_estimate']}  \u2022  {'Multimodal' if active['multimodal'] else 'Text-to-Image'}",
+                 font=("Segoe UI", 9), bg="#2B2B2B", fg="#AAAAAA").pack(pady=(0, 10))
         tk.Label(about, text="Developed by Shawn Wiederhoeft \u2022 Feedback & Testing: Eric Sandhop",
-                 font=("Segoe UI", 9), bg="#2B2B2B", fg="#888888").pack(pady=(0, 18))
+                 font=("Segoe UI", 9), bg="#2B2B2B", fg="#888888").pack(pady=(0, 12))
 
-        content_frame = tk.Frame(about, bg="#333333", padx=20, pady=20, relief="flat", bd=1)
+        content_frame = tk.Frame(about, bg="#333333", padx=20, pady=14, relief="flat", bd=1)
         content_frame.pack(fill="both", expand=True, padx=20, pady=10)
 
-        tools_info = [
-            ("\u2728 Gemini Tab", [
-                "\u2022 Quality: models/imagen-4.0-generate-001 (2K)",
-                "\u2022 Speed: models/imagen-4.0-fast-generate-001 (1K)",
-                "\u2022 Ref Merging: models/gemini-3-pro-image-preview",
-                "\u2022 Auto-Labeling: models/gemini-2.0-flash"]),
-            ("\U0001f4f8 Multiview Tab", [
-                "\u2022 Generation: models/gemini-3-pro-image-preview"]),
-            ("\U0001f464 Character Generator", [
-                "\u2022 Primary Image: models/imagen-4.0-generate-001 (2K)",
-                "\u2022 Attribute Extraction: models/gemini-2.0-flash",
-                "\u2022 Text Completion: models/gemini-2.0-flash"]),
-            ("\U0001f52b Weapon Generator", [
-                "\u2022 Freeform Generation: models/imagen-4.0-generate-001 (2K)",
-                "\u2022 Reference Generation: models/gemini-3-pro-image-preview"]),
+        tk.Label(content_frame, text="Available Image Models", font=("Segoe UI", 11, "bold"),
+                 bg="#333333", fg="#E0E0E0", anchor="w").pack(fill="x", pady=(0, 8))
+
+        for m in IMAGE_MODELS:
+            is_active = m["id"] == selected_image_model
+            prefix = "\u2714 " if is_active else "  "
+            mm_tag = "Multimodal" if m["multimodal"] else "Text\u2192Image"
+            fg = "#6CB56C" if is_active else "#CCCCCC"
+            tk.Label(content_frame,
+                     text=f"{prefix}{m['label']}  |  {m['resolution']}  |  {m['time_estimate']}  |  {mm_tag}",
+                     font=("Consolas", 9), bg="#333333", fg=fg, anchor="w", padx=8).pack(fill="x")
+
+        tk.Label(content_frame, text="", bg="#333333").pack(pady=4)
+        tk.Label(content_frame, text="Tool Model Assignments", font=("Segoe UI", 11, "bold"),
+                 bg="#333333", fg="#E0E0E0", anchor="w").pack(fill="x", pady=(0, 4))
+
+        assignments = [
+            "\u2022 Image Generation: controlled by Image Model selector above",
+            "\u2022 Text/Attribute Extraction: gemini-2.0-flash (always)",
+            "\u2022 Text Reasoning: gemini-2.5-pro (always)",
+            "\u2022 Auto-Labeling: gemini-2.0-flash (always)",
         ]
-        for title, models in tools_info:
-            section = tk.Frame(content_frame, bg="#333333", pady=5)
-            section.pack(fill="x")
-            tk.Label(section, text=title, font=("Segoe UI", 11, "bold"),
-                     bg="#333333", fg="#E0E0E0", anchor="w").pack(fill="x")
-            for model in models:
-                tk.Label(section, text=model, font=("Consolas", 9),
-                         bg="#333333", fg="#CCCCCC", anchor="w", padx=15).pack(fill="x")
+        for line in assignments:
+            tk.Label(content_frame, text=line, font=("Consolas", 9),
+                     bg="#333333", fg="#CCCCCC", anchor="w", padx=8).pack(fill="x")
 
         tk.Button(about, text="CLOSE", command=about.destroy,
                   font=("Segoe UI", 10, "bold"), bg="#444444", fg="white",
@@ -762,9 +881,66 @@ def main():
     file_menu.add_separator()
     file_menu.add_command(label="Exit", command=root.destroy)
     menubar.add_cascade(label="File", menu=file_menu)
+
+    # ── Image Model selector menu ─────────────────────────────
+    model_var = tk.StringVar(value=selected_image_model)
+    model_menu = tk.Menu(menubar, tearoff=0)
+
+    def _on_model_select():
+        new_model = model_var.get()
+        nonlocal selected_image_model
+        selected_image_model = new_model
+        _save_image_model(new_model)
+        info = get_image_model_info(new_model)
+        _update_model_menu_label(info)
+
+    _model_menu_index = [None]  # mutable container for the menubar index
+
+    def _update_model_menu_label(info=None):
+        if info is None:
+            info = get_image_model_info(selected_image_model)
+        idx = _model_menu_index[0]
+        if idx is not None:
+            try:
+                menubar.entryconfigure(idx, label=f"Image Model: {info['label']}")
+            except Exception:
+                pass
+
+    multimodal_models = [m for m in IMAGE_MODELS if m["multimodal"]]
+    imagen_models = [m for m in IMAGE_MODELS if not m["multimodal"]]
+
+    model_menu.add_command(
+        label="── Multimodal (Image+Text \u2192 Image) ──",
+        state="disabled",
+    )
+    for m in multimodal_models:
+        model_menu.add_radiobutton(
+            label=f"{m['label']}  |  {m['resolution']}  |  {m['time_estimate']}  |  {m['description']}",
+            variable=model_var,
+            value=m["id"],
+            command=_on_model_select,
+        )
+
+    model_menu.add_separator()
+    model_menu.add_command(
+        label="── Text-to-Image Only ──",
+        state="disabled",
+    )
+    for m in imagen_models:
+        model_menu.add_radiobutton(
+            label=f"{m['label']}  |  {m['resolution']}  |  {m['time_estimate']}  |  {m['description']}",
+            variable=model_var,
+            value=m["id"],
+            command=_on_model_select,
+        )
+
     menubar.add_command(label="How to Use", command=_show_how_to_use)
     menubar.add_command(label="About", command=_show_about)
     menubar.add_command(label="Report Bug", command=_report_bug)
+
+    init_info = get_image_model_info(selected_image_model)
+    menubar.add_cascade(label=f"Image Model: {init_info['label']}", menu=model_menu)
+    _model_menu_index[0] = menubar.index("end")
 
     root.config(menu=menubar)
     _refresh_recent_menu()

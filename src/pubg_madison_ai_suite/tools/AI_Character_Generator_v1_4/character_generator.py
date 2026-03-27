@@ -1026,6 +1026,14 @@ class GeminiClient:
             "Return ONLY JSON. No markdown, no extra text."
         )
 
+    @staticmethod
+    def _selected_image_model() -> str:
+        return os.environ.get("PUBG_IMAGE_MODEL", "gemini-3-pro-image-preview")
+
+    @staticmethod
+    def _is_gemini_model(model_id: str) -> bool:
+        return model_id.startswith("gemini-")
+
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key
         self._image_client = None
@@ -1039,15 +1047,11 @@ class GeminiClient:
         if self.api_key and GEMINI_AVAILABLE:
             try:
                 genai_text.configure(api_key=self.api_key)
-                # Split Model Workflow:
-                # - _image_client: Imagen 4 for Main Stage
-                # - _edit_model: Gemini 3 Pro Image Preview for ortho views and image analysis
-                # - _text_model: Gemini 3 Pro Preview for structured text tasks
                 self._image_client = genai_images.Client(api_key=self.api_key)
                 
-                # Gemini text model
                 text_model_name = "gemini-2.0-flash"
-                edit_model_name = "gemini-3-pro-image-preview"
+                selected = self._selected_image_model()
+                edit_model_name = selected if self._is_gemini_model(selected) else "gemini-3-pro-image-preview"
                 
                 self._text_model = genai_text.GenerativeModel(
                     text_model_name,
@@ -1055,7 +1059,7 @@ class GeminiClient:
                 )
                 self._edit_model = genai_text.GenerativeModel(edit_model_name)
                     
-                print(f"DEBUG: Split Model Workflow initialized - Imagen 4 + {edit_model_name} + {text_model_name}")
+                print(f"DEBUG: Models initialized - image={selected}, edit={edit_model_name}, text={text_model_name}")
             except Exception as e:
                 print(f"DEBUG: Failed to initialize models: {e}")
                 self._image_client = None
@@ -1064,6 +1068,38 @@ class GeminiClient:
         else:
             print("DEBUG: No API key or models unavailable - will use placeholder")
     
+    # 4K-capable Nano Banana models (Gemini 3 series)
+    _4K_MODELS = {"gemini-3-pro-image-preview", "gemini-3.1-flash-image-preview"}
+
+    def _gemini_generate_image(self, contents, aspect_ratio="9:16", image_size="4K"):
+        """Call google.genai SDK with image_config for full-resolution output.
+        
+        contents: list of str / PIL.Image items
+        Returns PIL.Image or raises RuntimeError.
+        """
+        model_name = self._selected_image_model()
+        if not self._is_gemini_model(model_name):
+            model_name = "gemini-3-pro-image-preview"
+        effective_size = image_size if model_name in self._4K_MODELS else "1K"
+
+        config = genai_types.GenerateContentConfig(
+            temperature=1.0,
+            response_modalities=["TEXT", "IMAGE"],
+            image_config=genai_types.ImageConfig(
+                image_size=effective_size,
+                aspect_ratio=aspect_ratio,
+            ),
+        )
+        result = self._image_client.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=config,
+        )
+        for part in result.parts:
+            if part.inline_data is not None:
+                return part.as_image().convert("RGBA")
+        raise RuntimeError(f"No image data in {model_name} response")
+
     def _reset_model_cache(self):
         """Reset the models to clear any cached patterns."""
         if self.api_key and GEMINI_AVAILABLE:
@@ -1072,7 +1108,8 @@ class GeminiClient:
                 genai_text.configure(api_key=self.api_key)
                 
                 text_model_name = "gemini-2.0-flash"
-                edit_model_name = "gemini-3-pro-image-preview"
+                selected = self._selected_image_model()
+                edit_model_name = selected if self._is_gemini_model(selected) else "gemini-3-pro-image-preview"
                 
                 self._image_client = genai_images.Client(api_key=self.api_key)
                 self._text_model = genai_text.GenerativeModel(
@@ -1081,7 +1118,7 @@ class GeminiClient:
                 )
                 self._edit_model = genai_text.GenerativeModel(edit_model_name)
                     
-                print("DEBUG: Model cache reset complete")
+                print(f"DEBUG: Model cache reset - image={selected}, edit={edit_model_name}")
             except Exception as e:
                 print(f"DEBUG: Failed to reset model cache: {e}")
     
@@ -1103,12 +1140,13 @@ class GeminiClient:
         """
         target_size = (width, height)
         try:
+            selected_model = self._selected_image_model()
+            use_gemini_for_gen = self._is_gemini_model(selected_model)
+
             # ═══════════════════════════════════════════════════════════════════
-            # PATH A: MAIN STAGE GENERATION (Imagen 4 at 2K)
+            # PATH A: MAIN STAGE GENERATION
             # ═══════════════════════════════════════════════════════════════════
             if view_type == "main" and reference_image is None:
-                if self._image_client is None:
-                    raise RuntimeError("Imagen client unavailable for Main Stage generation")
                 
                 style_prompt = (
                     "GENERATE IMAGE IN 9:16 PORTRAIT ASPECT RATIO (1536x2816). FULL BODY HEAD-TO-TOE IN FRAME (no cropping, feet visible). "
@@ -1123,13 +1161,34 @@ class GeminiClient:
                 ]
                 prompt_text = "\n\n".join(section for section in prompt_sections if section.strip())
                 self.last_prompt_text = prompt_text
-                self.last_prompt_meta = {"view": view_type, "path": "A", "model": "imagen"}
+                self.last_prompt_meta = {"view": view_type, "path": "A", "model": selected_model}
                 
-                print(f"DEBUG: [PATH A] Main Stage generation with Imagen 4 (target 2K)")
+                # ── Gemini multimodal path (Nano Banana family) ──
+                if use_gemini_for_gen:
+                    if self._image_client is None:
+                        raise RuntimeError("Gemini client unavailable for Main Stage generation")
+                    print(f"DEBUG: [PATH A] Main Stage via Gemini model {selected_model} at 4K")
+                    image = self._gemini_generate_image(
+                        [prompt_text],
+                        aspect_ratio="9:16",
+                        image_size="4K",
+                    )
+                    print(f"DEBUG: [PATH A] Gemini returned Main Stage {image.width}x{image.height}")
+                    return image
                 
-                # Use Imagen 4 with 2K resolution
+                # ── Imagen API path ──
+                if self._image_client is None:
+                    raise RuntimeError("Imagen client unavailable for Main Stage generation")
+                print(f"DEBUG: [PATH A] Main Stage via Imagen model {selected_model}")
+                
+                candidates = [{"name": f"models/{selected_model}", "supports_image_size": True}]
+                if selected_model != "imagen-4.0-fast-generate-001":
+                    for c in IMAGEN_MODEL_CANDIDATES:
+                        if c["name"] != f"models/{selected_model}":
+                            candidates.append(c)
+                
                 last_error = None
-                for candidate in IMAGEN_MODEL_CANDIDATES:
+                for candidate in candidates:
                     model_name = candidate.get("name")
                     supports_image_size = candidate.get("supports_image_size", True)
                     try:
@@ -1151,11 +1210,11 @@ class GeminiClient:
                             image_obj = getattr(generated_image, "image", None)
                             if image_obj and getattr(image_obj, "image_bytes", None):
                                 image = Image.open(io.BytesIO(image_obj.image_bytes)).convert("RGBA")
-                                print(f"DEBUG: [PATH A] Imagen 4 returned Main Stage image {image.width}x{image.height}")
+                                print(f"DEBUG: [PATH A] Imagen returned Main Stage {image.width}x{image.height}")
                                 image = autocrop_and_resize(image, target_size)
                                 return image
                         
-                        print(f"DEBUG: No image data found in Imagen response from {model_name}")
+                        print(f"DEBUG: No image data from {model_name}")
                     except Exception as model_error:
                         last_error = model_error
                         print(f"DEBUG: Imagen model {model_name} failed: {model_error}")
@@ -1179,10 +1238,9 @@ class GeminiClient:
             # PATH B: ORTHO VIEWS (Gemini 3 with reference - native resolution)
             # ═══════════════════════════════════════════════════════════════════
             elif reference_image is not None and view_type in ("front", "back", "side"):
-                if self._edit_model is None:
-                    raise RuntimeError("Gemini 3 edit model unavailable for ortho generation")
+                if self._image_client is None:
+                    raise RuntimeError("Gemini client unavailable for ortho generation")
                 
-                # Build strict turnaround prompt
                 user_prompt = (
                     f"TURNAROUND RENDER - Using the attached reference image as the SINGLE SOURCE OF TRUTH.\n\n"
                     f"Generate a {view_type.upper()} view of the EXACT SAME character from the reference. FULL BODY HEAD-TO-TOE IN FRAME (no cropping, feet visible).\n\n"
@@ -1192,47 +1250,25 @@ class GeminiClient:
                     f"{IMAGEN_REFERENCE_BACKGROUND_OVERRIDE}"
                 )
                 self.last_prompt_text = user_prompt
-                self.last_prompt_meta = {"view": view_type, "path": "B", "model": "gemini-3-pro-image-preview"}
+                edit_model_id = selected_model if use_gemini_for_gen else "gemini-3-pro-image-preview"
+                self.last_prompt_meta = {"view": view_type, "path": "B", "model": edit_model_id}
                 
-                # Encode reference image
-                img_buffer = io.BytesIO()
-                reference_image.save(img_buffer, format="PNG")
-                img_bytes = img_buffer.getvalue()
-                
-                parts = [{"mime_type": "image/png", "data": img_bytes}, user_prompt]
-                print(f"DEBUG: [PATH B] Ortho {view_type} view with Gemini 3 (reference-based, native resolution)")
-                
-                # Call Gemini 3 - accept native resolution to preserve identity
-                result = self._edit_model.generate_content(
-                    parts,
-                    generation_config={
-                        "temperature": 0.7,  # Lower temp for more consistency
-                        "candidate_count": 1,
-                    }
+                print(f"DEBUG: [PATH B] Ortho {view_type} view with {edit_model_id} at 4K (reference-based)")
+                image = self._gemini_generate_image(
+                    [reference_image, user_prompt],
+                    aspect_ratio="9:16",
+                    image_size="4K",
                 )
-                
-                # Extract image from response
-                if result.parts:
-                    for part in result.parts:
-                        if hasattr(part, 'inline_data') and part.inline_data:
-                            image_data = part.inline_data.data
-                            if isinstance(image_data, bytes):
-                                image = Image.open(io.BytesIO(image_data)).convert("RGBA")
-                                print(f"DEBUG: [PATH B] Gemini 3 returned {view_type} view {image.width}x{image.height}")
-                                # Keep native resolution, then standardize to portrait canvas
-                                image = autocrop_and_resize(image, target_size)
-                                return image
-                
-                raise RuntimeError(f"No image data in Gemini 3 response for {view_type} view")
+                print(f"DEBUG: [PATH B] Gemini returned {view_type} view {image.width}x{image.height}")
+                return image
             
             # ═══════════════════════════════════════════════════════════════════
             # PATH C: EDIT MODE (Gemini 3 with reference + edit prompt)
             # ═══════════════════════════════════════════════════════════════════
             elif reference_image is not None and edit_prompt:
-                if self._edit_model is None:
-                    raise RuntimeError("Gemini 3 edit model unavailable for edit mode")
+                if self._image_client is None:
+                    raise RuntimeError("Gemini client unavailable for edit mode")
                 
-                # Check if prompt mentions ref a, ref b, or ref c (case-insensitive)
                 prompt_lower = edit_prompt.lower()
                 use_ref_a = "ref a" in prompt_lower or "ref_a" in prompt_lower
                 use_ref_b = "ref b" in prompt_lower or "ref_b" in prompt_lower
@@ -1240,129 +1276,98 @@ class GeminiClient:
                 
                 style_notes = CHARACTER_STYLE_NOTES
                 
-                # Build detailed reference image instructions for style vs design transfer
                 ref_context = ""
                 if (use_ref_a and ref_a_image is not None) or (use_ref_b and ref_b_image is not None) or (use_ref_c and ref_c_image is not None):
                     ref_instructions = []
                     if use_ref_a and ref_a_image is not None:
                         ref_instructions.append(
                             "REF A is a DESIGN REFERENCE ONLY:\n"
-                            "  • Copy its shape, silhouette, proportions, and overall form\n"
-                            "  • Copy any logos, text, labels, and their exact placement\n"
-                            "  • Copy damage patterns, scratches, wear marks, and details\n"
-                            "  • Do NOT copy its art style, rendering, or illustration look\n"
-                            "  • The RENDERING STYLE must match the main character image (realistic materials, lighting, shading)"
+                            "  \u2022 Copy its shape, silhouette, proportions, and overall form\n"
+                            "  \u2022 Copy any logos, text, labels, and their exact placement\n"
+                            "  \u2022 Copy damage patterns, scratches, wear marks, and details\n"
+                            "  \u2022 Do NOT copy its art style, rendering, or illustration look\n"
+                            "  \u2022 The RENDERING STYLE must match the main character image (realistic materials, lighting, shading)"
                         )
                     if use_ref_b and ref_b_image is not None:
                         ref_instructions.append(
                             "REF B is a DESIGN REFERENCE ONLY:\n"
-                            "  • Copy its shape, silhouette, proportions, and overall form\n"
-                            "  • Copy any logos, text, labels, and their exact placement\n"
-                            "  • Copy damage patterns, scratches, wear marks, and details\n"
-                            "  • Do NOT copy its art style, rendering, or illustration look\n"
-                            "  • The RENDERING STYLE must match the main character image (realistic materials, lighting, shading)"
+                            "  \u2022 Copy its shape, silhouette, proportions, and overall form\n"
+                            "  \u2022 Copy any logos, text, labels, and their exact placement\n"
+                            "  \u2022 Copy damage patterns, scratches, wear marks, and details\n"
+                            "  \u2022 Do NOT copy its art style, rendering, or illustration look\n"
+                            "  \u2022 The RENDERING STYLE must match the main character image (realistic materials, lighting, shading)"
                         )
                     if use_ref_c and ref_c_image is not None:
                         ref_instructions.append(
                             "REF C is a DESIGN REFERENCE ONLY:\n"
-                            "  • Copy its shape, silhouette, proportions, and overall form\n"
-                            "  • Copy any logos, text, labels, and their exact placement\n"
-                            "  • Copy damage patterns, scratches, wear marks, and details\n"
-                            "  • Do NOT copy its art style, rendering, or illustration look\n"
-                            "  • The RENDERING STYLE must match the main character image (realistic materials, lighting, shading)"
+                            "  \u2022 Copy its shape, silhouette, proportions, and overall form\n"
+                            "  \u2022 Copy any logos, text, labels, and their exact placement\n"
+                            "  \u2022 Copy damage patterns, scratches, wear marks, and details\n"
+                            "  \u2022 Do NOT copy its art style, rendering, or illustration look\n"
+                            "  \u2022 The RENDERING STYLE must match the main character image (realistic materials, lighting, shading)"
                         )
                     ref_context = (
-                        "\n\n🎨 STYLE vs DESIGN TRANSFER RULES:\n"
+                        "\n\n\U0001f3a8 STYLE vs DESIGN TRANSFER RULES:\n"
                         + "\n\n".join(ref_instructions) +
-                        "\n\n⚠️ CRITICAL: The main character image defines the TARGET STYLE.\n"
+                        "\n\n\u26a0\ufe0f CRITICAL: The main character image defines the TARGET STYLE.\n"
                         "All added elements must be rendered with:\n"
-                        "  • Realistic materials, lighting, and shading\n"
-                        "  • No comic, cartoon, or illustrated outlines\n"
-                        "  • Metal should look like real metal, plastic like real plastic\n"
-                        "  • Match the same lighting, perspective, and resolution as the character\n"
-                        "  • Make it look like it was photographed in the same studio setup\n"
+                        "  \u2022 Realistic materials, lighting, and shading\n"
+                        "  \u2022 No comic, cartoon, or illustrated outlines\n"
+                        "  \u2022 Metal should look like real metal, plastic like real plastic\n"
+                        "  \u2022 Match the same lighting, perspective, and resolution as the character\n"
+                        "  \u2022 Make it look like it was photographed in the same studio setup\n"
                         "Use REF A, REF B, and REF C exactly as referenced in the prompt."
                     )
                 
                 user_prompt = (
                     f"VISUAL EDIT TASK:\n\n"
                     f"You are provided with a main character image that defines the TARGET RENDERING STYLE.\n\n"
-                    f"🔒 PRESERVATION REQUIREMENTS (MANDATORY):\n"
-                    f"• Preserve 100% of the existing person's face, facial features, skin tone, and expression\n"
-                    f"• Preserve 100% of the existing body type, build, and proportions\n"
-                    f"• Preserve 100% of the existing pose and camera angle\n"
-                    f"• Preserve 100% of all clothing and materials NOT mentioned in the edit\n"
-                    f"• Maintain the exact same person - same individual, same appearance\n"
-                    f"• Maintain the same realistic rendering style throughout\n\n"
-                    f"✏️ MODIFICATION TO APPLY:\n"
+                    f"\U0001f512 PRESERVATION REQUIREMENTS (MANDATORY):\n"
+                    f"\u2022 Preserve 100% of the existing person's face, facial features, skin tone, and expression\n"
+                    f"\u2022 Preserve 100% of the existing body type, build, and proportions\n"
+                    f"\u2022 Preserve 100% of the existing pose and camera angle\n"
+                    f"\u2022 Preserve 100% of all clothing and materials NOT mentioned in the edit\n"
+                    f"\u2022 Maintain the exact same person - same individual, same appearance\n"
+                    f"\u2022 Maintain the same realistic rendering style throughout\n\n"
+                    f"\u270f\ufe0f MODIFICATION TO APPLY:\n"
                     f"{edit_prompt}\n\n"
                     f"Apply ONLY the above modification. Do NOT change anything else.\n\n"
                     f"FULL-BODY FRAMING (NON-NEGOTIABLE):\n"
-                    f"• Character MUST be fully visible head-to-toe. No cropping of feet, hands, or limbs.\n"
-                    f"• Keep entire silhouette comfortably inside frame with margin; do NOT clip edges.\n"
-                    f"• Maintain 9:16 portrait full-body framing.\n\n"
-                    f"📋 Character Context:\n{character_description}\n\n"
+                    f"\u2022 Character MUST be fully visible head-to-toe. No cropping of feet, hands, or limbs.\n"
+                    f"\u2022 Keep entire silhouette comfortably inside frame with margin; do NOT clip edges.\n"
+                    f"\u2022 Maintain 9:16 portrait full-body framing.\n\n"
+                    f"\U0001f4cb Character Context:\n{character_description}\n\n"
                     f"{style_notes}\n\n"
                     f"{IMAGEN_BACKGROUND_DIRECTIVE}"
                     f"{ref_context}"
                 )
                 self.last_prompt_text = user_prompt
-                self.last_prompt_meta = {"view": view_type, "path": "C", "model": "gemini-3-pro-image-preview"}
+                edit_model_id = selected_model if use_gemini_for_gen else "gemini-3-pro-image-preview"
+                self.last_prompt_meta = {"view": view_type, "path": "C", "model": edit_model_id}
                 
-                # Build parts list: MAIN IMAGE FIRST (establishes style), then refs (design only), then prompt
-                parts = []
+                # Build contents: MAIN IMAGE FIRST (establishes style), then refs, then prompt
+                contents = [reference_image]
                 
-                # 1. Add main reference image FIRST - this is the target style
-                img_buffer = io.BytesIO()
-                reference_image.save(img_buffer, format="PNG")
-                parts.append({"mime_type": "image/png", "data": img_buffer.getvalue()})
-                print(f"DEBUG: [PATH C] Main character image added (defines target style)")
-                
-                # 2. Add Ref A image if mentioned and available (design reference only)
                 if use_ref_a and ref_a_image is not None:
-                    ref_a_buffer = io.BytesIO()
-                    ref_a_image.save(ref_a_buffer, format="PNG")
-                    parts.append({"mime_type": "image/png", "data": ref_a_buffer.getvalue()})
+                    contents.append(ref_a_image)
                     print(f"DEBUG: [PATH C] Including Ref A image (design reference)")
-                
-                # 3. Add Ref B image if mentioned and available (design reference only)
                 if use_ref_b and ref_b_image is not None:
-                    ref_b_buffer = io.BytesIO()
-                    ref_b_image.save(ref_b_buffer, format="PNG")
-                    parts.append({"mime_type": "image/png", "data": ref_b_buffer.getvalue()})
+                    contents.append(ref_b_image)
                     print(f"DEBUG: [PATH C] Including Ref B image (design reference)")
-                
-                # 4. Add Ref C image if mentioned and available (design reference only)
                 if use_ref_c and ref_c_image is not None:
-                    ref_c_buffer = io.BytesIO()
-                    ref_c_image.save(ref_c_buffer, format="PNG")
-                    parts.append({"mime_type": "image/png", "data": ref_c_buffer.getvalue()})
+                    contents.append(ref_c_image)
                     print(f"DEBUG: [PATH C] Including Ref C image (design reference)")
                 
-                # 5. Add the prompt text last
-                parts.append(user_prompt)
+                contents.append(user_prompt)
                 
-                print(f"DEBUG: [PATH C] Edit mode with Gemini 3: '{edit_prompt[:50]}...' (refs: A={use_ref_a}, B={use_ref_b}, C={use_ref_c})")
-                
-                result = self._edit_model.generate_content(
-                    parts,
-                    generation_config={
-                        "temperature": 0.7,
-                        "candidate_count": 1,
-                    }
+                print(f"DEBUG: [PATH C] Edit via {edit_model_id} at 4K: '{edit_prompt[:50]}...' (refs: A={use_ref_a}, B={use_ref_b}, C={use_ref_c})")
+                image = self._gemini_generate_image(
+                    contents,
+                    aspect_ratio="9:16",
+                    image_size="4K",
                 )
-                
-                if result.parts:
-                    for part in result.parts:
-                        if hasattr(part, 'inline_data') and part.inline_data:
-                            image_data = part.inline_data.data
-                            if isinstance(image_data, bytes):
-                                image = Image.open(io.BytesIO(image_data)).convert("RGBA")
-                                print(f"DEBUG: [PATH C] Gemini 3 returned edited image {image.width}x{image.height}")
-                                image = autocrop_and_resize(image, target_size)
-                                return image
-                
-                raise RuntimeError("No image data in Gemini 3 response for edit")
+                print(f"DEBUG: [PATH C] Gemini returned edited image {image.width}x{image.height}")
+                return image
             
             # ═══════════════════════════════════════════════════════════════════
             # FALLBACK: Unexpected combination - treat as main generation
@@ -2071,6 +2076,12 @@ class FullScreenImageViewer:
                 fill="white", 
                 font=("Arial", 12)
             )
+            
+            res_text = f"{orig_width} \u00d7 {orig_height}"
+            self.canvas.create_rectangle(4, self.screen_height - 28, len(res_text) * 8 + 20, self.screen_height - 4,
+                                         fill="#111111", outline="")
+            self.canvas.create_text(12, self.screen_height - 16, text=res_text, fill="#CCCCCC",
+                                    font=("Consolas", 10), anchor="w")
     
     def close_viewer(self, event=None):
         """Close the fullscreen viewer."""
@@ -5834,6 +5845,11 @@ Return ONLY the description text, no JSON or formatting."""
             anchor="w"
         )
 
+        res_text = f"{img_width} \u00d7 {img_height}"
+        canvas.create_rectangle(4, ch - 24, len(res_text) * 7 + 18, ch - 4, fill="#111111", outline="")
+        canvas.create_text(10, ch - 14, text=res_text, fill="#CCCCCC",
+                           font=("Consolas", 9), anchor="w")
+
         if force_update:
             canvas.update_idletasks()
 
@@ -6253,6 +6269,11 @@ Return ONLY the description text, no JSON or formatting."""
             font=("Segoe UI", 9, "bold"),
             anchor="w"
         )
+
+        res_text = f"{img_width} \u00d7 {img_height}"
+        canvas.create_rectangle(4, ch - 24, len(res_text) * 7 + 18, ch - 4, fill="#111111", outline="")
+        canvas.create_text(10, ch - 14, text=res_text, fill="#CCCCCC",
+                           font=("Consolas", 9), anchor="w")
 
         if force_update:
             canvas.update_idletasks()
