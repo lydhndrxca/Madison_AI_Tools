@@ -50,20 +50,23 @@
   animation: spin 1s linear infinite;
 }
 
-/* Focus visible ring */
-button:focus-visible,
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible {
+/* Focus visible ring — buttons only */
+button:focus-visible {
   outline: 1px solid var(--color-border-hover);
   outline-offset: 1px;
 }
 
-/* Input focus border */
+/* Input focus — subtle border, no outline flash */
 input:focus,
 select:focus,
 textarea:focus {
-  border-color: var(--color-border-hover) !important;
+  border-color: #6A6A6A !important;
+  outline: none !important;
+}
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none !important;
 }
 
 /* Smooth page transitions */
@@ -79,15 +82,35 @@ main > * {
 /* Generating button glow pulse (OKDO-style) */
 @keyframes btn-glow-pulse {
   0%, 100% {
-    box-shadow: 0 0 8px rgba(0, 200, 255, 0.3), 0 0 20px rgba(108, 99, 255, 0.2);
+    box-shadow: 0 0 6px 2px rgba(0, 180, 255, 0.45),
+                0 0 18px 4px rgba(90, 80, 255, 0.3),
+                inset 0 0 8px rgba(0, 180, 255, 0.15);
+    border-color: rgba(0, 200, 255, 0.6);
+    background-color: rgba(0, 160, 255, 0.12);
   }
   50% {
-    box-shadow: 0 0 14px rgba(0, 200, 255, 0.6), 0 0 30px rgba(108, 99, 255, 0.35);
+    box-shadow: 0 0 12px 4px rgba(0, 200, 255, 0.7),
+                0 0 32px 8px rgba(108, 99, 255, 0.45),
+                inset 0 0 12px rgba(0, 200, 255, 0.2);
+    border-color: rgba(0, 220, 255, 0.85);
+    background-color: rgba(0, 180, 255, 0.18);
   }
 }
 
 .btn-generating {
-  animation: btn-glow-pulse 1.5s ease-in-out infinite;
-  border-color: rgba(0, 200, 255, 0.5) !important;
+  animation: btn-glow-pulse 1.4s ease-in-out infinite;
+  border: 1.5px solid rgba(0, 200, 255, 0.6) !important;
   position: relative;
+  z-index: 1;
+}
+
+/* Draggable section feedback */
+[draggable="true"] {
+  transition: opacity 0.15s ease, box-shadow 0.15s ease;
+}
+[draggable="true"]:active {
+  opacity: 0.5;
+}
+[draggable="true"].drag-over {
+  box-shadow: 0 -2px 0 0 var(--color-accent, #6a6aff);
 }

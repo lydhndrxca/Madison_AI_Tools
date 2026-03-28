@@ -83,7 +83,7 @@ def _do_generate(
     if not api_key:
         return GenerateResponse(error="No API key configured")
 
-    from pubg_madison_ai_suite.api.server import reset_cancel_event, release_cancel_event
+    from pubg_madison_ai_suite.api.cancel import reset_cancel_event, release_cancel_event
     cancel = reset_cancel_event()
 
     contents: list = []
@@ -186,7 +186,7 @@ async def multiview_generate_all(body: MultiviewGenerateRequest):
     image_size = _image_size_from_mode(body.mode)
     views = body.views or list(_VIEW_PROMPTS.keys())
 
-    from pubg_madison_ai_suite.api.server import reset_cancel_event, release_cancel_event
+    from pubg_madison_ai_suite.api.cancel import reset_cancel_event, release_cancel_event
     cancel = reset_cancel_event()
 
     base_img = core.b64_to_image(body.base_image_b64) if body.base_image_b64 else None

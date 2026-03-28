@@ -6,6 +6,9 @@ import { TabBar } from "@/components/shared/TabBar";
 import { PanelGroup, Panel, PanelResizeHandle } from "react-resizable-panels";
 import { apiFetch } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
+import { useSessionRegister, useSessionContext } from "@/hooks/SessionContext";
+import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
+import { XmlModal } from "@/components/shared/XmlModal";
 
 const VIEW_TABS = ["Main Stage", "3/4", "Front", "Back", "Side", "Top", "Bottom", "Ref A", "Ref B", "Ref C"];
 
@@ -189,9 +192,23 @@ export function WeaponPage() {
     catch { addToast("Failed to copy", "error"); }
   }, [currentSrc, addToast]);
 
+  // Global Ctrl+V paste — uses Electron native clipboard for external images
+  useClipboardPaste(
+    useCallback((dataUrl: string) => setTabImage(activeTab, dataUrl), [activeTab, setTabImage]),
+  );
+
   const handlePasteImage = useCallback(async () => {
-    try { const items = await navigator.clipboard.read(); for (const item of items) { for (const type of item.types) { if (type.startsWith("image/")) { const blob = await item.getType(type); const reader = new FileReader(); reader.onload = () => setTabImage(activeTab, reader.result as string); reader.readAsDataURL(blob); return; } } } } catch { /* */ }
-  }, [activeTab, setTabImage]);
+    try {
+      const dataUrl = await readClipboardImage();
+      if (dataUrl) {
+        setTabImage(activeTab, dataUrl);
+      } else {
+        addToast("No image found in clipboard", "error");
+      }
+    } catch (err) {
+      addToast(`Paste failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+    }
+  }, [activeTab, setTabImage, addToast]);
 
   const handleClearRef = useCallback(() => {
     if (activeTab.startsWith("Ref")) { setGallery((prev) => ({ ...prev, [activeTab]: [] })); setImageIdx((prev) => ({ ...prev, [activeTab]: 0 })); }
@@ -202,10 +219,88 @@ export function WeaponPage() {
     setComponents(Object.fromEntries(COMPONENTS.map((c) => [c, ""])));
   }, []);
 
+  const handleSendToPS = useCallback(async () => {
+    if (!currentSrc) { addToast("No image to send", "error"); return; }
+    try {
+      const resp = await apiFetch<{ ok: boolean; results: { label: string; message: string }[] }>(
+        "/system/send-to-ps", { method: "POST", body: JSON.stringify({ images: [{ label: `weapon_${activeTab.replace(/\s+/g, "_").toLowerCase()}`, image_b64: currentSrc }] }) },
+      );
+      if (resp.ok) addToast(resp.results[0]?.message || "Sent to Photoshop", "success");
+      else addToast(resp.results[0]?.message || "Failed to send", "error");
+    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
+  }, [currentSrc, activeTab, addToast]);
+
+  const handleSendAllToPS = useCallback(async () => {
+    const viewTabs = ["Main Stage", "3/4", "Front", "Back", "Side", "Top", "Bottom"];
+    const images: { label: string; image_b64: string }[] = [];
+    for (const tab of viewTabs) {
+      const imgs = gallery[tab] || [];
+      const src = imgs[imageIdx[tab] ?? 0];
+      if (src) images.push({ label: `weapon_${tab.replace(/\s+/g, "_").toLowerCase()}`, image_b64: src });
+    }
+    if (images.length === 0) { addToast("No view images to send", "error"); return; }
+    try {
+      const resp = await apiFetch<{ ok: boolean; results: { label: string; message: string; ok?: boolean }[] }>(
+        "/system/send-to-ps", { method: "POST", body: JSON.stringify({ images }) },
+      );
+      const sent = resp.results.filter((r) => r.ok).length;
+      addToast(`Sent ${sent} image${sent !== 1 ? "s" : ""} to Photoshop`, sent > 0 ? "success" : "error");
+    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
+  }, [gallery, imageIdx, addToast]);
+
   const handlePrevImage = useCallback(() => { setImageIdx((prev) => ({ ...prev, [activeTab]: Math.max(0, (prev[activeTab] ?? 0) - 1) })); }, [activeTab]);
   const handleNextImage = useCallback(() => { const max = (gallery[activeTab] || []).length - 1; setImageIdx((prev) => ({ ...prev, [activeTab]: Math.min(max, (prev[activeTab] ?? 0) + 1) })); }, [activeTab, gallery]);
 
   const isRefTab = activeTab.startsWith("Ref");
+
+  const { clearAll: clearAllSession } = useSessionContext();
+  const handleClearCache = useCallback(() => {
+    clearAllSession();
+    apiFetch("/system/clear-cache", { method: "POST" }).catch(() => {});
+    addToast("All session cache cleared", "success");
+  }, [clearAllSession, addToast]);
+
+  const [showXml, setShowXml] = useState(false);
+  const buildWeaponXml = useCallback(() => {
+    const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const tag = (name: string, val: string, indent = "  ") => val ? `${indent}<${name}>${esc(val)}</${name}>` : "";
+    const lines: string[] = ['<?xml version="1.0" encoding="UTF-8"?>', "<Weapon>"];
+    lines.push(tag("Name", weaponName));
+    lines.push(tag("Description", editText));
+    lines.push(tag("MaterialFinish", finish));
+    lines.push(tag("Condition", condition));
+    lines.push("  <Components>");
+    for (const [key, val] of Object.entries(components)) {
+      if (val) lines.push(`    <${key}>${esc(val)}</${key}>`);
+    }
+    lines.push("  </Components>");
+    lines.push("</Weapon>");
+    return lines.filter((l) => l).join("\n");
+  }, [weaponName, editText, finish, condition, components]);
+
+  useSessionRegister(
+    "weapon",
+    () => ({ activeTab, editText, weaponName, finish, condition, components, gallery, imageIdx, editHistory }),
+    (s: unknown) => {
+      if (s === null) {
+        setActiveTab("Main Stage"); setEditText(""); setWeaponName("");
+        setFinish("Blued Steel"); setCondition("1 - Factory New");
+        setComponents(Object.fromEntries(COMPONENTS.map((c) => [c, ""])));
+        setGallery({}); setImageIdx({}); setEditHistory([]);
+        return;
+      }
+      const d = s as Record<string, unknown>;
+      if (typeof d.activeTab === "string") setActiveTab(d.activeTab);
+      if (typeof d.editText === "string") setEditText(d.editText);
+      if (typeof d.weaponName === "string") setWeaponName(d.weaponName);
+      if (typeof d.finish === "string") setFinish(d.finish);
+      if (typeof d.condition === "string") setCondition(d.condition);
+      if (d.components) setComponents(d.components as Record<string, string>);
+      if (d.gallery) setGallery(d.gallery as Record<string, string[]>);
+      if (d.imageIdx) setImageIdx(d.imageIdx as Record<string, number>);
+      if (d.editHistory) setEditHistory(d.editHistory as EditEntry[]);
+    },
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -218,28 +313,28 @@ export function WeaponPage() {
               <div className="px-3 py-2 space-y-2">
                 <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Weapon Selection</p>
                 <input className="w-full px-3 py-1.5 text-sm" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", borderRadius: "var(--radius-md)", color: "var(--color-text-primary)" }}
-                  value={weaponName} onChange={(e) => setWeaponName(e.target.value)} placeholder="Enter weapon name..." />
+                  value={weaponName} onChange={(e) => setWeaponName(e.target.value)} placeholder="Name your weapon, e.g. Stormbreaker Axe, Plasma Rifle MK-II..." disabled={busy.is("extract") || busy.is("enhance")} />
               </div>
             </Card>
 
             <div className="space-y-1.5">
-              <Button className="w-full" size="sm" generating={busy.is("extract")} generatingText="Extracting..." onClick={handleExtract}>Extract Attributes</Button>
-              <Button className="w-full" size="sm" generating={busy.is("enhance")} generatingText="Enhancing..." onClick={handleEnhance}>Enhance Description</Button>
+              <Button className="w-full" size="sm" generating={busy.is("extract")} generatingText="Extracting..." onClick={handleExtract} title="Analyze the current image and fill in all weapon details automatically">Extract Attributes</Button>
+              <Button className="w-full" size="sm" generating={busy.is("enhance")} generatingText="Enhancing..." onClick={handleEnhance} title="Polish and add more detail to what you've already written">Enhance Description</Button>
               <div className="grid grid-cols-2 gap-1.5">
-                <Button size="sm" className="w-full" onClick={handleOpenImage}>Open Image</Button>
-                <Button size="sm" className="w-full" onClick={handleReset}>Reset Weapon</Button>
+                <Button size="sm" className="w-full" onClick={handleOpenImage} title="Load an image from your computer">Open Image</Button>
+                <Button size="sm" className="w-full" onClick={handleReset} title="Clear everything and start fresh">Reset Weapon</Button>
               </div>
             </div>
 
             <Card>
               <div className="px-3 py-2 space-y-2">
                 <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Edit Instructions</p>
-                <Textarea value={editText} onChange={(e) => setEditText(e.target.value)} rows={6} placeholder="Describe changes..." />
+                <Textarea value={editText} onChange={(e) => setEditText(e.target.value)} rows={6} placeholder="Tell the AI what to change — e.g. Make the blade longer, add rust, change the grip material..." disabled={busy.is("generate")} />
               </div>
             </Card>
 
-            <Button variant="primary" className="w-full" generating={busy.is("generate")} generatingText={genText.generate || "Generating..."} onClick={handleGenerate}>Generate / Apply Edit</Button>
-            {busy.any && <Button variant="danger" size="sm" className="w-full" onClick={handleCancel}>Cancel</Button>}
+            <Button variant="primary" className="w-full" generating={busy.is("generate")} generatingText={genText.generate || "Generating..."} onClick={handleGenerate} title="Generate a new weapon image or apply your edit instructions to the current one">Generate / Apply Edit</Button>
+            {busy.any && <Button variant="danger" size="sm" className="w-full" onClick={handleCancel} title="Stop the current generation">Cancel</Button>}
             <EditHistory entries={editHistory} />
 
             <Card>
@@ -250,26 +345,26 @@ export function WeaponPage() {
                     <div key={comp} className="flex items-center gap-2">
                       <span className="text-xs w-16 shrink-0 text-right" style={{ color: "var(--color-text-secondary)" }}>{comp}</span>
                       <input className="flex-1 px-2 py-1 text-xs" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)", color: "var(--color-text-primary)" }}
-                        value={components[comp]} onChange={(e) => setComponents((c) => ({ ...c, [comp]: e.target.value }))} />
+                        value={components[comp]} onChange={(e) => setComponents((c) => ({ ...c, [comp]: e.target.value }))} disabled={busy.is("extract") || busy.is("enhance")} />
                     </div>
                   ))}
-                  <Select label="Material Finish" options={FINISHES} value={finish} onChange={(e) => setFinish(e.target.value)} />
-                  <Select label="Condition" options={CONDITIONS} value={condition} onChange={(e) => setCondition(e.target.value)} />
+                  <Select label="Material Finish" options={FINISHES} value={finish} onChange={(e) => setFinish(e.target.value)} disabled={busy.is("extract") || busy.is("enhance")} />
+                  <Select label="Condition" options={CONDITIONS} value={condition} onChange={(e) => setCondition(e.target.value)} disabled={busy.is("extract") || busy.is("enhance")} />
                 </div>
               </div>
             </Card>
 
             <div className="space-y-1.5">
               <div className="grid grid-cols-2 gap-1.5">
-                <Button size="sm" className="w-full" generating={busy.is("allviews")} generatingText={genText.allviews || "Generating..."} onClick={handleGenerateAllViews}>Generate All Views</Button>
-                <Button size="sm" className="w-full">Generate Selected View</Button>
-                <Button size="sm" className="w-full">Send to PS</Button>
-                <Button size="sm" className="w-full">Send ALL to PS</Button>
+                <Button size="sm" className="w-full" generating={busy.is("allviews")} generatingText={genText.allviews || "Generating..."} onClick={handleGenerateAllViews} title="Generate front, back, and side views of your weapon at once">Generate All Views</Button>
+                <Button size="sm" className="w-full" title="Generate only the view you have selected">Generate Selected View</Button>
+                <Button size="sm" className="w-full" onClick={handleSendToPS} title="Open the current image in Photoshop">Send to PS</Button>
+                <Button size="sm" className="w-full" onClick={handleSendAllToPS} title="Open all view images in Photoshop">Send ALL to PS</Button>
               </div>
               <div className="grid grid-cols-3 gap-1.5">
-                <Button size="sm" className="w-full">Show XML</Button>
-                <Button size="sm" className="w-full">Clear Cache</Button>
-                <Button size="sm" className="w-full">Open Images</Button>
+                <Button size="sm" className="w-full" onClick={() => setShowXml(true)} title="View the weapon data as XML for saving or sharing">Show XML</Button>
+                <Button size="sm" className="w-full" onClick={handleClearCache} title="Clear cached AI data for this session">Clear Cache</Button>
+                <Button size="sm" className="w-full" title="Browse all generated weapon images">Open Images</Button>
               </div>
             </div>
           </div>
@@ -281,13 +376,14 @@ export function WeaponPage() {
           <div className="h-full flex flex-col relative">
             <div className="flex items-center justify-between px-3 py-1.5 shrink-0" style={{ borderBottom: "1px solid var(--color-border)" }}>
               <p className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>Weapon Concept</p>
-              <Button size="sm" generating={busy.is("generate")} generatingText="Generating..." onClick={handleGenerate}>Quick Generate</Button>
+              <Button size="sm" generating={busy.is("generate")} generatingText="Generating..." onClick={handleGenerate} title="Quickly regenerate the weapon using your current settings">Quick Generate</Button>
             </div>
             <TabBar tabs={VIEW_TABS} active={activeTab} onSelect={setActiveTab} />
             <ImageViewer
               src={currentSrc}
               placeholder={`No ${activeTab.toLowerCase()} image loaded`}
               showToolbar={true}
+              locked={busy.any}
               onSaveImage={handleSaveImage}
               onCopyImage={handleCopyImage}
               onPasteImage={handlePasteImage}
@@ -307,6 +403,7 @@ export function WeaponPage() {
           </div>
         </Panel>
       </PanelGroup>
+      {showXml && <XmlModal xml={buildWeaponXml()} title="Weapon XML" onClose={() => setShowXml(false)} />}
     </div>
   );
 }

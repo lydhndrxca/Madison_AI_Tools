@@ -6,3 +6,5 @@ export { Textarea } from "./Textarea";
 export { Select } from "./Select";
 export { NumberStepper } from "./NumberStepper";
 export { TagPicker } from "./TagPicker";
+export type { TagItem } from "./TagPicker";
+export { ColorField } from "./ColorField";

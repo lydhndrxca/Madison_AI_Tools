@@ -6,11 +6,9 @@ Launched by Electron's main process or run standalone:
 
 from __future__ import annotations
 
-import asyncio
 import os
 import sys
 from pathlib import Path
-from threading import Event, Lock
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -21,7 +19,8 @@ if str(_pkg_root) not in sys.path:
     sys.path.insert(0, str(_pkg_root))
 
 from pubg_madison_ai_suite.api.ws import manager
-from pubg_madison_ai_suite.api.routes import system, gemini, character, weapon
+from pubg_madison_ai_suite.api.cancel import reset_cancel_event, release_cancel_event, cancel_all  # noqa: F401
+from pubg_madison_ai_suite.api.routes import system, gemini, character, weapon, editor, styles
 
 app = FastAPI(title="Madison AI Suite API", version="2.0.0")
 
@@ -36,6 +35,8 @@ app.include_router(system.router, prefix="/api/system", tags=["system"])
 app.include_router(gemini.router, prefix="/api/gemini", tags=["gemini"])
 app.include_router(character.router, prefix="/api/character", tags=["character"])
 app.include_router(weapon.router, prefix="/api/weapon", tags=["weapon"])
+app.include_router(editor.router, prefix="/api/editor", tags=["editor"])
+app.include_router(styles.router, prefix="/api/styles", tags=["styles"])
 
 
 @app.websocket("/ws/progress")
@@ -46,39 +47,6 @@ async def ws_progress(ws: WebSocket):
             await ws.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(ws)
-
-
-# Per-request cancel tokens — each concurrent request gets its own Event.
-# Calling cancel sets ALL active events so the user can stop everything at once.
-_active_events: set[Event] = set()
-_lock = Lock()
-
-
-def reset_cancel_event() -> Event:
-    """Create a new cancel token for a request and register it."""
-    ev = Event()
-    with _lock:
-        _active_events.add(ev)
-    return ev
-
-
-def release_cancel_event(ev: Event) -> None:
-    """Unregister a token when its request completes."""
-    with _lock:
-        _active_events.discard(ev)
-
-
-def get_cancel_event() -> Event:
-    """Return a dummy event (for the /cancel endpoint to set all)."""
-    ev = Event()
-    return ev
-
-
-def cancel_all() -> None:
-    """Signal all active requests to stop."""
-    with _lock:
-        for ev in _active_events:
-            ev.set()
 
 
 if __name__ == "__main__":

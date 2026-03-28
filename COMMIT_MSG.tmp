@@ -1,0 +1,50 @@
+feat: major character tools overhaul with inpainting, style system, and UX polish
+
+Character Page:
+- Add Character Bible, Costume Director, Style Fusion, Environment Placement, and Preservation Lock sections with collapsible/toggleable/lockable/reorderable panels
+- Add "Recreate image exactly" vs "Use image as inspiration" dropdown for extract mode
+- Add extract target buttons (Identity, Attributes, Bible, Costume, Environment) to control which sections get populated
+- Auto-enable extract targets when their corresponding section is turned ON
+- Add Style Library dropdown for selecting style folders during generation
+- Add Prompt Preview section showing the full outgoing prompt
+- Add draggable section reordering with "Set Active Layout as Default" persistence
+- Wire all enabled sections (attributes, bible, costume, fusion, environment, preservation) into generation prompts
+- Enforce A-pose and flat background rules in backend prompt engineering
+- Default Preservation Lock toggles to unchecked
+
+Image Viewer & Inpainting:
+- Add full inpainting toolbar (Brush, Eraser, Marquee, Lasso, Smart Select, Smart Erase, Outpaint, Remove BG, Style Transfer)
+- Wire all inpainting tools to Gemini API with ref image and style context support
+- Add visual brush size circle for brush, eraser, and smart erase
+- Reset to normal cursor after applying any inpainting action
+- Allow zoom/pan while image is generating (only block drawing tools)
+- Hard-threshold alpha in Remove Background for clean cutouts
+- Rewrite Outpaint to send two images for seamless scene extension
+- Add per-image edit history with disk persistence and "Are you sure?" clear confirmation
+- Add image shape label (Portrait/Landscape/Square) to resolution display
+
+Shell & Navigation:
+- Replace native Electron menu bar with in-app File/Edit dropdown menus
+- Add File menu: Save/Open Session, Set/Reset Save Folder, Reset App
+- Add Session Templates dropdown for saving/loading tool presets
+- Add Style Library page with three-column folder/image/guidance layout
+- Remove sidebar auto-collapse on mouse leave (manual button only)
+
+Backend:
+- Add editor API routes (inpaint, smart-select, smart-erase, outpaint, remove-bg, style-transfer)
+- Add styles API routes for Style Library CRUD
+- Add system routes for Photoshop integration, cache clearing, save folder management
+- Add recreate_mode flag to character generation for exact visual matching
+- Expand extraction prompts with detailed attribute instructions and environment fields
+- Fix circular import with cancel.py module
+
+UX Polish:
+- Fix unicode escape characters showing literally in tooltips across all pages
+- Add subtle focus border for text inputs (no flash)
+- Add hover brightness effect on section cards
+- Add section ON/OFF toggles with middle-click support and dimming
+- Add lock icons (SVG) to prevent AI from overwriting locked sections
+- Disable inputs during generation; add pulsing button animation for API calls
+- Add clipboard paste support via Electron IPC
+- Add XML export modal, number stepper, color field with eyedropper
+- Add context menu improvements and tab prompt editing

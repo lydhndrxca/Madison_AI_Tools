@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   Sparkles,
   Image,
@@ -9,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Bug,
+  Palette,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { PageId } from "@/app";
@@ -17,9 +17,17 @@ interface SidebarProps {
   activePage: PageId;
   onNavigate: (page: PageId) => void;
   onSettingsClick?: () => void;
+  collapsed: boolean;
+  setCollapsed: (v: boolean) => void;
 }
 
-const NAV_ITEMS: { id: PageId; label: string; icon: React.ComponentType<{ className?: string }>; disabled?: boolean }[] = [
+type NavItem = { id: PageId; label: string; icon: React.ComponentType<{ className?: string }>; disabled?: boolean };
+
+const LIBRARY_ITEMS: NavItem[] = [
+  { id: "style-library", label: "Style Library", icon: Palette },
+];
+
+const TOOL_ITEMS: NavItem[] = [
   { id: "gemini", label: "Gemini", icon: Sparkles },
   { id: "multiview", label: "Multiview", icon: Image },
   { id: "character", label: "Character Generator", icon: User },
@@ -27,19 +35,18 @@ const NAV_ITEMS: { id: PageId; label: string; icon: React.ComponentType<{ classN
   { id: "3d", label: "3D GEN AI", icon: Box, disabled: true },
 ];
 
-export function Sidebar({ activePage, onNavigate, onSettingsClick }: SidebarProps) {
-  const [collapsed, setCollapsed] = useState(false);
-
+export function Sidebar({ activePage, onNavigate, onSettingsClick, collapsed, setCollapsed }: SidebarProps) {
   return (
     <aside
       className={cn(
-        "relative flex shrink-0 border-r transition-[width] duration-200 ease-in-out overflow-hidden",
-        collapsed ? "w-[52px]" : "w-[240px]",
+        "flex shrink-0 border-r transition-[width] duration-200 ease-in-out overflow-hidden",
+        collapsed ? "w-[52px]" : "w-[268px]",
       )}
       style={{ borderColor: "var(--color-border)", background: "var(--color-card)" }}
+      
     >
       {!collapsed && (
-        <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex flex-1 flex-col overflow-hidden min-w-0">
           <div className="flex h-11 items-center shrink-0 px-4" style={{ borderBottom: "1px solid var(--color-border)" }}>
             <span className="text-[13px] font-bold tracking-tight" style={{ color: "var(--color-foreground)" }}>
               Madison AI Suite
@@ -51,10 +58,47 @@ export function Sidebar({ activePage, onNavigate, onSettingsClick }: SidebarProp
               className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-widest"
               style={{ color: "var(--color-text-muted)" }}
             >
+              Style Library
+            </p>
+
+            {LIBRARY_ITEMS.map((item) => {
+              const Icon = item.icon;
+              const active = activePage === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => onNavigate(item.id)}
+                  className={cn(
+                    "relative flex items-center gap-2.5 rounded px-3 py-2 text-[13px] font-medium transition-all w-full text-left cursor-pointer",
+                    active
+                      ? "text-[var(--color-foreground)]"
+                      : "text-[var(--color-text-secondary)] hover:text-[var(--color-foreground)]",
+                  )}
+                  style={{
+                    border: "none",
+                    background: active ? "var(--color-hover)" : "transparent",
+                  }}
+                >
+                  {active && (
+                    <span
+                      className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-[2px] rounded-r-full"
+                      style={{ background: "var(--color-text-secondary)" }}
+                    />
+                  )}
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {item.label}
+                </button>
+              );
+            })}
+
+            <p
+              className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-widest"
+              style={{ color: "var(--color-text-muted)" }}
+            >
               Tools
             </p>
 
-            {NAV_ITEMS.map((item) => {
+            {TOOL_ITEMS.map((item) => {
               const Icon = item.icon;
               const active = activePage === item.id;
               return (
@@ -122,17 +166,14 @@ export function Sidebar({ activePage, onNavigate, onSettingsClick }: SidebarProp
 
       <button
         onClick={() => setCollapsed(!collapsed)}
-        className={cn(
-          "absolute top-0 right-0 bottom-0 flex flex-col items-center justify-center transition-colors cursor-pointer",
-          collapsed ? "w-[52px]" : "w-[32px]",
-        )}
+        className="shrink-0 w-[52px] flex flex-col items-center justify-center transition-colors cursor-pointer"
         style={{
           border: "none",
           borderLeft: collapsed ? "none" : "1px solid var(--color-border)",
           background: "transparent",
           color: "var(--color-text-muted)",
         }}
-        title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        title={collapsed ? "Show the tools panel" : "Hide the tools panel to give more room for your image"}
       >
         {collapsed ? (
           <ChevronRight className="h-3.5 w-3.5" />

@@ -371,15 +371,50 @@ def imagen_generate(
 # ---------------------------------------------------------------------------
 
 _SAVE_ROOT: Path | None = None
+_SAVE_FOLDER_CONFIG = CONFIG_ROOT / "save_folder.txt"
 
 
 def _get_save_root() -> Path:
     global _SAVE_ROOT
     if _SAVE_ROOT:
         return _SAVE_ROOT
+    # Check for user-configured save folder
+    if _SAVE_FOLDER_CONFIG.is_file():
+        try:
+            custom = _SAVE_FOLDER_CONFIG.read_text(encoding="utf-8").strip()
+            if custom and Path(custom).is_dir():
+                _SAVE_ROOT = Path(custom)
+                return _SAVE_ROOT
+        except Exception:
+            pass
     _SAVE_ROOT = _PROJECT_ROOT / "ALL GENERATED IMAGES"
     _SAVE_ROOT.mkdir(parents=True, exist_ok=True)
     return _SAVE_ROOT
+
+
+def get_save_folder() -> str:
+    """Return the current save folder path."""
+    return str(_get_save_root())
+
+
+def set_save_folder(folder_path: str) -> str:
+    """Set a custom save folder. Returns the resolved path."""
+    global _SAVE_ROOT
+    p = Path(folder_path)
+    p.mkdir(parents=True, exist_ok=True)
+    _SAVE_ROOT = p
+    CONFIG_ROOT.mkdir(parents=True, exist_ok=True)
+    _SAVE_FOLDER_CONFIG.write_text(str(p), encoding="utf-8")
+    return str(p)
+
+
+def reset_save_folder() -> str:
+    """Reset to default save folder."""
+    global _SAVE_ROOT
+    _SAVE_ROOT = None
+    if _SAVE_FOLDER_CONFIG.is_file():
+        _SAVE_FOLDER_CONFIG.unlink()
+    return str(_get_save_root())
 
 
 def save_generated_image(

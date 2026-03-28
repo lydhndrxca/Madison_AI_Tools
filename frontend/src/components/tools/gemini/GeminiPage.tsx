@@ -5,6 +5,8 @@ import { EditHistory } from "@/components/shared/EditHistory";
 import { TabBar } from "@/components/shared/TabBar";
 import { apiFetch } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
+import { useSessionRegister } from "@/hooks/SessionContext";
+import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
 
 const VIEW_TABS = ["Main Stage", "Ref A", "Ref B", "Ref C"];
 
@@ -73,9 +75,23 @@ export function GeminiPage() {
     reader.readAsDataURL(file); e.target.value = "";
   }, [activeTab, setTabImage]);
 
+  // Global Ctrl+V paste — uses Electron native clipboard for external images
+  useClipboardPaste(
+    useCallback((dataUrl: string) => setTabImage(activeTab, dataUrl), [activeTab, setTabImage]),
+  );
+
   const handlePaste = useCallback(async () => {
-    try { const items = await navigator.clipboard.read(); for (const item of items) { for (const type of item.types) { if (type.startsWith("image/")) { const blob = await item.getType(type); const reader = new FileReader(); reader.onload = () => setTabImage(activeTab, reader.result as string); reader.readAsDataURL(blob); return; } } } } catch { /* */ }
-  }, [activeTab, setTabImage]);
+    try {
+      const dataUrl = await readClipboardImage();
+      if (dataUrl) {
+        setTabImage(activeTab, dataUrl);
+      } else {
+        addToast("No image found in clipboard", "error");
+      }
+    } catch (err) {
+      addToast(`Paste failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+    }
+  }, [activeTab, setTabImage, addToast]);
 
   const handleSaveImage = useCallback(() => {
     if (!currentSrc) return;
@@ -94,10 +110,40 @@ export function GeminiPage() {
 
   const handleReset = useCallback(() => { setGallery({}); setImageIdx({}); setEditHistory([]); setPrompt(""); }, []);
 
+  const handleSendToPS = useCallback(async () => {
+    if (!currentSrc) { addToast("No image to send", "error"); return; }
+    try {
+      const resp = await apiFetch<{ ok: boolean; results: { label: string; message: string }[] }>(
+        "/system/send-to-ps", { method: "POST", body: JSON.stringify({ images: [{ label: activeTab.replace(/\s+/g, "_").toLowerCase(), image_b64: currentSrc }] }) },
+      );
+      if (resp.ok) addToast(resp.results[0]?.message || "Sent to Photoshop", "success");
+      else addToast(resp.results[0]?.message || "Failed to send", "error");
+    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
+  }, [currentSrc, activeTab, addToast]);
+
   const handlePrevImage = useCallback(() => { setImageIdx((prev) => ({ ...prev, [activeTab]: Math.max(0, (prev[activeTab] ?? 0) - 1) })); }, [activeTab]);
   const handleNextImage = useCallback(() => { const max = (gallery[activeTab] || []).length - 1; setImageIdx((prev) => ({ ...prev, [activeTab]: Math.min(max, (prev[activeTab] ?? 0) + 1) })); }, [activeTab, gallery]);
 
   const isRefTab = activeTab.startsWith("Ref");
+
+  useSessionRegister(
+    "gemini",
+    () => ({ activeTab, prompt, mode, gallery, imageIdx, editHistory }),
+    (s: unknown) => {
+      if (s === null) {
+        setActiveTab("Main Stage"); setPrompt(""); setMode("quality");
+        setGallery({}); setImageIdx({}); setEditHistory([]);
+        return;
+      }
+      const d = s as Record<string, unknown>;
+      if (typeof d.activeTab === "string") setActiveTab(d.activeTab);
+      if (typeof d.prompt === "string") setPrompt(d.prompt);
+      if (typeof d.mode === "string") setMode(d.mode as "quality" | "speed");
+      if (d.gallery) setGallery(d.gallery as Record<string, string[]>);
+      if (d.imageIdx) setImageIdx(d.imageIdx as Record<string, number>);
+      if (d.editHistory) setEditHistory(d.editHistory as EditEntry[]);
+    },
+  );
 
   return (
     <div className="flex h-full">
@@ -129,9 +175,9 @@ export function GeminiPage() {
           <div className="px-3 py-2 flex flex-col flex-1 min-h-0 gap-2">
             <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Prompt</p>
             <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>Describe image:</p>
-            <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={15} className="flex-1" placeholder="Describe the image you want to generate..." />
-            <Button variant="primary" className="w-full" generating={busy.is("generate")} generatingText="Generating Image..." onClick={handleGenerate}>Generate Image</Button>
-            {busy.any && <Button variant="danger" size="sm" className="w-full" onClick={handleCancel}>Cancel</Button>}
+            <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={15} className="flex-1" placeholder="Describe what you want to see — be as detailed as you like. e.g. A futuristic city at sunset with flying cars..." disabled={busy.any} />
+            <Button variant="primary" className="w-full" generating={busy.is("generate")} generatingText="Generating Image..." onClick={handleGenerate} title="Send your prompt to the AI and generate a new image">Generate Image</Button>
+            {busy.any && <Button variant="danger" size="sm" className="w-full" onClick={handleCancel} title="Stop the current generation">Cancel</Button>}
             <EditHistory entries={editHistory} />
           </div>
         </Card>
@@ -139,9 +185,9 @@ export function GeminiPage() {
         <Card>
           <div className="px-3 py-2 space-y-1.5">
             <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--color-text-secondary)" }}>Actions</p>
-            <Button size="sm" className="w-full">Send to Photoshop</Button>
-            <Button size="sm" className="w-full" onClick={handleSaveImage}>Save Image</Button>
-            <Button size="sm" className="w-full">Open Generated Images</Button>
+            <Button size="sm" className="w-full" onClick={handleSendToPS} title="Open the current image directly in Photoshop">Send to PS</Button>
+            <Button size="sm" className="w-full" onClick={handleSaveImage} title="Save the current image to your generated images folder">Save Image</Button>
+            <Button size="sm" className="w-full" title="Browse all images you've generated so far">Open Generated Images</Button>
           </div>
         </Card>
       </div>
@@ -153,6 +199,7 @@ export function GeminiPage() {
           src={currentSrc}
           placeholder={`No ${activeTab.toLowerCase()} image loaded`}
           showToolbar={true}
+          locked={busy.any}
           onSaveImage={handleSaveImage}
           onCopyImage={handleCopyImage}
           onPasteImage={handlePaste}

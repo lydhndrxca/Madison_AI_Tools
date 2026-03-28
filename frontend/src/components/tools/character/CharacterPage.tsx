@@ -1,38 +1,56 @@
-import { useState, useCallback, useRef, useEffect } from "react";
-import { Card, Button, Select, Textarea, NumberStepper, PanelSection, TagPicker } from "@/components/ui";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { Card, Button, Select, Textarea, NumberStepper, PanelSection, TagPicker, ColorField } from "@/components/ui";
+import type { TagItem } from "@/components/ui";
 import { ImageViewer } from "@/components/shared/ImageViewer";
 import { EditHistory } from "@/components/shared/EditHistory";
-import { TabBar } from "@/components/shared/TabBar";
+import { GroupedTabBar } from "@/components/shared/TabBar";
+import type { TabDef } from "@/components/shared/TabBar";
 import { apiFetch } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
+import { useSessionRegister, useSessionContext } from "@/hooks/SessionContext";
+import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
+import { createHistoryEntry, pushHistory, clearHistory as clearHist, createImageRecord } from "@/lib/imageHistory";
+import type { HistoryEntry, ImageRecord, HistorySettings } from "@/lib/imageHistory";
+import { XmlModal } from "@/components/shared/XmlModal";
+import { GripVertical, ChevronDown, ChevronRight, Save, Lock, Unlock } from "lucide-react";
 
-const VIEW_TABS = ["Main Stage (3/4)", "Front", "Back", "Side", "Ref A", "Ref B", "Ref C"];
+// ---------------------------------------------------------------------------
+// Tab model
+// ---------------------------------------------------------------------------
+
+const BUILTIN_TABS: TabDef[] = [
+  { id: "main", label: "Main Stage", group: "stage", prompt: "Three-quarter hero shot showing the character's full design, head to toe, from a dramatic 3/4 angle." },
+  { id: "3/4", label: "3/4", group: "views", prompt: "True 3/4 angle view of the character, full body visible." },
+  { id: "front", label: "Front", group: "views", prompt: "Front view" },
+  { id: "back", label: "Back", group: "views", prompt: "Back view" },
+  { id: "side", label: "Side", group: "views", prompt: "Side view" },
+  { id: "refA", label: "Ref A", group: "refs" },
+  { id: "refB", label: "Ref B", group: "refs" },
+  { id: "refC", label: "Ref C", group: "refs" },
+];
 
 const VIEW_TYPE_MAP: Record<string, string> = {
-  "Main Stage (3/4)": "main",
-  Front: "front",
-  Back: "back",
-  Side: "side",
+  main: "main", "3/4": "three_quarter", front: "front", back: "back", side: "side",
 };
 
 const AGE_OPTIONS = [
   "", "teen (18–19)", "young adult (20–29)", "adult (30–45)", "middle-aged (46–65)", "senior (66+)",
-].map((v) => ({ value: v, label: v || "\u2014" }));
+].map((v) => ({ value: v, label: v || "—" }));
 
 const RACE_OPTIONS = [
   "", "Black / African descent", "White / European descent", "East Asian", "South Asian",
   "Southeast Asian", "Hispanic / Latine", "Middle Eastern / North African", "Indigenous",
   "Pacific Islander", "Mixed", "Other / not specified",
-].map((v) => ({ value: v, label: v || "\u2014" }));
+].map((v) => ({ value: v, label: v || "—" }));
 
 const GENDER_OPTIONS = [
   "", "male", "female", "non-binary", "genderqueer", "trans masc", "trans femme",
   "androgynous", "unspecified",
-].map((v) => ({ value: v, label: v || "\u2014" }));
+].map((v) => ({ value: v, label: v || "—" }));
 
 const BUILD_OPTIONS = [
   "", "slim", "average", "athletic", "muscular", "curvy", "heavyset", "soft/doughy", "unfit",
-].map((v) => ({ value: v, label: v || "\u2014" }));
+].map((v) => ({ value: v, label: v || "—" }));
 
 const ATTRIBUTE_FIELDS = [
   "Headwear", "Outerwear", "Top", "Legwear", "Footwear",
@@ -40,32 +58,108 @@ const ATTRIBUTE_FIELDS = [
   "Accessories", "ColorAccents", "Detailing", "Pose",
 ];
 
-// Character Bible presets
-const PRODUCTION_STYLES = [
-  "Clive Barker", "A24", "Tim Burton", "Zack Snyder", "Quentin Tarantino",
-  "Daniel Warren Johnson", "David Fincher", "Denis Villeneuve", "Ridley Scott",
-  "Christopher Nolan", "George Miller", "Jordan Peele", "Wes Anderson", "James Cameron",
+// ---------------------------------------------------------------------------
+// TagItem presets
+// ---------------------------------------------------------------------------
+
+const PRODUCTION_STYLE_PRESETS: TagItem[] = [
+  { label: "Clive Barker", prompt: "Dark grotesque horror with organic textures and body-horror elements" },
+  { label: "A24", prompt: "Understated indie aesthetic with naturalistic lighting and muted palettes" },
+  { label: "Tim Burton", prompt: "Whimsical gothic with exaggerated proportions and stark contrast" },
+  { label: "Zack Snyder", prompt: "Hyper-stylized slow-motion heroism with desaturated tones and lens flares" },
+  { label: "Quentin Tarantino", prompt: "Bold retro pop-culture style with saturated colors and gritty realism" },
+  { label: "Daniel Warren Johnson", prompt: "Gritty hand-drawn comic energy with heavy inks and kinetic motion" },
+  { label: "David Fincher", prompt: "Cold clinical precision with dark shadows and sickly green undertones" },
+  { label: "Denis Villeneuve", prompt: "Vast atmospheric scale with muted earth tones and minimal ornamentation" },
+  { label: "Ridley Scott", prompt: "Epic historical/sci-fi grandeur with rich textures and practical detail" },
+  { label: "Christopher Nolan", prompt: "Grounded realism with IMAX-scale scope and restrained color grading" },
+  { label: "George Miller", prompt: "Post-apocalyptic maximalism with weathered metal, rust, and kinetic chaos" },
+  { label: "Jordan Peele", prompt: "Unsettling everyday horror with symbolic imagery and sharp contrast" },
+  { label: "Wes Anderson", prompt: "Symmetrical pastel compositions with retro nostalgia and flat staging" },
+  { label: "James Cameron", prompt: "Blockbuster spectacle with bioluminescent detail and heroic framing" },
 ];
 
-const TONE_TAGS = [
-  "Feminine", "Masculine", "Powerful", "Bold", "Wicked", "Modern",
-  "Cutting edge", "High fashion", "Blockbuster movie quality", "Iconic",
-  "Timeless", "Grounded in reality", "Cinematic",
+const TONE_TAG_PRESETS: TagItem[] = [
+  { label: "Feminine", prompt: "Soft curves, flowing silhouettes, graceful posture" },
+  { label: "Masculine", prompt: "Broad angular build, strong jaw, assertive stance" },
+  { label: "Powerful", prompt: "Commanding presence, wide stance, bold proportions" },
+  { label: "Bold", prompt: "High-contrast look, striking features, unapologetic style" },
+  { label: "Wicked", prompt: "Dark allure, sharp edges, sinister undertones" },
+  { label: "Modern", prompt: "Clean lines, contemporary silhouettes, minimal ornamentation" },
+  { label: "Cutting edge", prompt: "Experimental avant-garde fashion, unconventional materials" },
+  { label: "High fashion", prompt: "Runway-ready couture with editorial proportions" },
+  { label: "Blockbuster movie quality", prompt: "AAA cinematic production value, studio lighting" },
+  { label: "Iconic", prompt: "Instantly recognizable silhouette, signature design elements" },
+  { label: "Timeless", prompt: "Classic design that transcends trends, enduring appeal" },
+  { label: "Grounded in reality", prompt: "Practical real-world clothing and believable wear" },
+  { label: "Cinematic", prompt: "Dramatic lighting, filmic color grade, hero framing" },
 ];
 
-// Costume Director presets
-const COSTUME_STYLES = [
-  "Heavy metal", "Punk rock", "Industrial", "Gothic", "Art nouveau", "Techwear",
-  "Rockabilly", "Outlaw biker", "Pro wrestling", "Streetwear", "High fashion",
-  "Military surplus", "Thrift store DIY", "Cyberpunk", "Noir", "Western",
-  "Samurai", "Victorian", "Afrofuturism", "Brutalism", "Anti-establishment",
-  "Blood magic", "Racing leathers", "Demolition derby",
+const COSTUME_STYLE_PRESETS: TagItem[] = [
+  { label: "Heavy metal", prompt: "Spiked leather, band patches, chain accessories, distressed black" },
+  { label: "Punk rock", prompt: "Safety pins, torn fabric, DIY patches, mohawk-friendly" },
+  { label: "Industrial", prompt: "Utilitarian straps, rubber, matte black, gas-mask motifs" },
+  { label: "Gothic", prompt: "Velvet, lace, corsetry, dark romantic flowing fabrics" },
+  { label: "Art nouveau", prompt: "Organic flowing curves, floral motifs, ornate metalwork" },
+  { label: "Techwear", prompt: "Waterproof shells, modular pockets, taped seams, matte finishes" },
+  { label: "Rockabilly", prompt: "Vintage 50s greaser, pompadour-ready, rolled sleeves, leather" },
+  { label: "Outlaw biker", prompt: "Cut vest, road-worn leather, club insignia, steel buckles" },
+  { label: "Pro wrestling", prompt: "Flashy spandex, bold graphic prints, championship accessories" },
+  { label: "Streetwear", prompt: "Oversized hoodies, sneaker culture, logo-heavy, urban edge" },
+  { label: "High fashion", prompt: "Runway couture, editorial proportions, luxury fabrics" },
+  { label: "Military surplus", prompt: "Camo BDUs, cargo pockets, dog tags, field-worn texture" },
+  { label: "Thrift store DIY", prompt: "Mismatched vintage finds, hand-sewn alterations, lo-fi charm" },
+  { label: "Cyberpunk", prompt: "Neon-lit tech implants, holographic panels, circuit patterns" },
+  { label: "Noir", prompt: "Trench coat, fedora shadow, monochrome palette, cigarette smoke" },
+  { label: "Western", prompt: "Dusty duster, cowboy boots, leather hat, gunslinger belt" },
+  { label: "Samurai", prompt: "Hakama, layered armor plates, katana sash, feudal Japanese silhouette" },
+  { label: "Victorian", prompt: "Top hat, waistcoat, pocket watch, high collar, bustled skirts" },
+  { label: "Afrofuturism", prompt: "Tribal geometry meets sci-fi tech, bold patterns, metallic accents" },
+  { label: "Brutalism", prompt: "Raw concrete textures, exposed structure, monolithic shapes" },
+  { label: "Anti-establishment", prompt: "Protest graphics, anarchist symbols, reclaimed materials" },
+  { label: "Blood magic", prompt: "Crimson runes, ritual scarring, arcane sigils on flesh and cloth" },
+  { label: "Racing leathers", prompt: "Aerodynamic suit, sponsor patches, armored knees and elbows" },
+  { label: "Demolition derby", prompt: "Flame decals, welded roll cage, crash-tested padding" },
 ];
 
-const COSTUME_MATERIALS = [
-  "Matte leather", "Patent leather", "Distressed leather", "Satin",
-  "Bronze metal", "Chrome metal", "Blackened metal", "Canvas",
-  "Mesh", "Vinyl", "Fur", "Rubber", "Wool", "Chainmail",
+const COSTUME_MATERIAL_PRESETS: TagItem[] = [
+  { label: "Matte leather", prompt: "Non-reflective tanned hide with a smooth worn surface" },
+  { label: "Patent leather", prompt: "High-gloss mirror-finish leather" },
+  { label: "Distressed leather", prompt: "Cracked, faded, road-worn leather with natural patina" },
+  { label: "Satin", prompt: "Glossy smooth woven fabric with soft drape and sheen" },
+  { label: "Bronze metal", prompt: "Warm amber-toned metal hardware with slight oxidation" },
+  { label: "Chrome metal", prompt: "Mirror-polished silver metal with sharp reflections" },
+  { label: "Blackened metal", prompt: "Dark oxidized metal with matte charcoal finish" },
+  { label: "Canvas", prompt: "Heavy-duty woven cotton with rugged military-grade texture" },
+  { label: "Mesh", prompt: "Breathable open-weave fabric with visible grid pattern" },
+  { label: "Vinyl", prompt: "Synthetic glossy material with plastic sheen" },
+  { label: "Fur", prompt: "Natural or faux animal pelt with soft dense texture" },
+  { label: "Rubber", prompt: "Matte black elastic material with industrial texture" },
+  { label: "Wool", prompt: "Thick knit or felted fabric with warm fibrous texture" },
+  { label: "Chainmail", prompt: "Interlocking metal rings forming flexible armor mesh" },
+];
+
+const HW_DETAIL_PRESETS: TagItem[] = [
+  { label: "buckles", prompt: "Metal buckle closures on straps and belts" },
+  { label: "snaps", prompt: "Press-snap metal fasteners" },
+  { label: "zippers", prompt: "Exposed metal zipper teeth and pulls" },
+  { label: "rivets", prompt: "Hammered metal rivets reinforcing stress points" },
+  { label: "grommets", prompt: "Metal-rimmed eyelets for lacing and ventilation" },
+  { label: "chains", prompt: "Hanging or connecting decorative metal chain links" },
+  { label: "studs", prompt: "Protruding dome or cone-shaped metal studs" },
+  { label: "clasps", prompt: "Ornamental hook-and-loop metal closures" },
+  { label: "armor plates", prompt: "Overlapping protective metal plates" },
+  { label: "trim/edging", prompt: "Decorative metal trim along seams and edges" },
+];
+
+const COSTUME_ORIGIN_PRESETS: TagItem[] = [
+  { label: "Custom fabrication", prompt: "Purpose-built bespoke garments" },
+  { label: "Hardware/thrift", prompt: "Assembled from found hardware-store and thrift-shop pieces" },
+  { label: "Found/assembled", prompt: "Scavenged and pieced together from available materials" },
+  { label: "Military surplus", prompt: "Repurposed authentic military-issue gear" },
+  { label: "Haute couture", prompt: "High-end designer craftsmanship" },
+  { label: "Stage/performance", prompt: "Theatrical costume designed for stage presence" },
+  { label: "Ceremonial", prompt: "Ritual or ceremonial garb with symbolic elements" },
 ];
 
 const HARDWARE_COLORS = [
@@ -73,16 +167,6 @@ const HARDWARE_COLORS = [
   { value: "gold", label: "Gold" }, { value: "blackened", label: "Blackened" },
   { value: "copper", label: "Copper" }, { value: "pewter", label: "Pewter" },
   { value: "gunmetal", label: "Gunmetal" },
-];
-
-const HW_DETAILS = [
-  "buckles", "snaps", "zippers", "rivets", "grommets",
-  "chains", "studs", "clasps", "armor plates", "trim/edging",
-];
-
-const COSTUME_ORIGINS = [
-  "Custom fabrication", "Hardware/thrift", "Found/assembled",
-  "Military surplus", "Haute couture", "Stage/performance", "Ceremonial",
 ];
 
 function matchOption(options: { value: string }[], raw: string): string {
@@ -101,7 +185,6 @@ function matchOption(options: { value: string }[], raw: string): string {
   return raw;
 }
 
-interface EditEntry { timestamp: string; prompt: string; isOriginal?: boolean; }
 interface ModelInfo { id: string; label: string; resolution: string; time_estimate: string; multimodal: boolean; }
 
 interface BibleState {
@@ -110,21 +193,20 @@ interface BibleState {
   backstory: string;
   worldContext: string;
   designIntent: string;
-  productionStyle: string[];
+  productionStyle: TagItem[];
   customDirector: string;
-  toneTags: string[];
+  toneTags: TagItem[];
 }
 
 interface CostumeState {
-  costumeStyles: string[];
-  costumeCustomStyles: string;
-  costumeMaterials: string[];
+  costumeStyles: TagItem[];
+  costumeMaterials: TagItem[];
   primaryColor: string;
   secondaryColor: string;
   accentColor: string;
   hardwareColor: string;
-  hwDetails: string[];
-  origin: string[];
+  hwDetails: TagItem[];
+  origin: TagItem[];
   costumeNotes: string;
 }
 
@@ -134,10 +216,54 @@ const EMPTY_BIBLE: BibleState = {
 };
 
 const EMPTY_COSTUME: CostumeState = {
-  costumeStyles: [], costumeCustomStyles: "", costumeMaterials: [],
+  costumeStyles: [], costumeMaterials: [],
   primaryColor: "", secondaryColor: "", accentColor: "", hardwareColor: "",
   hwDetails: [], origin: [], costumeNotes: "",
 };
+
+// ---------------------------------------------------------------------------
+// Preservation Lock
+// ---------------------------------------------------------------------------
+
+interface PreserveToggle {
+  key: string;
+  label: string;
+  prompt: string;
+  enabled: boolean;
+}
+
+interface PreservationLockState {
+  enabled: boolean;
+  preserves: PreserveToggle[];
+  negatives: { id: string; text: string; enabled: boolean }[];
+}
+
+const DEFAULT_PRESERVES: PreserveToggle[] = [
+  { key: "keepFace", label: "Keep face", prompt: "Do NOT change the face", enabled: false },
+  { key: "keepHair", label: "Keep hairstyle", prompt: "Do NOT change the hairstyle", enabled: false },
+  { key: "keepHairColor", label: "Keep hair color", prompt: "Do NOT change the hair color", enabled: false },
+  { key: "keepPose", label: "Keep pose", prompt: "Do NOT change the pose", enabled: false },
+  { key: "keepBodyType", label: "Keep body type / build", prompt: "Do NOT change the body type or build", enabled: false },
+  { key: "keepCameraAngle", label: "Keep camera angle", prompt: "Do NOT change the camera angle", enabled: false },
+  { key: "keepLighting", label: "Keep lighting", prompt: "Do NOT change the lighting", enabled: false },
+  { key: "keepBackground", label: "Keep background", prompt: "Do NOT change the background", enabled: false },
+];
+
+const DEFAULT_NEGATIVES: PreservationLockState["negatives"] = [
+  { id: "neg1", text: "No crown", enabled: false },
+  { id: "neg2", text: "No fantasy elements", enabled: false },
+  { id: "neg3", text: "No dress", enabled: false },
+  { id: "neg4", text: "No cape", enabled: false },
+  { id: "neg5", text: "No electronics / future technology", enabled: false },
+];
+
+const EMPTY_PRESERVATION: PreservationLockState = {
+  enabled: true,
+  preserves: DEFAULT_PRESERVES.map((p) => ({ ...p })),
+  negatives: DEFAULT_NEGATIVES.map((n) => ({ ...n })),
+};
+
+let _negIdCounter = 100;
 
 interface FullResponse {
   description?: string | null;
@@ -148,6 +274,7 @@ interface FullResponse {
   attributes?: Record<string, string> | null;
   bible?: Record<string, unknown> | null;
   costume?: Record<string, unknown> | null;
+  environment?: Record<string, unknown> | null;
   error?: string | null;
 }
 
@@ -159,6 +286,10 @@ function useBusySet() {
   return { is, start, end, any: set.size > 0 };
 }
 
+function tagsToPromptList(tags: TagItem[]): string {
+  return tags.map((t) => t.prompt || t.label).join("; ");
+}
+
 function bibleToCostumeContext(bible: BibleState): string {
   const parts: string[] = [];
   if (bible.characterName) parts.push(`Character: ${bible.characterName}`);
@@ -166,40 +297,265 @@ function bibleToCostumeContext(bible: BibleState): string {
   if (bible.backstory) parts.push(`Backstory: ${bible.backstory}`);
   if (bible.worldContext) parts.push(`World: ${bible.worldContext}`);
   if (bible.designIntent) parts.push(`Design intent: ${bible.designIntent}`);
-  if (bible.productionStyle.length) parts.push(`Production style: ${bible.productionStyle.join(", ")}`);
+  if (bible.productionStyle.length) parts.push(`Production style: ${tagsToPromptList(bible.productionStyle)}`);
   if (bible.customDirector) parts.push(`Production note: ${bible.customDirector}`);
-  if (bible.toneTags.length) parts.push(`Tone: ${bible.toneTags.join(", ")}`);
+  if (bible.toneTags.length) parts.push(`Tone: ${tagsToPromptList(bible.toneTags)}`);
   return parts.join("\n");
+}
+
+function preservationToConstraints(pres: PreservationLockState): string {
+  if (!pres.enabled) return "";
+  const lines: string[] = [];
+  for (const p of pres.preserves) {
+    if (p.enabled) lines.push(p.prompt);
+  }
+  for (const n of pres.negatives) {
+    if (n.enabled) lines.push(`MUST AVOID: ${n.text}`);
+  }
+  return lines.join("\n");
 }
 
 function costumeToContext(costume: CostumeState): string {
   const parts: string[] = [];
-  if (costume.costumeStyles.length) parts.push(`Styles: ${costume.costumeStyles.join(", ")}`);
-  if (costume.costumeCustomStyles) parts.push(`Custom styles: ${costume.costumeCustomStyles}`);
-  if (costume.costumeMaterials.length) parts.push(`Materials: ${costume.costumeMaterials.join(", ")}`);
+  if (costume.costumeStyles.length) parts.push(`Styles: ${tagsToPromptList(costume.costumeStyles)}`);
+  if (costume.costumeMaterials.length) parts.push(`Materials: ${tagsToPromptList(costume.costumeMaterials)}`);
   if (costume.primaryColor) parts.push(`Primary color: ${costume.primaryColor}`);
   if (costume.secondaryColor) parts.push(`Secondary color: ${costume.secondaryColor}`);
   if (costume.accentColor) parts.push(`Accent color: ${costume.accentColor}`);
   if (costume.hardwareColor) parts.push(`Hardware color: ${costume.hardwareColor}`);
-  if (costume.hwDetails.length) parts.push(`Hardware details: ${costume.hwDetails.join(", ")}`);
-  if (costume.origin.length) parts.push(`Costume origin: ${costume.origin.join(", ")}`);
+  if (costume.hwDetails.length) parts.push(`Hardware details: ${tagsToPromptList(costume.hwDetails)}`);
+  if (costume.origin.length) parts.push(`Costume origin: ${tagsToPromptList(costume.origin)}`);
   if (costume.costumeNotes) parts.push(`Notes: ${costume.costumeNotes}`);
   return parts.join("\n");
 }
 
+function stringsToTags(arr: string[], allPresets: TagItem[]): TagItem[] {
+  return arr.map((s) => {
+    const preset = allPresets.find((p) => p.label.toLowerCase() === s.toLowerCase());
+    return preset ?? { label: s, prompt: s, isCustom: true };
+  });
+}
+
 const inputStyle = { background: "var(--color-input-bg)", border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)", color: "var(--color-text-primary)" };
 
+// ---------------------------------------------------------------------------
+// Layout system — section ordering + collapse state persistence
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Environment Placement
+// ---------------------------------------------------------------------------
+
+const ENV_LOCATION_PRESETS = [
+  "", "Pacific Northwest rainforest", "Abandoned summer camp", "Urban alley — night",
+  "Industrial warehouse", "Gothic cathedral interior", "Desert highway",
+  "Rooftop — city skyline", "Underground bunker", "Victorian manor",
+  "Neon-lit street market", "Frozen tundra", "Jungle temple ruins",
+  "Spaceship interior", "Studio — solid grey backdrop", "__custom",
+];
+
+const ENV_TIME_OPTIONS = [
+  "", "Dawn — cold blue", "Golden hour — warm amber", "Midday — harsh direct",
+  "Overcast — soft diffused", "Dusk — purple-orange", "Night — moonlit",
+  "Night — artificial light", "Twilight — blue hour",
+];
+
+const ENV_LIGHTING_OPTIONS = [
+  "", "Dappled forest light", "Harsh direct sun", "Soft diffused overcast",
+  "Rim-lit from behind", "Campfire / torch light", "Neon mixed color",
+  "Studio three-point", "Dramatic chiaroscuro", "Volumetric fog",
+  "Underwater caustics", "Fluorescent industrial",
+];
+
+const ENV_POSE_PRESETS = [
+  "", "Standing — relaxed", "Standing — soldier's stance", "Walking toward camera",
+  "Seated — throne / chair", "Crouching — ready", "Action — mid-combat",
+  "Portrait 3/4 turn", "Full body — arms at sides", "From behind — looking over shoulder",
+  "Silhouette — backlit",
+];
+
+const ENV_CAMERA_OPTIONS = [
+  "", "Full body", "Waist up (cowboy)", "Portrait — head & shoulders",
+  "Extreme close-up", "Wide establishing", "Low angle — heroic",
+  "High angle — vulnerable", "Dutch angle — tension", "Over-the-shoulder",
+];
+
+const ENV_FORMAT_OPTIONS = [
+  "3:4 — portrait", "1:1 — square", "4:3 — landscape",
+  "9:16 — vertical reel", "16:9 — cinematic wide", "2.39:1 — anamorphic",
+];
+
+interface EnvCharacterImage {
+  id: string;
+  dataUrl: string;
+  note: string;
+}
+
+interface EnvReferenceImage {
+  id: string;
+  dataUrl: string;
+  note: string;
+}
+
+interface EnvironmentPlacementState {
+  location: string;
+  customLocation: string;
+  timeOfDay: string;
+  lighting: string;
+  pose: string;
+  customPose: string;
+  props: string;
+  camera: string;
+  outputFormat: string;
+  characters: EnvCharacterImage[];
+  references: EnvReferenceImage[];
+}
+
+const EMPTY_ENV: EnvironmentPlacementState = {
+  location: "", customLocation: "", timeOfDay: "", lighting: "",
+  pose: "", customPose: "", props: "", camera: "", outputFormat: "3:4 — portrait",
+  characters: [], references: [],
+};
+
+function buildEnvBrief(env: EnvironmentPlacementState): string {
+  const lines: string[] = [];
+  const loc = env.location === "__custom" ? env.customLocation : env.location;
+  if (loc) lines.push(`Location: ${loc}`);
+  if (env.timeOfDay) lines.push(`Time of day: ${env.timeOfDay}`);
+  if (env.lighting) lines.push(`Lighting: ${env.lighting}`);
+  const pose = env.customPose.trim() || env.pose;
+  if (pose) lines.push(`Pose: ${pose}`);
+  if (env.props.trim()) lines.push(`Props: ${env.props.trim()}`);
+  if (env.camera) lines.push(`Camera: ${env.camera}`);
+  if (env.outputFormat) lines.push(`Output format: ${env.outputFormat}`);
+  if (env.characters.length > 0) {
+    lines.push(`Characters in scene: ${env.characters.length}`);
+    env.characters.forEach((c, i) => { if (c.note.trim()) lines.push(`  Character ${i + 1} note: ${c.note.trim()}`); });
+  }
+  if (env.references.length > 0) {
+    env.references.forEach((r, i) => { if (r.note.trim()) lines.push(`Reference ${i + 1}: ${r.note.trim()}`); });
+  }
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Layout system — section ordering + collapse state persistence
+// ---------------------------------------------------------------------------
+
+type SectionId = "identity" | "generate" | "attributes" | "bible" | "costume" | "styleFusion" | "envPlacement" | "preservation" | "multiview" | "saveOptions";
+
+const DEFAULT_SECTION_ORDER: SectionId[] = [
+  "generate", "identity", "attributes", "bible", "costume", "styleFusion", "envPlacement", "preservation", "multiview", "saveOptions",
+];
+
+const SECTION_LABELS: Record<SectionId, string> = {
+  identity: "Character Identity",
+  generate: "Generate Character Image",
+  attributes: "Character Attributes",
+  bible: "Character Bible",
+  costume: "Costume Director",
+  styleFusion: "Style Fusion",
+  envPlacement: "Environment Placement",
+  preservation: "Preservation Lock",
+  multiview: "Multi-View Generation",
+  saveOptions: "Save Options",
+};
+
+const SECTION_TIPS: Record<SectionId, string> = {
+  identity: "Basic info like age, gender, and a description. This is the starting point for your character.",
+  generate: "Generate new images, extract details from images, or randomize a character.",
+  attributes: "Visual traits like hair, eyes, skin tone, and pose. Fine-tune how your character looks.",
+  bible: "The character's story — name, backstory, world, and production style. Gives the AI deeper context.",
+  costume: "Everything about what they're wearing — colors, materials, style, and accessories.",
+  styleFusion: "Blend two different style influences together. Great for unique, hybrid looks.",
+  envPlacement: "Place your character in a real environment instead of a flat background. Set location, lighting, camera, and more.",
+  preservation: "Lock specific traits so the AI keeps them when regenerating. Set things it must never include.",
+  multiview: "Generate consistent front, back, and side views of your character.",
+  saveOptions: "Save images, send to Photoshop, export XML, or clear your session.",
+};
+const NON_COLLAPSIBLE: Set<SectionId> = new Set(["generate"]);
+const TOGGLEABLE_SECTIONS: Set<SectionId> = new Set(["identity", "attributes", "bible", "costume", "styleFusion", "envPlacement", "preservation"]);
+
+const TAKE_OPTIONS = [
+  "overall vibe", "silhouette", "material & texture", "color palette",
+  "detail work & hardware", "cultural reference", "attitude & energy",
+];
+
+interface FusionSlot {
+  label: string;
+  takeFrom: string;
+}
+
+interface StyleFusionState {
+  slots: [FusionSlot, FusionSlot];
+  blend: number;
+}
+
+const EMPTY_FUSION: StyleFusionState = {
+  slots: [
+    { label: "", takeFrom: "overall vibe" },
+    { label: "", takeFrom: "overall vibe" },
+  ],
+  blend: 50,
+};
+
+function buildFusionBrief(fusion: StyleFusionState): string {
+  const [s1, s2] = fusion.slots;
+  const has1 = !!s1.label.trim();
+  const has2 = !!s2.label.trim();
+  if (!has1 && !has2) return "";
+  const w1 = 100 - fusion.blend;
+  const w2 = fusion.blend;
+  if (has1 && has2) {
+    return [
+      `Fashion blend: "${s1.label}" (${w1}%) + "${s2.label}" (${w2}%)`,
+      `  From "${s1.label}": ${s1.takeFrom}`,
+      `  From "${s2.label}": ${s2.takeFrom}`,
+    ].join("\n");
+  }
+  const slot = has1 ? s1 : s2;
+  return `Fashion style: "${slot.label}" — ${slot.takeFrom}`;
+}
+
+const LAYOUT_STORAGE_KEY = "madison-character-layout";
+
+interface LayoutState {
+  order: SectionId[];
+  collapsed: Partial<Record<SectionId, boolean>>;
+}
+
+function loadDefaultLayout(): LayoutState {
+  try {
+    const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as LayoutState;
+      const allIds = new Set<SectionId>(DEFAULT_SECTION_ORDER);
+      const order = parsed.order.filter((id) => allIds.has(id));
+      for (const id of DEFAULT_SECTION_ORDER) {
+        if (!order.includes(id)) order.push(id);
+      }
+      return { order, collapsed: parsed.collapsed ?? {} };
+    }
+  } catch {}
+  return { order: [...DEFAULT_SECTION_ORDER], collapsed: { styleFusion: true, envPlacement: true, preservation: true, multiview: true, saveOptions: true } };
+}
+
 export function CharacterPage() {
-  const [activeTab, setActiveTab] = useState("Main Stage (3/4)");
+  const [tabs, setTabs] = useState<TabDef[]>(BUILTIN_TABS);
+  const [activeTab, setActiveTab] = useState("main");
   const busy = useBusySet();
+  const textBusy = busy.is("extract") || busy.is("enhance") || busy.is("randomize");
   const [genText, setGenText] = useState<Record<string, string>>({});
 
   const [gallery, setGallery] = useState<Record<string, string[]>>({});
   const [imageIdx, setImageIdx] = useState<Record<string, number>>({});
 
+  // Per-image history (keyed by tab + gallery index)
+  const [imageRecords, setImageRecords] = useState<Record<string, ImageRecord>>({});
+  const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
+
   const [description, setDescription] = useState("");
   const [editPrompt, setEditPrompt] = useState("");
-  const [editHistory, setEditHistory] = useState<EditEntry[]>([]);
   const [age, setAge] = useState("");
   const [race, setRace] = useState("");
   const [gender, setGender] = useState("");
@@ -210,10 +566,29 @@ export function CharacterPage() {
 
   const [bible, setBible] = useState<BibleState>({ ...EMPTY_BIBLE });
   const [costume, setCostume] = useState<CostumeState>({ ...EMPTY_COSTUME });
+  const [preservation, setPreservation] = useState<PreservationLockState>({ ...EMPTY_PRESERVATION, preserves: DEFAULT_PRESERVES.map((p) => ({ ...p })), negatives: DEFAULT_NEGATIVES.map((n) => ({ ...n })) });
+  const [styleFusion, setStyleFusion] = useState<StyleFusionState>({ ...EMPTY_FUSION, slots: [{ ...EMPTY_FUSION.slots[0] }, { ...EMPTY_FUSION.slots[1] }] });
+  const [envPlacement, setEnvPlacement] = useState<EnvironmentPlacementState>({ ...EMPTY_ENV });
+  const envCharFileRef = useRef<HTMLInputElement>(null);
+  const envRefFileRef = useRef<HTMLInputElement>(null);
+  const [styleLibraryFolder, setStyleLibraryFolder] = useState("");
+  const [styleLibraryFolders, setStyleLibraryFolders] = useState<{ name: string; guidance_text: string }[]>([]);
 
-  const [sectionsOpen, setSectionsOpen] = useState({ attributes: false, bible: false, costume: false });
+  const [prodStylePresets, setProdStylePresets] = useState<TagItem[]>(PRODUCTION_STYLE_PRESETS);
+  const [tonePresets, setTonePresets] = useState<TagItem[]>(TONE_TAG_PRESETS);
+  const [costumeStylePresets, setCostumeStylePresets] = useState<TagItem[]>(COSTUME_STYLE_PRESETS);
+  const [materialPresets, setMaterialPresets] = useState<TagItem[]>(COSTUME_MATERIAL_PRESETS);
+  const [hwDetailPresets, setHwDetailPresets] = useState<TagItem[]>(HW_DETAIL_PRESETS);
+  const [originPresets, setOriginPresets] = useState<TagItem[]>(COSTUME_ORIGIN_PRESETS);
+
+  const [sectionsOpen, setSectionsOpen] = useState({ attributes: true, bible: false, costume: false });
   const toggleSection = useCallback((key: "attributes" | "bible" | "costume", val: boolean) => {
     setSectionsOpen((prev) => ({ ...prev, [key]: val }));
+  }, []);
+
+  const [lockedSections, setLockedSections] = useState({ identity: false, attributes: false, bible: false, costume: false });
+  const toggleLock = useCallback((key: "identity" | "attributes" | "bible" | "costume", val: boolean) => {
+    setLockedSections((prev) => ({ ...prev, [key]: val }));
   }, []);
 
   const [genCount, setGenCount] = useState(1);
@@ -223,42 +598,201 @@ export function CharacterPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { addToast } = useToastContext();
 
+  // Layout ordering + collapse state
+  const [layout, setLayout] = useState<LayoutState>(loadDefaultLayout);
+  const [dragOverId, setDragOverId] = useState<SectionId | null>(null);
+  const dragItemRef = useRef<SectionId | null>(null);
+
+  // Extract targets — which sections extraction/enhance/randomize populates
+  type ExtractTarget = "identity" | "attributes" | "bible" | "costume" | "environment";
+  const [extractTargets, setExtractTargets] = useState<Record<ExtractTarget, boolean>>({ identity: true, attributes: true, bible: false, costume: false, environment: false });
+
+  // Extract mode — controls whether generation uses the source image as visual reference
+  const [extractMode, setExtractMode] = useState<"inspiration" | "recreate">("inspiration");
+
+  // Section ON/OFF — controls whether section data is included in prompts
+  const [sectionEnabled, setSectionEnabled] = useState<Partial<Record<SectionId, boolean>>>({ identity: true, attributes: true });
+  const isSectionEnabled = useCallback((id: SectionId) => {
+    if (!TOGGLEABLE_SECTIONS.has(id)) return true;
+    return sectionEnabled[id] === true;
+  }, [sectionEnabled]);
+  const SECTION_TO_EXTRACT: Partial<Record<SectionId, ExtractTarget>> = {
+    identity: "identity", attributes: "attributes", bible: "bible", costume: "costume", envPlacement: "environment",
+  };
+  const toggleSectionEnabled = useCallback((id: SectionId) => {
+    if (!TOGGLEABLE_SECTIONS.has(id)) return;
+    setSectionEnabled((prev) => {
+      const next = !prev[id];
+      if (next) {
+        const target = SECTION_TO_EXTRACT[id];
+        if (target) setExtractTargets((p) => ({ ...p, [target]: true }));
+      }
+      return { ...prev, [id]: next };
+    });
+  }, []);
+
+  const isSectionCollapsed = useCallback((id: SectionId) => {
+    if (NON_COLLAPSIBLE.has(id)) return false;
+    if (id === "attributes") return !sectionsOpen.attributes;
+    if (id === "bible") return !sectionsOpen.bible;
+    if (id === "costume") return !sectionsOpen.costume;
+    return layout.collapsed[id] ?? false;
+  }, [layout.collapsed, sectionsOpen]);
+
+  const toggleSectionCollapse = useCallback((id: SectionId) => {
+    if (NON_COLLAPSIBLE.has(id)) return;
+    if (id === "attributes" || id === "bible" || id === "costume") {
+      toggleSection(id, !sectionsOpen[id]);
+      return;
+    }
+    setLayout((prev) => ({
+      ...prev,
+      collapsed: { ...prev.collapsed, [id]: !prev.collapsed[id] },
+    }));
+  }, [sectionsOpen, toggleSection]);
+
+  const handleDragStart = useCallback((id: SectionId) => {
+    dragItemRef.current = id;
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, id: SectionId) => {
+    e.preventDefault();
+    setDragOverId(id);
+  }, []);
+
+  const handleDrop = useCallback((targetId: SectionId) => {
+    const from = dragItemRef.current;
+    if (from && targetId && from !== targetId) {
+      setLayout((prev) => {
+        const order = [...prev.order];
+        const fromIdx = order.indexOf(from);
+        const toIdx = order.indexOf(targetId);
+        if (fromIdx < 0 || toIdx < 0) return prev;
+        order.splice(fromIdx, 1);
+        order.splice(toIdx, 0, from);
+        return { ...prev, order };
+      });
+    }
+    dragItemRef.current = null;
+    setDragOverId(null);
+  }, []);
+
+  const handleDragEnd = useCallback(() => {
+    dragItemRef.current = null;
+    setDragOverId(null);
+  }, []);
+
+  const handleSetDefaultLayout = useCallback(() => {
+    const collapsed: Partial<Record<SectionId, boolean>> = {};
+    for (const id of layout.order) {
+      if (NON_COLLAPSIBLE.has(id)) continue;
+      collapsed[id] = isSectionCollapsed(id);
+    }
+    const state: LayoutState = { order: layout.order, collapsed };
+    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(state));
+    addToast("Layout saved as default", "success");
+  }, [layout.order, isSectionCollapsed, addToast]);
+
+  const refCounter = useRef(0);
+
   useEffect(() => {
     apiFetch<{ models: ModelInfo[]; current: string }>("/system/models").then((r) => {
       setModels(r.models.filter((m) => m.multimodal));
       if (!modelId) setModelId(r.current);
     }).catch(() => {});
+    apiFetch<{ name: string; guidance_text: string }[]>("/styles/folders").then((folders) => {
+      setStyleLibraryFolders(folders);
+    }).catch(() => {});
   }, []);
+
+  // --- Helpers ---
 
   const currentImages = gallery[activeTab] || [];
   const currentIdx = imageIdx[activeTab] ?? 0;
   const currentSrc = currentImages[currentIdx] ?? null;
 
-  const setTabImage = useCallback((tab: string, src: string) => {
+  const isRefTab = activeTab.startsWith("ref");
+  const activeTabDef = tabs.find((t) => t.id === activeTab);
+
+  // History record key
+  const historyKey = `${activeTab}:${currentIdx}`;
+  const currentRecord = imageRecords[historyKey];
+  const currentHistory = currentRecord?.history ?? [];
+
+  const getSettingsSnapshot = useCallback((): HistorySettings => ({
+    description, age, race, gender, build, editPrompt,
+  }), [description, age, race, gender, build, editPrompt]);
+
+  const addHistoryEntry = useCallback((tab: string, idx: number, label: string, imageSrc: string) => {
+    if (tabs.find((t) => t.id === tab)?.group === "refs") return; // refs don't track history
+    const key = `${tab}:${idx}`;
+    setImageRecords((prev) => {
+      const existing = prev[key] ?? createImageRecord(tab, idx, imageSrc);
+      const entry = createHistoryEntry(label, imageSrc, getSettingsSnapshot());
+      return { ...prev, [key]: pushHistory(existing, entry) };
+    });
+  }, [tabs, getSettingsSnapshot]);
+
+  const setTabImage = useCallback((tab: string, src: string, label = "Generation") => {
     setGallery((prev) => ({ ...prev, [tab]: [src] }));
     setImageIdx((prev) => ({ ...prev, [tab]: 0 }));
-  }, []);
+    addHistoryEntry(tab, 0, label, src);
+  }, [addHistoryEntry]);
 
-  const appendToGallery = useCallback((tab: string, src: string) => {
-    setGallery((prev) => ({ ...prev, [tab]: [...(prev[tab] || []), src] }));
-    setImageIdx((prev) => ({ ...prev, [tab]: (gallery[tab] || []).length }));
-  }, [gallery]);
+  // Global Ctrl+V paste handler — uses Electron native clipboard for external images
+  useClipboardPaste(
+    useCallback((dataUrl: string) => setTabImage(activeTab, dataUrl, "Pasted image"), [activeTab, setTabImage]),
+  );
 
-  const getMainImageB64 = useCallback(() => {
-    const imgs = gallery["Main Stage (3/4)"] || [];
-    const src = imgs[imageIdx["Main Stage (3/4)"] ?? 0];
-    return src ? src.replace(/^data:image\/\w+;base64,/, "") : null;
-  }, [gallery, imageIdx]);
+  const appendToGallery = useCallback((tab: string, src: string, label = "Generation") => {
+    setGallery((prev) => {
+      const arr = [...(prev[tab] || []), src];
+      const newIdx = arr.length - 1;
+      setImageIdx((p) => ({ ...p, [tab]: newIdx }));
+      addHistoryEntry(tab, newIdx, label, src);
+      return { ...prev, [tab]: arr };
+    });
+  }, [addHistoryEntry]);
 
-  const getRefB64 = useCallback((tab: string) => {
+  const getImageB64 = useCallback((tab: string) => {
     const imgs = gallery[tab] || [];
     const src = imgs[imageIdx[tab] ?? 0];
     return src ? src.replace(/^data:image\/\w+;base64,/, "") : null;
   }, [gallery, imageIdx]);
 
-  // Apply bible/costume from an AI response
+  const getMainImageB64 = useCallback(() => getImageB64("main"), [getImageB64]);
+
+  // --- Tab management ---
+
+
+
+  const handleAddRef = useCallback(() => {
+    refCounter.current++;
+    const letter = String.fromCharCode(68 + refCounter.current - 1); // D, E, F...
+    const id = `ref${letter}`;
+    setTabs((prev) => [...prev, { id, label: `Ref ${letter}`, group: "refs" }]);
+    setActiveTab(id);
+  }, []);
+
+  const handleRemoveRef = useCallback((tabId: string) => {
+    setTabs((prev) => {
+      const filtered = prev.filter((t) => t.id !== tabId);
+      if (filtered.length === prev.length) return prev;
+      return filtered;
+    });
+    setActiveTab((prev) => prev === tabId ? "main" : prev);
+    setGallery((prev) => { const n = { ...prev }; delete n[tabId]; return n; });
+    setImageIdx((prev) => { const n = { ...prev }; delete n[tabId]; return n; });
+  }, []);
+
+  const handleEditTabPrompt = useCallback((tabId: string, newPrompt: string) => {
+    setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, prompt: newPrompt } : t));
+  }, []);
+
+  // --- Apply helpers (respect lock) ---
+
   const applyBibleFromResponse = useCallback((data: Record<string, unknown> | null | undefined) => {
-    if (!data) return;
+    if (!data || lockedSections.bible) return;
     setBible((prev) => ({
       ...prev,
       characterName: String(data.characterName ?? prev.characterName ?? ""),
@@ -266,33 +800,60 @@ export function CharacterPage() {
       backstory: String(data.backstory ?? prev.backstory ?? ""),
       worldContext: String(data.worldContext ?? prev.worldContext ?? ""),
       designIntent: String(data.designIntent ?? prev.designIntent ?? ""),
-      productionStyle: Array.isArray(data.productionStyle) ? data.productionStyle as string[] : prev.productionStyle,
+      productionStyle: Array.isArray(data.productionStyle) ? stringsToTags(data.productionStyle as string[], prodStylePresets) : prev.productionStyle,
       customDirector: String(data.customDirector ?? prev.customDirector ?? ""),
-      toneTags: Array.isArray(data.toneTags) ? data.toneTags as string[] : prev.toneTags,
+      toneTags: Array.isArray(data.toneTags) ? stringsToTags(data.toneTags as string[], tonePresets) : prev.toneTags,
     }));
     setSectionsOpen((prev) => ({ ...prev, bible: true }));
-  }, []);
+  }, [lockedSections.bible, prodStylePresets, tonePresets]);
 
   const applyCostumeFromResponse = useCallback((data: Record<string, unknown> | null | undefined) => {
-    if (!data) return;
+    if (!data || lockedSections.costume) return;
     setCostume((prev) => ({
       ...prev,
-      costumeStyles: Array.isArray(data.costumeStyles) ? data.costumeStyles as string[] : prev.costumeStyles,
-      costumeCustomStyles: String(data.costumeCustomStyles ?? prev.costumeCustomStyles ?? ""),
-      costumeMaterials: Array.isArray(data.costumeMaterials) ? data.costumeMaterials as string[] : prev.costumeMaterials,
+      costumeStyles: Array.isArray(data.costumeStyles) ? stringsToTags(data.costumeStyles as string[], costumeStylePresets) : prev.costumeStyles,
+      costumeMaterials: Array.isArray(data.costumeMaterials) ? stringsToTags(data.costumeMaterials as string[], materialPresets) : prev.costumeMaterials,
       primaryColor: String(data.primaryColor ?? prev.primaryColor ?? ""),
       secondaryColor: String(data.secondaryColor ?? prev.secondaryColor ?? ""),
       accentColor: String(data.accentColor ?? prev.accentColor ?? ""),
       hardwareColor: String(data.hardwareColor ?? prev.hardwareColor ?? ""),
-      hwDetails: Array.isArray(data.hwDetails) ? data.hwDetails as string[] : prev.hwDetails,
-      origin: Array.isArray(data.origin) ? data.origin as string[] : prev.origin,
+      hwDetails: Array.isArray(data.hwDetails) ? stringsToTags(data.hwDetails as string[], hwDetailPresets) : prev.hwDetails,
+      origin: Array.isArray(data.origin) ? stringsToTags(data.origin as string[], originPresets) : prev.origin,
       costumeNotes: String(data.costumeNotes ?? prev.costumeNotes ?? ""),
     }));
     setSectionsOpen((prev) => ({ ...prev, costume: true }));
+  }, [lockedSections.costume, costumeStylePresets, materialPresets, hwDetailPresets, originPresets]);
+
+  const applyEnvFromResponse = useCallback((data: Record<string, unknown> | null | undefined) => {
+    if (!data) return;
+    setEnvPlacement((prev) => {
+      const loc = String(data.location ?? "");
+      const isPresetLoc = ENV_LOCATION_PRESETS.includes(loc);
+      const timeOfDay = String(data.timeOfDay ?? "");
+      const lighting = String(data.lighting ?? "");
+      const pose = String(data.pose ?? "");
+      const isPresetPose = ENV_POSE_PRESETS.includes(pose);
+      const camera = String(data.camera ?? "");
+      const outputFormat = String(data.outputFormat ?? prev.outputFormat);
+      return {
+        ...prev,
+        location: isPresetLoc ? loc : (loc ? "__custom" : prev.location),
+        customLocation: isPresetLoc ? prev.customLocation : loc,
+        timeOfDay: ENV_TIME_OPTIONS.includes(timeOfDay) ? timeOfDay : (timeOfDay || prev.timeOfDay),
+        lighting: ENV_LIGHTING_OPTIONS.includes(lighting) ? lighting : (lighting || prev.lighting),
+        pose: isPresetPose ? pose : (pose ? "" : prev.pose),
+        customPose: isPresetPose ? prev.customPose : pose,
+        props: String(data.props ?? prev.props),
+        camera: ENV_CAMERA_OPTIONS.includes(camera) ? camera : (camera || prev.camera),
+        outputFormat: ENV_FORMAT_OPTIONS.some((f) => f === outputFormat) ? outputFormat : prev.outputFormat,
+      };
+    });
+    setSectionEnabled((prev) => ({ ...prev, envPlacement: true }));
+    setLayout((prev) => ({ ...prev, collapsed: { ...prev.collapsed, envPlacement: false } }));
   }, []);
 
   const applyAttributesFromResponse = useCallback((attrs: Record<string, string> | null | undefined) => {
-    if (!attrs) return;
+    if (!attrs || lockedSections.attributes) return;
     setAttributes((prev) => {
       const next = { ...prev };
       for (const [key, val] of Object.entries(attrs)) {
@@ -301,51 +862,158 @@ export function CharacterPage() {
       return next;
     });
     setSectionsOpen((prev) => ({ ...prev, attributes: true }));
-  }, []);
+  }, [lockedSections.attributes]);
 
   const applyFullResponse = useCallback((resp: FullResponse, setDesc = false) => {
-    if (setDesc && resp.description) setDescription(resp.description);
-    if (resp.age) setAge(matchOption(AGE_OPTIONS, resp.age));
-    if (resp.race) setRace(matchOption(RACE_OPTIONS, resp.race));
-    if (resp.gender) setGender(matchOption(GENDER_OPTIONS, resp.gender));
-    if (resp.build) setBuild(matchOption(BUILD_OPTIONS, resp.build));
-    applyAttributesFromResponse(resp.attributes);
-    applyBibleFromResponse(resp.bible as Record<string, unknown> | null);
-    applyCostumeFromResponse(resp.costume as Record<string, unknown> | null);
-  }, [applyAttributesFromResponse, applyBibleFromResponse, applyCostumeFromResponse]);
+    if (extractTargets.identity && !lockedSections.identity) {
+      if (setDesc && resp.description) setDescription(resp.description);
+      if (resp.age) setAge(matchOption(AGE_OPTIONS, resp.age));
+      if (resp.race) setRace(matchOption(RACE_OPTIONS, resp.race));
+      if (resp.gender) setGender(matchOption(GENDER_OPTIONS, resp.gender));
+      if (resp.build) setBuild(matchOption(BUILD_OPTIONS, resp.build));
+    }
+    if (extractTargets.attributes) applyAttributesFromResponse(resp.attributes);
+    if (extractTargets.bible) applyBibleFromResponse(resp.bible as Record<string, unknown> | null);
+    if (extractTargets.costume) applyCostumeFromResponse(resp.costume as Record<string, unknown> | null);
+    if (extractTargets.environment) applyEnvFromResponse(resp.environment as Record<string, unknown> | null);
+  }, [extractTargets, lockedSections.identity, applyAttributesFromResponse, applyBibleFromResponse, applyCostumeFromResponse, applyEnvFromResponse]);
+
+  // --- Generation helpers ---
+
+  const getExtraContext = useCallback(() => {
+    const fusionCtx = isSectionEnabled("styleFusion") ? buildFusionBrief(styleFusion) : "";
+    const folder = styleLibraryFolders.find((f) => f.name === styleLibraryFolder);
+    const styleGuide = folder?.guidance_text || "";
+    const envCtx = isSectionEnabled("envPlacement") ? buildEnvBrief(envPlacement) : "";
+    return { fusionCtx, styleGuide, envCtx };
+  }, [isSectionEnabled, styleFusion, envPlacement, styleLibraryFolder, styleLibraryFolders]);
+
+  // --- Build attribute brief for generation prompt ---
+
+  const buildAttrBrief = useCallback((): string => {
+    if (!isSectionEnabled("attributes")) return "";
+    const lines: string[] = [];
+    for (const [k, v] of Object.entries(attributes)) {
+      const val = v.custom || v.dropdown;
+      if (val) lines.push(`${k}: ${val}`);
+    }
+    return lines.length ? `\n\n--- Character Attributes ---\n${lines.join("\n")}` : "";
+  }, [attributes, isSectionEnabled]);
+
+  // --- Prompt preview builder (mirrors backend _build_character_prompt + style_rules) ---
+
+  const buildPromptPreview = useCallback((): string => {
+    const identityOn = isSectionEnabled("identity");
+    const baseDesc = identityOn ? description : "";
+    const attrBrief = buildAttrBrief();
+    const desc = (baseDesc + attrBrief).trim();
+    if (!desc) return "(No description — enter a character description first)";
+
+    const parts: string[] = [];
+    const idParts: string[] = [];
+    if (identityOn && age) idParts.push(`Age: ${age}`);
+    if (identityOn && race) idParts.push(`Race: ${race}`);
+    if (identityOn && gender) idParts.push(`Gender: ${gender}`);
+    if (identityOn && build) idParts.push(`Build: ${build}`);
+    let charPrompt = idParts.length ? `${idParts.join(", ")}\n\n${desc}` : desc;
+
+    const bibleCtx = isSectionEnabled("bible") ? bibleToCostumeContext(bible) : "";
+    const costumeCtx = isSectionEnabled("costume") ? costumeToContext(costume) : "";
+    const extra = getExtraContext();
+    const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
+
+    if (bibleCtx) charPrompt += `\n\n--- Character Bible ---\n${bibleCtx}`;
+
+    const hasCostume = !!costumeCtx;
+    const hasFusion = !!extra.fusionCtx;
+    if (hasCostume && hasFusion) {
+      charPrompt += `\n\n--- Costume Direction + Style Fusion (MERGED) ---\nCostume Director:\n${costumeCtx}\n\nStyle Fusion:\n${extra.fusionCtx}\n\n(Blended: Costume details as foundation, Style Fusion mood on top)`;
+    } else {
+      if (hasCostume) charPrompt += `\n\n--- Costume Direction ---\n${costumeCtx}`;
+      if (hasFusion) charPrompt += `\n\n--- Style Fusion ---\n${extra.fusionCtx}`;
+    }
+    if (extra.styleGuide) charPrompt += `\n\n--- Style Library Guidance ---\n${extra.styleGuide}`;
+    if (extra.envCtx) charPrompt += `\n\n--- Environment & Placement ---\n${extra.envCtx}`;
+    if (lockCtx) charPrompt += `\n\n--- PRESERVATION CONSTRAINTS (HIGHEST PRIORITY) ---\n${lockCtx}`;
+
+    // Style rules
+    if (extra.envCtx) {
+      parts.push("[STYLE RULES] Realistic 3D-rendered. Place in described environment. Full body head to toe.");
+    } else {
+      parts.push("[STYLE RULES] Realistic 3D-rendered. Solid flat single-color studio backdrop. NO environmental elements. Full body head to toe.");
+      parts.push("\n[POSE RULE] Neutral A-pose unless prompt specifies otherwise.");
+    }
+
+    if (extractMode === "recreate" && getImageB64("main")) {
+      parts.push(`\n[RECREATE MODE] Main Stage image will be sent as a visual reference. The AI will try to match the character exactly.`);
+      parts.push(`\nRecreate this character as accurately as possible — matching face, body, hairstyle, clothing, accessories, colors, and every visual detail.\n\n${charPrompt}`);
+    } else {
+      parts.push(`\nGenerate a full-body character.\n\n${charPrompt}`);
+    }
+
+    // Reference images summary
+    const refImgs: string[] = [];
+    if (extractMode === "recreate" && getImageB64("main")) refImgs.push("Main Stage image (RECREATE reference)");
+    else if (getImageB64("main")) refImgs.push("Main Stage image (reference)");
+    if (getImageB64("refA")) refImgs.push("Ref A image");
+    if (getImageB64("refB")) refImgs.push("Ref B image");
+    if (getImageB64("refC")) refImgs.push("Ref C image");
+    if (refImgs.length) parts.push(`\n--- Attached Images ---\n${refImgs.join("\n")}`);
+
+    parts.push(`\n--- Delivery ---\nSent as: ONE single text prompt${refImgs.length ? ` + ${refImgs.length} image(s) attached` : ""}`);
+
+    return parts.join("\n");
+  }, [description, age, race, gender, build, attributes, bible, costume, preservation, styleFusion, envPlacement, styleLibraryFolder, styleLibraryFolders, extractMode, isSectionEnabled, buildAttrBrief, getExtraContext, getImageB64]);
+
+  const [promptPreview, setPromptPreview] = useState("");
+  const [promptPreviewOpen, setPromptPreviewOpen] = useState(false);
+  const [lastSentPrompt, setLastSentPrompt] = useState("");
 
   // --- Generation handlers ---
 
   const handleGenerate = useCallback(async () => {
-    if (!description.trim()) return;
+    const identityOn = isSectionEnabled("identity");
+    const baseDesc = identityOn ? description : "";
+    const attrBrief = buildAttrBrief();
+    const desc = (baseDesc + attrBrief).trim();
+    const extra = getExtraContext();
+    if (!desc) return;
+    setLastSentPrompt(buildPromptPreview());
     busy.start("generate");
     const total = genCount;
-    const bibleCtx = bibleToCostumeContext(bible);
-    const costumeCtx = costumeToContext(costume);
+    const bibleCtx = isSectionEnabled("bible") ? bibleToCostumeContext(bible) : "";
+    const costumeCtx = isSectionEnabled("costume") ? costumeToContext(costume) : "";
+    const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
     for (let i = 0; i < total; i++) {
       setGenText((p) => ({ ...p, generate: total > 1 ? `Generating ${i + 1} of ${total}...` : "Generating character..." }));
       try {
+        const mainRef = extractMode === "recreate" ? getMainImageB64() : null;
         const resp = await apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
           "/character/generate", {
             method: "POST",
             body: JSON.stringify({
-              description, age, race, gender, build, view_type: "main", mode: "quality",
+              description: desc,
+              age: identityOn ? age : "", race: identityOn ? race : "",
+              gender: identityOn ? gender : "", build: identityOn ? build : "",
+              view_type: "main", mode: "quality",
               model_id: modelId || undefined,
-              bible_context: bibleCtx || undefined,
-              costume_context: costumeCtx || undefined,
+              bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+              fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+              lock_constraints: lockCtx || undefined,
+              reference_image_b64: mainRef || undefined,
+              recreate_mode: extractMode === "recreate",
             }),
           },
         );
         if (resp.image_b64) {
           const src = `data:image/png;base64,${resp.image_b64}`;
-          if (i === 0) { setTabImage("Main Stage (3/4)", src); } else { appendToGallery("Main Stage (3/4)", src); }
-          if (i === 0) setEditHistory((prev) => [{ timestamp: new Date().toLocaleTimeString(), prompt: "Initial generation", isOriginal: prev.length === 0 }, ...prev]);
+          if (i === 0) { setTabImage("main", src, "Initial generation"); } else { appendToGallery("main", src, `Generation ${i + 1}`); }
         } else if (resp.error) { addToast(resp.error, "error"); break; }
       } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); break; }
     }
     addToast(total > 1 ? `Generated ${total} images` : "Character generated", "success");
     busy.end("generate");
-  }, [description, age, race, gender, build, genCount, modelId, bible, costume, setTabImage, appendToGallery, addToast, busy]);
+  }, [description, age, race, gender, build, genCount, modelId, bible, costume, preservation, attributes, extractMode, isSectionEnabled, getExtraContext, buildAttrBrief, buildPromptPreview, getMainImageB64, setTabImage, appendToGallery, addToast, busy]);
 
   const handleApplyEdit = useCallback(async () => {
     if (!editPrompt.trim()) return;
@@ -353,121 +1021,265 @@ export function CharacterPage() {
     if (!mainB64) return;
     busy.start("apply");
     setGenText((p) => ({ ...p, apply: "Applying edits..." }));
-    const bibleCtx = bibleToCostumeContext(bible);
-    const costumeCtx = costumeToContext(costume);
+    const identityOn = isSectionEnabled("identity");
+    const attrBrief = buildAttrBrief();
+    const bibleCtx = isSectionEnabled("bible") ? bibleToCostumeContext(bible) : "";
+    const costumeCtx = isSectionEnabled("costume") ? costumeToContext(costume) : "";
+    const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
+    const extra = getExtraContext();
     try {
       const resp = await apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
         "/character/edit", {
           method: "POST",
           body: JSON.stringify({
-            description, age, race, gender, build, edit_prompt: editPrompt, reference_image_b64: mainB64,
-            ref_a_b64: getRefB64("Ref A"), ref_b_b64: getRefB64("Ref B"), ref_c_b64: getRefB64("Ref C"),
+            description: ((identityOn ? description : "") + attrBrief).trim(),
+            age: identityOn ? age : "", race: identityOn ? race : "",
+            gender: identityOn ? gender : "", build: identityOn ? build : "",
+            edit_prompt: editPrompt, reference_image_b64: mainB64,
+            ref_a_b64: getImageB64("refA"), ref_b_b64: getImageB64("refB"), ref_c_b64: getImageB64("refC"),
             mode: "quality", model_id: modelId || undefined,
-            bible_context: bibleCtx || undefined,
-            costume_context: costumeCtx || undefined,
+            bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+            fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+            lock_constraints: lockCtx || undefined,
           }),
         },
       );
       if (resp.image_b64) {
-        setTabImage("Main Stage (3/4)", `data:image/png;base64,${resp.image_b64}`);
-        setEditHistory((prev) => [{ timestamp: new Date().toLocaleTimeString(), prompt: editPrompt.slice(0, 60) }, ...prev]);
+        setTabImage("main", `data:image/png;base64,${resp.image_b64}`, `Edit: ${editPrompt.slice(0, 40)}`);
       } else if (resp.error) addToast(resp.error, "error");
     } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
     busy.end("apply");
-  }, [editPrompt, description, age, race, gender, build, bible, costume, getMainImageB64, getRefB64, modelId, setTabImage, addToast, busy]);
+  }, [editPrompt, description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, getImageB64, modelId, setTabImage, addToast, busy]);
 
   const handleExtractAttributes = useCallback(async () => {
-    if (!description.trim()) return;
+    const imgB64 = getMainImageB64();
+    if (!description.trim() && !imgB64) {
+      addToast("Provide a description or paste an image first", "error");
+      return;
+    }
     busy.start("extract");
     try {
+      const payload: Record<string, string> = { description: description.trim() };
+      if (imgB64) payload.image_b64 = imgB64;
       const resp = await apiFetch<FullResponse>(
-        "/character/extract-attributes", { method: "POST", body: JSON.stringify({ description }) },
+        "/character/extract-attributes", { method: "POST", body: JSON.stringify(payload) },
       );
       if (resp.error) { addToast(resp.error, "error"); busy.end("extract"); return; }
-      applyFullResponse(resp);
+      applyFullResponse(resp, !description.trim());
       addToast("Attributes extracted", "success");
     } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
     busy.end("extract");
-  }, [description, addToast, busy, applyFullResponse]);
+  }, [description, getMainImageB64, addToast, busy, applyFullResponse]);
+
+  const buildContextBody = useCallback(() => {
+    const identityOn = isSectionEnabled("identity");
+    const attrOn = isSectionEnabled("attributes");
+    const bibleOn = isSectionEnabled("bible");
+    const costumeOn = isSectionEnabled("costume");
+
+    const attrFlat: Record<string, string> = {};
+    if (attrOn) {
+      for (const [k, v] of Object.entries(attributes)) {
+        attrFlat[k] = v.custom || v.dropdown;
+      }
+    }
+    return {
+      description: identityOn ? description : "",
+      age: identityOn ? age : "", race: identityOn ? race : "",
+      gender: identityOn ? gender : "", build: identityOn ? build : "",
+      attributes: attrFlat,
+      bible: bibleOn ? {
+        characterName: bible.characterName,
+        roleArchetype: bible.roleArchetype,
+        backstory: bible.backstory,
+        worldContext: bible.worldContext,
+        designIntent: bible.designIntent,
+        productionStyle: bible.productionStyle.map((t) => t.prompt || t.label),
+        customDirector: bible.customDirector,
+        toneTags: bible.toneTags.map((t) => t.prompt || t.label),
+      } : { characterName: "", roleArchetype: "", backstory: "", worldContext: "", designIntent: "", productionStyle: [] as string[], customDirector: "", toneTags: [] as string[] },
+      costume: costumeOn ? {
+        costumeStyles: costume.costumeStyles.map((t) => t.prompt || t.label),
+        costumeMaterials: costume.costumeMaterials.map((t) => t.prompt || t.label),
+        primaryColor: costume.primaryColor,
+        secondaryColor: costume.secondaryColor,
+        accentColor: costume.accentColor,
+        hardwareColor: costume.hardwareColor,
+        hwDetails: costume.hwDetails.map((t) => t.prompt || t.label),
+        origin: costume.origin.map((t) => t.prompt || t.label),
+        costumeNotes: costume.costumeNotes,
+      } : { costumeStyles: [] as string[], costumeMaterials: [] as string[], primaryColor: "", secondaryColor: "", accentColor: "", hardwareColor: "", hwDetails: [] as string[], origin: [] as string[], costumeNotes: "" },
+    };
+  }, [description, age, race, gender, build, attributes, bible, costume, isSectionEnabled]);
 
   const handleEnhance = useCallback(async () => {
-    if (!description.trim()) return;
+    const ctx = buildContextBody();
+    const hasAnything = ctx.description.trim() || ctx.age || ctx.race || ctx.gender || ctx.build
+      || Object.values(ctx.attributes).some((v) => v)
+      || Object.values(ctx.bible).some((v) => (Array.isArray(v) ? v.length > 0 : !!v))
+      || Object.values(ctx.costume).some((v) => (Array.isArray(v) ? v.length > 0 : !!v));
+    if (!hasAnything) { addToast("Enter something to enhance first", "info"); return; }
     busy.start("enhance");
     try {
       const resp = await apiFetch<FullResponse>(
-        "/character/enhance", { method: "POST", body: JSON.stringify({ text: description, operation: "enhance" }) },
+        "/character/enhance", { method: "POST", body: JSON.stringify(ctx) },
       );
       if (resp.description) {
         applyFullResponse(resp, true);
-        addToast("Description enhanced", "success");
+        addToast("Character enhanced", "success");
       } else if (resp.error) addToast(resp.error, "error");
     } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
     busy.end("enhance");
-  }, [description, addToast, busy, applyFullResponse]);
+  }, [buildContextBody, addToast, busy, applyFullResponse]);
 
   const handleRandomize = useCallback(async () => {
     busy.start("randomize");
     try {
-      const resp = await apiFetch<FullResponse>("/character/randomize-full", { method: "POST" });
+      const ctx = buildContextBody();
+      const resp = await apiFetch<FullResponse>("/character/randomize-full", { method: "POST", body: JSON.stringify(ctx) });
       if (resp.description) {
         applyFullResponse(resp, true);
         addToast("Random character generated", "success");
       } else if (resp.error) addToast(resp.error, "error");
     } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
     busy.end("randomize");
-  }, [addToast, busy, applyFullResponse]);
+  }, [buildContextBody, addToast, busy, applyFullResponse]);
 
   const handleQuickGenerate = useCallback(async () => {
     busy.start("quickgen");
+    const extra = getExtraContext();
     setGenText((p) => ({ ...p, quickgen: "Randomizing character..." }));
     try {
-      const randResp = await apiFetch<FullResponse>("/character/randomize-full", { method: "POST" });
+      const randResp = await apiFetch<FullResponse>("/character/randomize-full", { method: "POST", body: JSON.stringify(buildContextBody()) });
       if (randResp.description) {
         applyFullResponse(randResp, true);
         setGenText((p) => ({ ...p, quickgen: "Generating image..." }));
-        const bibleCtx = randResp.bible ? bibleToCostumeContext(randResp.bible as unknown as BibleState) : undefined;
-        const costumeCtx = randResp.costume ? costumeToContext(randResp.costume as unknown as CostumeState) : undefined;
+        const bibleCtx = isSectionEnabled("bible") && randResp.bible ? bibleToCostumeContext(randResp.bible as unknown as BibleState) : undefined;
+        const costumeCtx = isSectionEnabled("costume") && randResp.costume ? costumeToContext(randResp.costume as unknown as CostumeState) : undefined;
+        const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
+        const randAttrLines: string[] = [];
+        if (randResp.attributes) {
+          for (const [k, v] of Object.entries(randResp.attributes)) {
+            if (v) randAttrLines.push(`${k}: ${v}`);
+          }
+        }
+        const randAttrBrief = randAttrLines.length ? `\n\n--- Character Attributes ---\n${randAttrLines.join("\n")}` : "";
         const genResp = await apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
           "/character/generate", {
             method: "POST",
             body: JSON.stringify({
-              description: randResp.description, age: randResp.age, race: randResp.race,
+              description: (randResp.description + randAttrBrief).trim(), age: randResp.age, race: randResp.race,
               gender: randResp.gender, build: randResp.build, mode: "quality",
               model_id: modelId || undefined,
               bible_context: bibleCtx, costume_context: costumeCtx,
+              fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+              lock_constraints: lockCtx || undefined,
             }),
           },
         );
-        if (genResp.image_b64) { setTabImage("Main Stage (3/4)", `data:image/png;base64,${genResp.image_b64}`); addToast("Quick generate complete", "success"); }
+        if (genResp.image_b64) { setTabImage("main", `data:image/png;base64,${genResp.image_b64}`, "Quick generate"); addToast("Quick generate complete", "success"); }
         else if (genResp.error) addToast(genResp.error, "error");
       } else if (randResp.error) addToast(randResp.error, "error");
     } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
     busy.end("quickgen");
-  }, [addToast, modelId, setTabImage, busy, applyFullResponse]);
+  }, [buildContextBody, addToast, modelId, preservation, isSectionEnabled, getExtraContext, setTabImage, busy, applyFullResponse]);
 
   const handleGenerateAllViews = useCallback(async () => {
     const mainB64 = getMainImageB64();
-    if (!mainB64 || !description.trim()) return;
+    const identityOn = isSectionEnabled("identity");
+    const baseDesc = identityOn ? description : "";
+    const attrBrief = buildAttrBrief();
+    const desc = (baseDesc + attrBrief).trim();
+    if (!mainB64 || !desc) return;
     busy.start("allviews");
-    const bibleCtx = bibleToCostumeContext(bible);
-    const costumeCtx = costumeToContext(costume);
+    const bibleCtx = isSectionEnabled("bible") ? bibleToCostumeContext(bible) : "";
+    const costumeCtx = isSectionEnabled("costume") ? costumeToContext(costume) : "";
+    const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
+    const extra = getExtraContext();
     for (const view of ["front", "back", "side"]) {
-      const tabName = Object.entries(VIEW_TYPE_MAP).find(([, v]) => v === view)?.[0] || view;
-      setGenText((p) => ({ ...p, allviews: `Generating ${tabName}...` }));
+      setGenText((p) => ({ ...p, allviews: `Generating ${view}...` }));
       try {
         const resp = await apiFetch<{ image_b64: string | null; width: number; height: number }>("/character/generate", {
           method: "POST",
           body: JSON.stringify({
-            description, age, race, gender, build, view_type: view, reference_image_b64: mainB64,
+            description: desc, age: identityOn ? age : "", race: identityOn ? race : "",
+            gender: identityOn ? gender : "", build: identityOn ? build : "",
+            view_type: view, reference_image_b64: mainB64,
             mode: "quality", model_id: modelId || undefined,
             bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+            fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+            lock_constraints: lockCtx || undefined,
           }),
         });
-        if (resp.image_b64) setTabImage(tabName, `data:image/png;base64,${resp.image_b64}`);
+        if (resp.image_b64) setTabImage(view, `data:image/png;base64,${resp.image_b64}`, `${view} view`);
       } catch { break; }
     }
     busy.end("allviews");
-  }, [description, age, race, gender, build, bible, costume, getMainImageB64, modelId, setTabImage, busy]);
+  }, [description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, modelId, setTabImage, busy]);
+
+  const handleGenerateSelectedView = useCallback(async () => {
+    const mainB64 = getMainImageB64();
+    const identityOn = isSectionEnabled("identity");
+    const baseDesc = identityOn ? description : "";
+    const attrBrief = buildAttrBrief();
+    const desc = (baseDesc + attrBrief).trim();
+    if (!mainB64 || !desc || !activeTabDef) return;
+    const viewType = VIEW_TYPE_MAP[activeTab] || activeTab;
+    busy.start("selview");
+    const bibleCtx = isSectionEnabled("bible") ? bibleToCostumeContext(bible) : "";
+    const costumeCtx = isSectionEnabled("costume") ? costumeToContext(costume) : "";
+    const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
+    const extra = getExtraContext();
+    const total = viewGenCount;
+    for (let i = 0; i < total; i++) {
+      setGenText((p) => ({ ...p, selview: total > 1 ? `Generating ${activeTabDef.label} (${i + 1}/${total})...` : `Generating ${activeTabDef.label}...` }));
+      try {
+        const promptOverride = activeTabDef.prompt ? ` Specifically: ${activeTabDef.prompt}` : "";
+        const resp = await apiFetch<{ image_b64: string | null; width: number; height: number }>("/character/generate", {
+          method: "POST",
+          body: JSON.stringify({
+            description: desc + promptOverride,
+            age: identityOn ? age : "", race: identityOn ? race : "",
+            gender: identityOn ? gender : "", build: identityOn ? build : "",
+            view_type: viewType, reference_image_b64: mainB64,
+            mode: "quality", model_id: modelId || undefined,
+            bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+            fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+            lock_constraints: lockCtx || undefined,
+          }),
+        });
+        if (resp.image_b64) {
+          const src = `data:image/png;base64,${resp.image_b64}`;
+          if (i === 0) setTabImage(activeTab, src, `${activeTabDef.label} view`);
+          else appendToGallery(activeTab, src, `${activeTabDef.label} #${i + 1}`);
+        }
+      } catch { break; }
+    }
+    busy.end("selview");
+  }, [description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, modelId, activeTab, activeTabDef, viewGenCount, setTabImage, appendToGallery, busy]);
+
+  // --- Editor context for inpainting tools (ref images + style) ---
+
+  const editorRefImages = useMemo(() => {
+    const refs: string[] = [];
+    for (const tab of ["refA", "refB", "refC"]) {
+      const b64 = getImageB64(tab);
+      if (b64) refs.push(b64);
+    }
+    return refs;
+  }, [getImageB64]);
+
+  const editorStyleContext = useMemo(() => {
+    const parts: string[] = [];
+    const costumeCtx = isSectionEnabled("costume") ? costumeToContext(costume) : "";
+    const extra = getExtraContext();
+    if (costumeCtx) parts.push(`Costume: ${costumeCtx}`);
+    if (extra.fusionCtx) parts.push(`Style Fusion: ${extra.fusionCtx}`);
+    if (extra.styleGuide) parts.push(`Style Library: ${extra.styleGuide}`);
+    const bibleCtx = isSectionEnabled("bible") ? bibleToCostumeContext(bible) : "";
+    if (bibleCtx) parts.push(`Character Bible: ${bibleCtx}`);
+    return parts.join("\n\n");
+  }, [costume, bible, isSectionEnabled, getExtraContext]);
 
   const handleCancel = useCallback(async () => {
     try { await apiFetch("/system/cancel", { method: "POST" }); } catch { /* */ }
@@ -476,14 +1288,14 @@ export function CharacterPage() {
   const handleOpenImage = useCallback(() => fileInputRef.current?.click(), []);
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
-    const reader = new FileReader(); reader.onload = () => setTabImage(activeTab, reader.result as string);
+    const reader = new FileReader(); reader.onload = () => setTabImage(activeTab, reader.result as string, "Opened image");
     reader.readAsDataURL(file); e.target.value = "";
   }, [activeTab, setTabImage]);
 
   const handleSaveImage = useCallback(() => {
     if (!currentSrc) return;
     const a = document.createElement("a"); a.href = currentSrc;
-    a.download = `character_${activeTab.replace(/[\s()\/]+/g, "_").toLowerCase()}_${Date.now()}.png`; a.click();
+    a.download = `character_${activeTab}_${Date.now()}.png`; a.click();
   }, [currentSrc, activeTab]);
 
   const handleCopyImage = useCallback(async () => {
@@ -492,202 +1304,989 @@ export function CharacterPage() {
     catch { addToast("Failed to copy", "error"); }
   }, [currentSrc, addToast]);
 
-  const handlePasteImage = useCallback(async () => {
-    try { const items = await navigator.clipboard.read(); for (const item of items) { for (const type of item.types) { if (type.startsWith("image/")) { const blob = await item.getType(type); const reader = new FileReader(); reader.onload = () => setTabImage(activeTab, reader.result as string); reader.readAsDataURL(blob); return; } } } } catch { /* */ }
-  }, [activeTab, setTabImage]);
+  const handleSendToPS = useCallback(async () => {
+    if (!currentSrc) { addToast("No image to send", "error"); return; }
+    try {
+      const resp = await apiFetch<{ ok: boolean; results: { label: string; message: string }[] }>(
+        "/system/send-to-ps", { method: "POST", body: JSON.stringify({ images: [{ label: activeTab, image_b64: currentSrc }] }) },
+      );
+      if (resp.ok) addToast(resp.results[0]?.message || "Sent to Photoshop", "success");
+      else addToast(resp.results[0]?.message || "Failed to send", "error");
+    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
+  }, [currentSrc, activeTab, addToast]);
 
-  const handleClearRef = useCallback(() => {
-    if (activeTab.startsWith("Ref")) { setGallery((prev) => ({ ...prev, [activeTab]: [] })); setImageIdx((prev) => ({ ...prev, [activeTab]: 0 })); }
+  const handleSendAllToPS = useCallback(async () => {
+    const viewTabs = ["main", "front", "back", "side"];
+    const images: { label: string; image_b64: string }[] = [];
+    for (const tab of viewTabs) {
+      const b64 = getImageB64(tab);
+      if (b64) images.push({ label: tab, image_b64: `data:image/png;base64,${b64}` });
+    }
+    if (images.length === 0) { addToast("No Main/Front/Back/Side images to send", "error"); return; }
+    try {
+      const resp = await apiFetch<{ ok: boolean; results: { label: string; message: string }[] }>(
+        "/system/send-to-ps", { method: "POST", body: JSON.stringify({ images }) },
+      );
+      const sent = resp.results.filter((r) => (r as unknown as { ok?: boolean }).ok).length;
+      addToast(`Sent ${sent} image${sent !== 1 ? "s" : ""} to Photoshop`, sent > 0 ? "success" : "error");
+    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
+  }, [getImageB64, addToast]);
+
+  const handlePasteImage = useCallback(async () => {
+    try {
+      const dataUrl = await readClipboardImage();
+      if (dataUrl) {
+        setTabImage(activeTab, dataUrl, "Pasted image");
+      } else {
+        addToast("No image found in clipboard", "error");
+      }
+    } catch (err) {
+      addToast(`Paste failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+    }
+  }, [activeTab, setTabImage, addToast]);
+
+  const handleClearImage = useCallback(() => {
+    setGallery((prev) => {
+      const imgs = prev[activeTab] || [];
+      if (imgs.length <= 1) return { ...prev, [activeTab]: [] };
+      const arr = [...imgs];
+      arr.splice(currentIdx, 1);
+      return { ...prev, [activeTab]: arr };
+    });
+    setImageIdx((prev) => {
+      const newIdx = Math.max(0, currentIdx - 1);
+      return { ...prev, [activeTab]: newIdx };
+    });
+  }, [activeTab, currentIdx]);
+
+  const handleClearAllImages = useCallback(() => {
+    setGallery((prev) => ({ ...prev, [activeTab]: [] }));
+    setImageIdx((prev) => ({ ...prev, [activeTab]: 0 }));
   }, [activeTab]);
 
+  const handleImageEdited = useCallback((newSrc: string, label: string) => {
+    const idx = currentIdx;
+    setGallery((prev) => {
+      const arr = [...(prev[activeTab] || [])];
+      arr[idx] = newSrc;
+      return { ...prev, [activeTab]: arr };
+    });
+    addHistoryEntry(activeTab, idx, label, newSrc);
+  }, [activeTab, currentIdx, addHistoryEntry]);
+
   const handleReset = useCallback(() => {
-    setGallery({}); setImageIdx({}); setEditHistory([]); setDescription(""); setEditPrompt("");
+    setGallery({}); setImageIdx({}); setImageRecords({}); setDescription(""); setEditPrompt("");
     setAttributes(Object.fromEntries(ATTRIBUTE_FIELDS.map((f) => [f, { dropdown: f === "Pose" ? "A pose" : "", custom: "" }])));
     setBible({ ...EMPTY_BIBLE }); setCostume({ ...EMPTY_COSTUME });
     setSectionsOpen({ attributes: false, bible: false, costume: false });
+    setTabs(BUILTIN_TABS);
   }, []);
 
-  const handlePrevImage = useCallback(() => { setImageIdx((prev) => ({ ...prev, [activeTab]: Math.max(0, (prev[activeTab] ?? 0) - 1) })); }, [activeTab]);
-  const handleNextImage = useCallback(() => { const max = (gallery[activeTab] || []).length - 1; setImageIdx((prev) => ({ ...prev, [activeTab]: Math.min(max, (prev[activeTab] ?? 0) + 1) })); }, [activeTab, gallery]);
+  const { clearAll: clearAllSession } = useSessionContext();
+  const handleClearCache = useCallback(() => {
+    clearAllSession();
+    apiFetch("/system/clear-cache", { method: "POST" }).catch(() => {});
+    addToast("All session cache cleared", "success");
+  }, [clearAllSession, addToast]);
 
-  const isRefTab = activeTab.startsWith("Ref");
+  const handlePrevImage = useCallback(() => { setImageIdx((prev) => ({ ...prev, [activeTab]: Math.max(0, (prev[activeTab] ?? 0) - 1) })); setActiveHistoryId(null); }, [activeTab]);
+  const handleNextImage = useCallback(() => { const max = (gallery[activeTab] || []).length - 1; setImageIdx((prev) => ({ ...prev, [activeTab]: Math.min(max, (prev[activeTab] ?? 0) + 1) })); setActiveHistoryId(null); }, [activeTab, gallery]);
+
+  const [showXml, setShowXml] = useState(false);
+  const buildCharacterXml = useCallback(() => {
+    const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const tag = (name: string, val: string, indent = "  ") => val ? `${indent}<${name}>${esc(val)}</${name}>` : "";
+    const tagList = (name: string, items: TagItem[], indent = "    ") =>
+      items.length ? items.map((t) => `${indent}<${name}>${esc(t.label)}</${name}>`).join("\n") : "";
+
+    const lines: string[] = ['<?xml version="1.0" encoding="UTF-8"?>', "<Character>"];
+
+    lines.push("  <Identity>");
+    lines.push(tag("Description", description, "    "));
+    lines.push(tag("Age", age, "    "));
+    lines.push(tag("Race", race, "    "));
+    lines.push(tag("Gender", gender, "    "));
+    lines.push(tag("Build", build, "    "));
+    lines.push("  </Identity>");
+
+    lines.push("  <Attributes>");
+    for (const [key, val] of Object.entries(attributes)) {
+      const text = val.custom || val.dropdown;
+      if (text) lines.push(`    <${key}>${esc(text)}</${key}>`);
+    }
+    lines.push("  </Attributes>");
+
+    lines.push("  <Bible>");
+    lines.push(tag("CharacterName", bible.characterName, "    "));
+    lines.push(tag("RoleArchetype", bible.roleArchetype, "    "));
+    lines.push(tag("Backstory", bible.backstory, "    "));
+    lines.push(tag("WorldContext", bible.worldContext, "    "));
+    lines.push(tag("DesignIntent", bible.designIntent, "    "));
+    if (bible.productionStyle.length) { lines.push("    <ProductionStyles>"); lines.push(tagList("Style", bible.productionStyle)); lines.push("    </ProductionStyles>"); }
+    lines.push(tag("CustomDirector", bible.customDirector, "    "));
+    if (bible.toneTags.length) { lines.push("    <ToneTags>"); lines.push(tagList("Tag", bible.toneTags)); lines.push("    </ToneTags>"); }
+    lines.push("  </Bible>");
+
+    lines.push("  <Costume>");
+    if (costume.costumeStyles.length) { lines.push("    <Styles>"); lines.push(tagList("Style", costume.costumeStyles)); lines.push("    </Styles>"); }
+    if (costume.costumeMaterials.length) { lines.push("    <Materials>"); lines.push(tagList("Material", costume.costumeMaterials)); lines.push("    </Materials>"); }
+    lines.push(tag("PrimaryColor", costume.primaryColor, "    "));
+    lines.push(tag("SecondaryColor", costume.secondaryColor, "    "));
+    lines.push(tag("AccentColor", costume.accentColor, "    "));
+    lines.push(tag("HardwareColor", costume.hardwareColor, "    "));
+    if (costume.hwDetails.length) { lines.push("    <HardwareDetails>"); lines.push(tagList("Detail", costume.hwDetails)); lines.push("    </HardwareDetails>"); }
+    if (costume.origin.length) { lines.push("    <Origin>"); lines.push(tagList("Item", costume.origin)); lines.push("    </Origin>"); }
+    lines.push(tag("CostumeNotes", costume.costumeNotes, "    "));
+    lines.push("  </Costume>");
+
+    lines.push("</Character>");
+    return lines.filter((l) => l).join("\n");
+  }, [description, age, race, gender, build, attributes, bible, costume]);
+
+  // History handlers
+  const handleHistoryRestore = useCallback((entryId: string) => {
+    const entry = currentHistory.find((h) => h.id === entryId);
+    if (!entry) return;
+    setActiveHistoryId(entryId);
+    // Restore image
+    setGallery((prev) => {
+      const arr = [...(prev[activeTab] || [])];
+      arr[currentIdx] = entry.image_b64;
+      return { ...prev, [activeTab]: arr };
+    });
+    // Restore settings
+    if (entry.settings) {
+      if (entry.settings.description) setDescription(entry.settings.description);
+      if (entry.settings.age) setAge(entry.settings.age);
+      if (entry.settings.race) setRace(entry.settings.race);
+      if (entry.settings.gender) setGender(entry.settings.gender);
+      if (entry.settings.build) setBuild(entry.settings.build);
+      if (entry.settings.editPrompt) setEditPrompt(entry.settings.editPrompt);
+    }
+  }, [activeTab, currentIdx, currentHistory]);
+
+  const handleRestoreCurrent = useCallback(() => {
+    setActiveHistoryId(null);
+    if (currentRecord?.currentImage) {
+      setGallery((prev) => {
+        const arr = [...(prev[activeTab] || [])];
+        arr[currentIdx] = currentRecord.currentImage;
+        return { ...prev, [activeTab]: arr };
+      });
+    }
+  }, [activeTab, currentIdx, currentRecord]);
+
+  const handleClearHistory = useCallback(() => {
+    setImageRecords((prev) => {
+      const key = historyKey;
+      if (!prev[key]) return prev;
+      return { ...prev, [key]: clearHist(prev[key]) };
+    });
+    setActiveHistoryId(null);
+  }, [historyKey]);
+
   const modelOptions = models.map((m) => ({ value: m.id, label: `${m.label} — ${m.resolution} (${m.time_estimate})` }));
 
+  // --- Session save/load ---
+  useSessionRegister(
+    "character",
+    () => ({
+      tabs, activeTab, gallery, imageIdx, description, editPrompt,
+      age, race, gender, build, attributes, bible, costume,
+      prodStylePresets, tonePresets, costumeStylePresets, materialPresets, hwDetailPresets, originPresets,
+      sectionsOpen, lockedSections, sectionEnabled, extractTargets, extractMode, styleFusion, envPlacement, styleLibraryFolder, genCount, viewGenCount, modelId,
+    }),
+    (s: unknown) => {
+      if (s === null) {
+        setGallery({}); setImageIdx({}); setImageRecords({}); setDescription(""); setEditPrompt("");
+        setAge(""); setRace(""); setGender(""); setBuild("");
+        setAttributes(Object.fromEntries(ATTRIBUTE_FIELDS.map((f) => [f, { dropdown: f === "Pose" ? "A pose" : "", custom: "" }])));
+        setBible({ ...EMPTY_BIBLE }); setCostume({ ...EMPTY_COSTUME });
+        setSectionsOpen({ attributes: true, bible: false, costume: false });
+        setLockedSections({ identity: false, attributes: false, bible: false, costume: false });
+        setSectionEnabled({ identity: true, attributes: true });
+        setExtractTargets({ identity: true, attributes: true, bible: false, costume: false, environment: false });
+        setExtractMode("inspiration");
+        setStyleFusion({ ...EMPTY_FUSION, slots: [{ ...EMPTY_FUSION.slots[0] }, { ...EMPTY_FUSION.slots[1] }] });
+        setEnvPlacement({ ...EMPTY_ENV });
+        setStyleLibraryFolder("");
+        setTabs(BUILTIN_TABS); setActiveTab("main");
+        setGenCount(1); setViewGenCount(1);
+        return;
+      }
+      const d = s as Record<string, unknown>;
+      if (d.tabs) setTabs(d.tabs as TabDef[]);
+      if (typeof d.activeTab === "string") setActiveTab(d.activeTab);
+      if (d.gallery) setGallery(d.gallery as Record<string, string[]>);
+      if (d.imageIdx) setImageIdx(d.imageIdx as Record<string, number>);
+      if (typeof d.description === "string") setDescription(d.description);
+      if (typeof d.editPrompt === "string") setEditPrompt(d.editPrompt);
+      if (typeof d.age === "string") setAge(d.age);
+      if (typeof d.race === "string") setRace(d.race);
+      if (typeof d.gender === "string") setGender(d.gender);
+      if (typeof d.build === "string") setBuild(d.build);
+      if (d.attributes) setAttributes(d.attributes as typeof attributes);
+      if (d.bible) setBible(d.bible as typeof bible);
+      if (d.costume) setCostume(d.costume as typeof costume);
+      if (d.prodStylePresets) setProdStylePresets(d.prodStylePresets as TagItem[]);
+      if (d.tonePresets) setTonePresets(d.tonePresets as TagItem[]);
+      if (d.costumeStylePresets) setCostumeStylePresets(d.costumeStylePresets as TagItem[]);
+      if (d.materialPresets) setMaterialPresets(d.materialPresets as TagItem[]);
+      if (d.hwDetailPresets) setHwDetailPresets(d.hwDetailPresets as TagItem[]);
+      if (d.originPresets) setOriginPresets(d.originPresets as TagItem[]);
+      if (d.sectionsOpen) setSectionsOpen(d.sectionsOpen as typeof sectionsOpen);
+      if (d.lockedSections) setLockedSections(d.lockedSections as typeof lockedSections);
+      if (d.sectionEnabled) setSectionEnabled(d.sectionEnabled as typeof sectionEnabled);
+      if (d.extractTargets) setExtractTargets(d.extractTargets as typeof extractTargets);
+      if (typeof d.extractMode === "string") setExtractMode(d.extractMode as "inspiration" | "recreate");
+      if (d.styleFusion) setStyleFusion(d.styleFusion as StyleFusionState);
+      if (d.envPlacement) setEnvPlacement(d.envPlacement as EnvironmentPlacementState);
+      if (typeof d.styleLibraryFolder === "string") setStyleLibraryFolder(d.styleLibraryFolder);
+      if (typeof d.genCount === "number") setGenCount(d.genCount);
+      if (typeof d.viewGenCount === "number") setViewGenCount(d.viewGenCount);
+      if (typeof d.modelId === "string") setModelId(d.modelId);
+    },
+  );
+
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex h-full min-h-0 overflow-hidden">
       <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileSelect} />
 
       {/* Left Column */}
-      <div className="w-[400px] shrink-0 flex flex-col gap-2 overflow-y-auto p-3" style={{ borderRight: "1px solid var(--color-border)" }}>
-        <Card>
-          <div className="px-3 py-2 space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Character Identity</p>
-            <div className="grid grid-cols-2 gap-2">
-              <Select label="Age" options={AGE_OPTIONS} value={age} onChange={(e) => setAge(e.target.value)} />
-              <Select label="Race" options={RACE_OPTIONS} value={race} onChange={(e) => setRace(e.target.value)} />
-              <Select label="Gender" options={GENDER_OPTIONS} value={gender} onChange={(e) => setGender(e.target.value)} />
-              <Select label="Build" options={BUILD_OPTIONS} value={build} onChange={(e) => setBuild(e.target.value)} />
-            </div>
-            <Textarea label="Character Description" value={description} onChange={(e) => setDescription(e.target.value)} rows={4} placeholder="Describe the character..." />
-            <Button className="w-full" generating={busy.is("extract")} generatingText="Extracting..." onClick={handleExtractAttributes}>Extract Attributes</Button>
-            <div className="grid grid-cols-2 gap-1.5">
-              <Button size="sm" className="w-full" generating={busy.is("enhance")} generatingText="Enhancing..." onClick={handleEnhance}>Enhance Description</Button>
-              <Button size="sm" className="w-full" generating={busy.is("randomize")} generatingText="Randomizing..." onClick={handleRandomize}>Randomize Full Character</Button>
-              <Button size="sm" className="w-full" onClick={handleOpenImage}>Open Image</Button>
-              <Button size="sm" className="w-full" onClick={handleReset}>Reset Character</Button>
-            </div>
-            <Button variant="primary" className="w-full" size="lg" generating={busy.is("generate")} generatingText={genText.generate || "Generating..."} onClick={handleGenerate}>
-              Generate Character Image
-            </Button>
-            <div className="flex items-center gap-3">
-              <NumberStepper value={genCount} onChange={setGenCount} min={1} max={10} label="Count:" />
-              {modelOptions.length > 0 && (
-                <select className="flex-1 px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} value={modelId} onChange={(e) => setModelId(e.target.value)}>
-                  {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
-              )}
-            </div>
-          </div>
-        </Card>
+      <div className="w-[400px] h-full shrink-0 overflow-y-auto p-3 space-y-2" style={{ borderRight: "1px solid var(--color-border)" }}>
+        {layout.order.map((sectionId) => {
+          const collapsed = isSectionCollapsed(sectionId);
+          const canCollapse = !NON_COLLAPSIBLE.has(sectionId);
+          const canToggle = TOGGLEABLE_SECTIONS.has(sectionId);
+          const enabled = isSectionEnabled(sectionId);
+          const label = SECTION_LABELS[sectionId];
 
-        {/* Collapsible: Character Attributes */}
-        <PanelSection title="Character Attributes" open={sectionsOpen.attributes} onToggle={(v) => toggleSection("attributes", v)}>
-          <div className="space-y-1.5">
-            {ATTRIBUTE_FIELDS.map((field) => (
-              <div key={field} className="flex items-center gap-2">
-                <span className="text-xs w-20 shrink-0 text-right" style={{ color: "var(--color-text-secondary)" }}>{field}</span>
-                <input className="flex-1 px-2 py-1 text-xs" style={inputStyle}
-                  value={attributes[field]?.dropdown || ""} onChange={(e) => setAttributes((prev) => ({ ...prev, [field]: { ...prev[field], dropdown: e.target.value } }))} />
-                <input className="w-24 px-2 py-1 text-xs" style={inputStyle}
-                  placeholder="custom" value={attributes[field]?.custom || ""} onChange={(e) => setAttributes((prev) => ({ ...prev, [field]: { ...prev[field], custom: e.target.value } }))} />
+          const wrapSection = (children: React.ReactNode) => (
+            <div
+              key={sectionId}
+              draggable
+              onDragStart={() => handleDragStart(sectionId)}
+              onDragOver={(e) => handleDragOver(e, sectionId)}
+              onDrop={() => handleDrop(sectionId)}
+              onDragEnd={handleDragEnd}
+              onDragLeave={() => { if (dragOverId === sectionId) setDragOverId(null); }}
+              onMouseDown={(e) => { if (e.button === 1 && canToggle) { e.preventDefault(); toggleSectionEnabled(sectionId); } }}
+              className="section-card-hover"
+              style={{
+                border: dragOverId === sectionId && dragItemRef.current !== sectionId
+                  ? "1px solid var(--color-accent, #6a6aff)"
+                  : "1px solid var(--color-border)",
+                borderRadius: "var(--radius-lg)",
+                background: "var(--color-card)",
+                opacity: enabled ? 1 : 0.4,
+                transition: "opacity 0.15s ease, filter 0.15s ease",
+              }}
+            >
+              <div
+                className="flex items-center px-1 shrink-0"
+                style={{ borderBottom: collapsed ? "none" : "1px solid var(--color-border)" }}
+              >
+                <span className="cursor-grab active:cursor-grabbing px-1 py-1.5" style={{ color: "var(--color-text-muted)" }}>
+                  <GripVertical className="h-3 w-3" />
+                </span>
+                {canCollapse ? (
+                  <button
+                    onClick={() => toggleSectionCollapse(sectionId)}
+                    className="flex-1 flex items-center gap-1.5 py-1.5 text-left cursor-pointer"
+                    style={{ background: "transparent", border: "none", color: "var(--color-text-secondary)" }}
+                    title={SECTION_TIPS[sectionId]}
+                  >
+                    {collapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
+                    <span className="text-xs font-semibold uppercase tracking-wider">{label}</span>
+                  </button>
+                ) : (
+                  <span className="flex-1 py-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }} title={SECTION_TIPS[sectionId]}>
+                    {label}
+                  </span>
+                )}
+                {(sectionId === "identity" || sectionId === "attributes" || sectionId === "bible" || sectionId === "costume") && (
+                  <span
+                    role="button"
+                    onClick={() => toggleLock(sectionId as "identity" | "attributes" | "bible" | "costume", !lockedSections[sectionId as "identity" | "attributes" | "bible" | "costume"])}
+                    className="inline-flex items-center justify-center w-5 h-5 rounded select-none cursor-pointer"
+                    style={{
+                      background: lockedSections[sectionId as "identity" | "attributes" | "bible" | "costume"] ? "rgba(255,255,255,0.12)" : "transparent",
+                      color: lockedSections[sectionId as "identity" | "attributes" | "bible" | "costume"] ? "var(--color-text-secondary)" : "var(--color-text-muted)",
+                    }}
+                    title={lockedSections[sectionId as "identity" | "attributes" | "bible" | "costume"]
+                      ? "Locked — AI won't change these fields when you Extract, Enhance, or Randomize. You can still edit them yourself."
+                      : "Unlocked — AI can update these fields when you use Extract, Enhance, or Randomize."}
+                  >
+                    {lockedSections[sectionId as "identity" | "attributes" | "bible" | "costume"]
+                      ? <Lock className="h-3 w-3" />
+                      : <Unlock className="h-3 w-3" />}
+                  </span>
+                )}
+                {canToggle && (
+                  <button
+                    onClick={() => toggleSectionEnabled(sectionId)}
+                    className="px-1.5 py-0.5 text-[9px] rounded font-semibold cursor-pointer shrink-0 select-none"
+                    style={{
+                      background: enabled ? "var(--color-accent)" : "var(--color-input-bg)",
+                      color: enabled ? "var(--color-foreground)" : "var(--color-text-muted)",
+                      border: "1px solid var(--color-border)",
+                    }}
+                    title={enabled ? "This section is ON — its info will shape your generated images. Middle-click or click here to turn it off." : "This section is OFF — its info won't be used when generating. Middle-click or click here to turn it on."}
+                  >
+                    {enabled ? "ON" : "OFF"}
+                  </button>
+                )}
               </div>
-            ))}
-          </div>
-        </PanelSection>
+              {!collapsed && <div className="px-3 pt-1 pb-3 space-y-2 overflow-hidden">{children}</div>}
+            </div>
+          );
 
-        {/* Collapsible: Character Bible */}
-        <PanelSection title="Character Bible" open={sectionsOpen.bible} onToggle={(v) => toggleSection("bible", v)}>
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="text-xs w-20 shrink-0 text-right" style={{ color: "var(--color-text-secondary)" }}>Name</span>
-              <input className="flex-1 px-2 py-1 text-xs" style={inputStyle} value={bible.characterName}
-                onChange={(e) => setBible((p) => ({ ...p, characterName: e.target.value }))} />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs w-20 shrink-0 text-right" style={{ color: "var(--color-text-secondary)" }}>Role</span>
-              <input className="flex-1 px-2 py-1 text-xs" style={inputStyle} value={bible.roleArchetype}
-                onChange={(e) => setBible((p) => ({ ...p, roleArchetype: e.target.value }))} />
-            </div>
-            <div>
-              <span className="text-xs block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Backstory</span>
-              <textarea className="w-full px-2 py-1 text-xs resize-none" rows={3} style={inputStyle} value={bible.backstory}
-                onChange={(e) => setBible((p) => ({ ...p, backstory: e.target.value }))} />
-            </div>
-            <div>
-              <span className="text-xs block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>World / Setting</span>
-              <textarea className="w-full px-2 py-1 text-xs resize-none" rows={2} style={inputStyle} value={bible.worldContext}
-                onChange={(e) => setBible((p) => ({ ...p, worldContext: e.target.value }))} />
-            </div>
-            <div>
-              <span className="text-xs block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Design Intent</span>
-              <textarea className="w-full px-2 py-1 text-xs resize-none" rows={2} style={inputStyle} value={bible.designIntent}
-                onChange={(e) => setBible((p) => ({ ...p, designIntent: e.target.value }))} />
-            </div>
-            <TagPicker label="Production Style" options={PRODUCTION_STYLES} selected={bible.productionStyle}
-              onChange={(v) => setBible((p) => ({ ...p, productionStyle: v }))} />
-            <div className="flex items-center gap-2">
-              <span className="text-xs w-20 shrink-0 text-right" style={{ color: "var(--color-text-secondary)" }}>Custom Note</span>
-              <input className="flex-1 px-2 py-1 text-xs" style={inputStyle} placeholder="Custom production note..."
-                value={bible.customDirector} onChange={(e) => setBible((p) => ({ ...p, customDirector: e.target.value }))} />
-            </div>
-            <TagPicker label="Tone / Quality" options={TONE_TAGS} selected={bible.toneTags}
-              onChange={(v) => setBible((p) => ({ ...p, toneTags: v }))} />
-          </div>
-        </PanelSection>
+          /* ── Section content ────────────────────────── */
 
-        {/* Collapsible: Costume Director */}
-        <PanelSection title="Costume Director" open={sectionsOpen.costume} onToggle={(v) => toggleSection("costume", v)}>
-          <div className="space-y-2">
-            <TagPicker label="Style Influences" options={COSTUME_STYLES} selected={costume.costumeStyles}
-              onChange={(v) => setCostume((p) => ({ ...p, costumeStyles: v }))} />
-            <div className="flex items-center gap-2">
-              <span className="text-xs w-20 shrink-0 text-right" style={{ color: "var(--color-text-secondary)" }}>Custom</span>
-              <input className="flex-1 px-2 py-1 text-xs" style={inputStyle} placeholder="Additional style notes..."
-                value={costume.costumeCustomStyles} onChange={(e) => setCostume((p) => ({ ...p, costumeCustomStyles: e.target.value }))} />
-            </div>
-            <TagPicker label="Materials" options={COSTUME_MATERIALS} selected={costume.costumeMaterials}
-              onChange={(v) => setCostume((p) => ({ ...p, costumeMaterials: v }))} />
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <span className="text-xs block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Primary Color</span>
-                <input className="w-full px-2 py-1 text-xs" style={inputStyle} value={costume.primaryColor}
-                  onChange={(e) => setCostume((p) => ({ ...p, primaryColor: e.target.value }))} />
+          if (sectionId === "identity") return wrapSection(
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <Select label="Age" options={AGE_OPTIONS} value={age} onChange={(e) => setAge(e.target.value)} disabled={textBusy} />
+                <Select label="Race" options={RACE_OPTIONS} value={race} onChange={(e) => setRace(e.target.value)} disabled={textBusy} />
+                <Select label="Gender" options={GENDER_OPTIONS} value={gender} onChange={(e) => setGender(e.target.value)} disabled={textBusy} />
+                <Select label="Build" options={BUILD_OPTIONS} value={build} onChange={(e) => setBuild(e.target.value)} disabled={textBusy} />
               </div>
+              <Textarea label="Character Description" value={description} onChange={(e) => setDescription(e.target.value)} rows={4} placeholder="Describe your character here — who are they, what do they look like, what are they wearing? e.g. A battle-worn knight in dark plate armor with a crimson cloak..." disabled={textBusy} />
+            </>
+          );
+
+          if (sectionId === "generate") return wrapSection(
+            <>
               <div>
-                <span className="text-xs block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Secondary Color</span>
-                <input className="w-full px-2 py-1 text-xs" style={inputStyle} value={costume.secondaryColor}
-                  onChange={(e) => setCostume((p) => ({ ...p, secondaryColor: e.target.value }))} />
-              </div>
-              <div>
-                <span className="text-xs block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Accent Color</span>
-                <input className="w-full px-2 py-1 text-xs" style={inputStyle} value={costume.accentColor}
-                  onChange={(e) => setCostume((p) => ({ ...p, accentColor: e.target.value }))} />
-              </div>
-              <div>
-                <span className="text-xs block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Hardware Color</span>
-                <select className="w-full px-2 py-1 text-xs" style={inputStyle} value={costume.hardwareColor}
-                  onChange={(e) => setCostume((p) => ({ ...p, hardwareColor: e.target.value }))}>
-                  <option value="">—</option>
-                  {HARDWARE_COLORS.map((h) => <option key={h.value} value={h.value}>{h.label}</option>)}
+                <select
+                  className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
+                  style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
+                  value={extractMode}
+                  onChange={(e) => setExtractMode(e.target.value as "inspiration" | "recreate")}
+                  title="Inspiration: uses only the extracted text info when generating. Recreate: also sends the source image so the AI matches the character's exact appearance."
+                >
+                  <option value="inspiration">Use image as inspiration</option>
+                  <option value="recreate">Recreate image exactly</option>
                 </select>
               </div>
-            </div>
-            <TagPicker label="Hardware Details" options={HW_DETAILS} selected={costume.hwDetails}
-              onChange={(v) => setCostume((p) => ({ ...p, hwDetails: v }))} />
-            <TagPicker label="Costume Origin" options={COSTUME_ORIGINS} selected={costume.origin}
-              onChange={(v) => setCostume((p) => ({ ...p, origin: v }))} />
-            <div>
-              <span className="text-xs block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Additional Direction</span>
-              <textarea className="w-full px-2 py-1 text-xs resize-none" rows={2} style={inputStyle} value={costume.costumeNotes}
-                onChange={(e) => setCostume((p) => ({ ...p, costumeNotes: e.target.value }))} />
-            </div>
-          </div>
-        </PanelSection>
+              <Button className="w-full" generating={busy.is("extract")} generatingText="Extracting..." onClick={handleExtractAttributes} title="Reads the image and/or description and fills in the sections you have checked below">Extract Attributes</Button>
+              <div className="flex flex-wrap gap-1 px-0.5">
+                {([
+                  ["identity", "Identity"],
+                  ["attributes", "Attributes"],
+                  ["bible", "Bible"],
+                  ["costume", "Costume"],
+                  ["environment", "Environment"],
+                ] as [ExtractTarget, string][]).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setExtractTargets((p) => ({ ...p, [key]: !p[key] }))}
+                    className="px-2 py-0.5 text-[9px] rounded cursor-pointer select-none transition-colors"
+                    style={{
+                      background: extractTargets[key] ? "var(--color-accent)" : "var(--color-input-bg)",
+                      color: extractTargets[key] ? "var(--color-foreground)" : "var(--color-text-muted)",
+                      border: "1px solid var(--color-border)",
+                      fontWeight: extractTargets[key] ? 600 : 400,
+                    }}
+                    title={`When active, Extract / Enhance / Randomize will fill in the ${label} section`}
+                  >{label}</button>
+                ))}
+              </div>
+              <div>
+                <span className="text-xs font-medium block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Style Library</span>
+                <select
+                  className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
+                  style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
+                  value={styleLibraryFolder}
+                  onChange={(e) => setStyleLibraryFolder(e.target.value)}
+                  title="Pick a style folder to guide the look of your generated images. Use the Style Library page to create and manage folders."
+                >
+                  <option value="">Default (Gemini)</option>
+                  {styleLibraryFolders.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <Button size="sm" className="w-full" generating={busy.is("enhance")} generatingText="Enhancing..." onClick={handleEnhance} title="Takes what you've already written and polishes it — adds more detail without starting over">Enhance Attributes</Button>
+                <Button size="sm" className="w-full" generating={busy.is("randomize")} generatingText="Randomizing..." onClick={handleRandomize} title="Creates a brand-new random character. If you've already filled in some fields, it'll build on those as a starting point.">Randomize Full Character</Button>
+                <Button size="sm" className="w-full" onClick={handleOpenImage} title="Load an image from your computer into the viewer">Open Image</Button>
+                <Button size="sm" className="w-full" onClick={handleReset} title="Clear everything and start fresh with a blank character">Reset Character</Button>
+              </div>
+              <div className="pt-1">
+                <Button variant="primary" className="w-full" size="lg" generating={busy.is("generate")} generatingText={genText.generate || "Generating..."} onClick={handleGenerate} title="Generate a new character image using all the details you've set up">
+                  Generate Character Image
+                </Button>
+              </div>
+              <div className="flex items-center gap-3">
+                <NumberStepper value={genCount} onChange={setGenCount} min={1} max={10} label="Count:" />
+                {modelOptions.length > 0 && (
+                  <select className="min-w-0 flex-1 px-2 py-1 text-xs rounded-[var(--radius-sm)] truncate" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)", maxWidth: "100%" }} value={modelId} onChange={(e) => setModelId(e.target.value)} title="Choose which AI model generates your images. Higher-quality models take longer but produce better results.">
+                    {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                )}
+              </div>
+            </>
+          );
 
-        <Card>
-          <div className="px-3 py-2 space-y-1.5">
-            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Multi-View Generation</p>
-            <Button className="w-full" size="sm" generating={busy.is("allviews")} generatingText={genText.allviews || "Generating views..."} onClick={handleGenerateAllViews}>Generate All Views</Button>
-            <Button className="w-full" size="sm">Generate Selected View</Button>
-            <NumberStepper value={viewGenCount} onChange={setViewGenCount} min={1} max={5} label="Count:" />
-          </div>
-        </Card>
-
-        <Card>
-          <div className="px-3 py-2 space-y-1.5">
-            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Save Options</p>
-            <div className="grid grid-cols-3 gap-1.5">
-              <Button size="sm" className="w-full">Save Current</Button>
-              <Button size="sm" className="w-full">Send to PS</Button>
-              <Button size="sm" className="w-full">Send ALL</Button>
-              <Button size="sm" className="w-full">Show XML</Button>
-              <Button size="sm" className="w-full">Clear Cache</Button>
-              <Button size="sm" className="w-full">Save Log</Button>
+          if (sectionId === "attributes") return wrapSection(
+            <div className="space-y-1.5">
+              {ATTRIBUTE_FIELDS.map((field) => (
+                <div key={field} className="flex items-center gap-2">
+                  <span className="text-xs w-20 shrink-0 text-right" style={{ color: "var(--color-text-secondary)" }}>{field}</span>
+                  <input className="flex-1 px-2 py-1 text-xs" style={inputStyle} disabled={textBusy}
+                    value={attributes[field]?.dropdown || ""} onChange={(e) => setAttributes((prev) => ({ ...prev, [field]: { ...prev[field], dropdown: e.target.value } }))} />
+                  <input className="w-24 px-2 py-1 text-xs" style={inputStyle} disabled={textBusy}
+                    placeholder="your own" value={attributes[field]?.custom || ""} onChange={(e) => setAttributes((prev) => ({ ...prev, [field]: { ...prev[field], custom: e.target.value } }))} />
+                </div>
+              ))}
             </div>
-            <Button size="sm" className="w-full">Open Generated Images</Button>
-          </div>
-        </Card>
+          );
+
+          if (sectionId === "bible") return wrapSection(
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs w-20 shrink-0 text-right" style={{ color: "var(--color-text-secondary)" }}>Name</span>
+                <input className="flex-1 px-2 py-1 text-xs" style={inputStyle} placeholder="Give your character a name, e.g. Kael Duskwalker" value={bible.characterName} disabled={textBusy}
+                  onChange={(e) => setBible((p) => ({ ...p, characterName: e.target.value }))} />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs w-20 shrink-0 text-right" style={{ color: "var(--color-text-secondary)" }}>Role</span>
+                <input className="flex-1 px-2 py-1 text-xs" style={inputStyle} placeholder="What role do they play? e.g. Fallen knight, reluctant anti-hero" value={bible.roleArchetype} disabled={textBusy}
+                  onChange={(e) => setBible((p) => ({ ...p, roleArchetype: e.target.value }))} />
+              </div>
+              <div>
+                <span className="text-xs block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Backstory</span>
+                <textarea className="w-full px-2 py-1 text-xs resize-none" rows={3} style={inputStyle} placeholder="Their story so far — where did they come from? What shaped them?" value={bible.backstory} disabled={textBusy}
+                  onChange={(e) => setBible((p) => ({ ...p, backstory: e.target.value }))} />
+              </div>
+              <div>
+                <span className="text-xs block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>World / Setting</span>
+                <textarea className="w-full px-2 py-1 text-xs resize-none" rows={2} style={inputStyle} placeholder="Where does your character live? e.g. Post-apocalyptic frontier, Neo-Tokyo 2087" value={bible.worldContext} disabled={textBusy}
+                  onChange={(e) => setBible((p) => ({ ...p, worldContext: e.target.value }))} />
+              </div>
+              <div>
+                <span className="text-xs block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Design Intent</span>
+                <textarea className="w-full px-2 py-1 text-xs resize-none" rows={2} style={inputStyle} placeholder="What mood or feeling should this character give off? e.g. Mysterious and dangerous" value={bible.designIntent} disabled={textBusy}
+                  onChange={(e) => setBible((p) => ({ ...p, designIntent: e.target.value }))} />
+              </div>
+              <TagPicker label="Production Style" presets={prodStylePresets} selected={bible.productionStyle} disabled={textBusy}
+                onChange={(v) => setBible((p) => ({ ...p, productionStyle: v }))} onPresetsChange={setProdStylePresets} />
+              <div className="flex items-center gap-2">
+                <span className="text-xs w-20 shrink-0 text-right" style={{ color: "var(--color-text-secondary)" }}>Custom Note</span>
+                <input className="flex-1 px-2 py-1 text-xs" style={inputStyle} placeholder="Any extra style notes..." disabled={textBusy}
+                  value={bible.customDirector} onChange={(e) => setBible((p) => ({ ...p, customDirector: e.target.value }))} />
+              </div>
+              <TagPicker label="Tone / Quality" presets={tonePresets} selected={bible.toneTags} disabled={textBusy}
+                onChange={(v) => setBible((p) => ({ ...p, toneTags: v }))} onPresetsChange={setTonePresets} />
+            </div>
+          );
+
+          if (sectionId === "costume") return wrapSection(
+            <div className="space-y-2">
+              <TagPicker label="Style Influences" presets={costumeStylePresets} selected={costume.costumeStyles} disabled={textBusy}
+                onChange={(v) => setCostume((p) => ({ ...p, costumeStyles: v }))} onPresetsChange={setCostumeStylePresets} />
+              <TagPicker label="Materials" presets={materialPresets} selected={costume.costumeMaterials} disabled={textBusy}
+                onChange={(v) => setCostume((p) => ({ ...p, costumeMaterials: v }))} onPresetsChange={setMaterialPresets} />
+              <div className="grid grid-cols-2 gap-2">
+                <ColorField label="Primary Color" value={costume.primaryColor} placeholder="e.g. Deep crimson" disabled={textBusy}
+                  onChange={(v) => setCostume((p) => ({ ...p, primaryColor: v }))} />
+                <ColorField label="Secondary Color" value={costume.secondaryColor} placeholder="e.g. Charcoal gray" disabled={textBusy}
+                  onChange={(v) => setCostume((p) => ({ ...p, secondaryColor: v }))} />
+                <ColorField label="Accent Color" value={costume.accentColor} placeholder="e.g. Gold" disabled={textBusy}
+                  onChange={(v) => setCostume((p) => ({ ...p, accentColor: v }))} />
+                <div>
+                  <span className="text-xs block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Hardware Color</span>
+                  <select className="w-full px-2 py-1 text-xs" style={inputStyle} value={costume.hardwareColor} disabled={textBusy}
+                    onChange={(e) => setCostume((p) => ({ ...p, hardwareColor: e.target.value }))}>
+                    <option value="">—</option>
+                    {HARDWARE_COLORS.map((h) => <option key={h.value} value={h.value}>{h.label}</option>)}
+                  </select>
+                </div>
+              </div>
+              <TagPicker label="Hardware Details" presets={hwDetailPresets} selected={costume.hwDetails} disabled={textBusy}
+                onChange={(v) => setCostume((p) => ({ ...p, hwDetails: v }))} onPresetsChange={setHwDetailPresets} />
+              <TagPicker label="Costume Origin" presets={originPresets} selected={costume.origin} disabled={textBusy}
+                onChange={(v) => setCostume((p) => ({ ...p, origin: v }))} onPresetsChange={setOriginPresets} />
+              <div>
+                <span className="text-xs block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Additional Direction</span>
+                <textarea className="w-full px-2 py-1 text-xs resize-none" rows={2} style={inputStyle} placeholder="Any extra outfit details — references, accessories, or things to keep in mind..." value={costume.costumeNotes} disabled={textBusy}
+                  onChange={(e) => setCostume((p) => ({ ...p, costumeNotes: e.target.value }))} />
+              </div>
+            </div>
+          );
+
+          if (sectionId === "styleFusion") return wrapSection(
+            <div className="space-y-3">
+              {/* Reference 1 */}
+              <div className="rounded p-2 space-y-1.5" style={{ border: "1px solid var(--color-border)", background: "rgba(106,27,154,0.06)" }}>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Reference 1</span>
+                  <span className="text-[10px] tabular-nums" style={{ color: "var(--color-text-muted)" }}>{100 - styleFusion.blend}%</span>
+                </div>
+                <input className="w-full px-2 py-1 text-xs" style={inputStyle} disabled={textBusy}
+                  placeholder='Name a style, e.g. "military chic", "gothic royalty"'
+                  value={styleFusion.slots[0].label}
+                  onChange={(e) => setStyleFusion((p) => ({ ...p, slots: [{ ...p.slots[0], label: e.target.value }, p.slots[1]] }))} />
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] shrink-0" style={{ color: "var(--color-text-muted)" }}>Take</span>
+                  <select className="flex-1 px-1.5 py-0.5 text-[10px] rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
+                    value={styleFusion.slots[0].takeFrom}
+                    title="Choose which aspect of this style to borrow — colors, silhouette, textures, etc."
+                    onChange={(e) => setStyleFusion((p) => ({ ...p, slots: [{ ...p.slots[0], takeFrom: e.target.value }, p.slots[1]] }))}>
+                    {TAKE_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Blend slider */}
+              <div className="rounded p-2 space-y-1" style={{ border: "1px solid var(--color-border)" }}>
+                <div className="flex justify-between text-[10px]" style={{ color: "var(--color-text-secondary)" }}>
+                  <span>{styleFusion.slots[0].label || "Ref 1"} <span className="tabular-nums">{100 - styleFusion.blend}%</span></span>
+                  <span><span className="tabular-nums">{styleFusion.blend}%</span> {styleFusion.slots[1].label || "Ref 2"}</span>
+                </div>
+                <input type="range" min={0} max={100} value={styleFusion.blend} className="w-full h-3"
+                  onChange={(e) => setStyleFusion((p) => ({ ...p, blend: Number(e.target.value) }))} />
+                <p className="text-[9px] text-center" style={{ color: "var(--color-text-muted)" }}>Drag the slider to mix more of one style into the other</p>
+              </div>
+
+              {/* Reference 2 */}
+              <div className="rounded p-2 space-y-1.5" style={{ border: "1px solid var(--color-border)", background: "rgba(106,27,154,0.06)" }}>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Reference 2</span>
+                  <span className="text-[10px] tabular-nums" style={{ color: "var(--color-text-muted)" }}>{styleFusion.blend}%</span>
+                </div>
+                <input className="w-full px-2 py-1 text-xs" style={inputStyle} disabled={textBusy}
+                  placeholder='Name a second style, e.g. "frontier survivalist"'
+                  value={styleFusion.slots[1].label}
+                  onChange={(e) => setStyleFusion((p) => ({ ...p, slots: [p.slots[0], { ...p.slots[1], label: e.target.value }] }))} />
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] shrink-0" style={{ color: "var(--color-text-muted)" }}>Take</span>
+                  <select className="flex-1 px-1.5 py-0.5 text-[10px] rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
+                    value={styleFusion.slots[1].takeFrom}
+                    title="Choose which aspect of this style to borrow — colors, silhouette, textures, etc."
+                    onChange={(e) => setStyleFusion((p) => ({ ...p, slots: [p.slots[0], { ...p.slots[1], takeFrom: e.target.value }] }))}>
+                    {TAKE_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+              </div>
+            </div>
+          );
+
+          if (sectionId === "envPlacement") return wrapSection(
+            <div className="space-y-2.5">
+              {/* Info banner */}
+              <div className="rounded p-2 text-[10px] leading-relaxed" style={{ background: "rgba(30,136,229,0.08)", border: "1px solid rgba(30,136,229,0.2)", color: "var(--color-text-secondary)" }}>
+                Turning this ON places your character in a real environment instead of a flat background. Set a location, lighting, camera angle, and more to create a scene.
+              </div>
+
+              {/* Character images */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}
+                    title="Add images of the characters you want placed in the scene. Add a note to each to describe who they are or how to use them.">
+                    Character Images {envPlacement.characters.length > 0 && <span className="font-normal normal-case" style={{ color: "var(--color-text-muted)" }}>({envPlacement.characters.length})</span>}
+                  </p>
+                  <input ref={envCharFileRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => {
+                    const files = e.target.files;
+                    if (!files) return;
+                    Array.from(files).forEach((file) => {
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        const dataUrl = reader.result as string;
+                        setEnvPlacement((p) => ({ ...p, characters: [...p.characters, { id: `char_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, dataUrl, note: "" }] }));
+                      };
+                      reader.readAsDataURL(file);
+                    });
+                    e.target.value = "";
+                  }} />
+                  <button onClick={() => envCharFileRef.current?.click()} disabled={textBusy}
+                    className="px-1.5 py-0.5 text-[9px] rounded cursor-pointer disabled:opacity-40"
+                    style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
+                    title="Add character images — these are the characters to be placed in the environment">+ Add</button>
+                </div>
+                {envPlacement.characters.length > 0 && (
+                  <div className="space-y-1.5">
+                    {envPlacement.characters.map((c, i) => (
+                      <div key={c.id} className="flex items-start gap-1.5 group rounded p-1" style={{ border: "1px solid var(--color-border)" }}>
+                        <img src={c.dataUrl} className="w-10 h-10 rounded object-cover shrink-0" alt="" />
+                        <div className="flex-1 min-w-0">
+                          <input className="w-full px-1.5 py-0.5 text-[10px]" style={inputStyle} disabled={textBusy}
+                            placeholder="Describe this character or how they should appear..."
+                            value={c.note} onChange={(e) => setEnvPlacement((p) => {
+                              const chars = [...p.characters]; chars[i] = { ...chars[i], note: e.target.value }; return { ...p, characters: chars };
+                            })} />
+                        </div>
+                        <button onClick={() => setEnvPlacement((p) => ({ ...p, characters: p.characters.filter((_, j) => j !== i) }))}
+                          className="text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-pointer shrink-0 mt-0.5"
+                          style={{ color: "var(--color-text-muted)", background: "transparent", border: "none" }}
+                          title="Remove this character image">✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Reference images */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}
+                    title="Add reference images for the environment, mood, or anything you want to call out specifically.">
+                    Reference Images {envPlacement.references.length > 0 && <span className="font-normal normal-case" style={{ color: "var(--color-text-muted)" }}>({envPlacement.references.length})</span>}
+                  </p>
+                  <input ref={envRefFileRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => {
+                    const files = e.target.files;
+                    if (!files) return;
+                    Array.from(files).forEach((file) => {
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        const dataUrl = reader.result as string;
+                        setEnvPlacement((p) => ({ ...p, references: [...p.references, { id: `ref_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, dataUrl, note: "" }] }));
+                      };
+                      reader.readAsDataURL(file);
+                    });
+                    e.target.value = "";
+                  }} />
+                  <button onClick={() => envRefFileRef.current?.click()} disabled={textBusy}
+                    className="px-1.5 py-0.5 text-[9px] rounded cursor-pointer disabled:opacity-40"
+                    style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
+                    title="Add reference images for the environment — mood boards, location photos, etc.">+ Add</button>
+                </div>
+                {envPlacement.references.length > 0 && (
+                  <div className="space-y-1.5">
+                    {envPlacement.references.map((r, i) => (
+                      <div key={r.id} className="flex items-start gap-1.5 group rounded p-1" style={{ border: "1px solid var(--color-border)" }}>
+                        <img src={r.dataUrl} className="w-10 h-10 rounded object-cover shrink-0" alt="" />
+                        <div className="flex-1 min-w-0">
+                          <input className="w-full px-1.5 py-0.5 text-[10px]" style={inputStyle} disabled={textBusy}
+                            placeholder="What should the AI notice in this reference?"
+                            value={r.note} onChange={(e) => setEnvPlacement((p) => {
+                              const refs = [...p.references]; refs[i] = { ...refs[i], note: e.target.value }; return { ...p, references: refs };
+                            })} />
+                        </div>
+                        <button onClick={() => setEnvPlacement((p) => ({ ...p, references: p.references.filter((_, j) => j !== i) }))}
+                          className="text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-pointer shrink-0 mt-0.5"
+                          style={{ color: "var(--color-text-muted)", background: "transparent", border: "none" }}
+                          title="Remove this reference image">✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Location */}
+              <div>
+                <span className="text-[10px] font-semibold uppercase tracking-wider block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Location</span>
+                <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
+                  value={envPlacement.location}
+                  title="Pick a preset location or choose Custom to type your own"
+                  onChange={(e) => setEnvPlacement((p) => ({ ...p, location: e.target.value }))}>
+                  {ENV_LOCATION_PRESETS.map((v) => (
+                    <option key={v} value={v}>{v === "" ? "— select preset —" : v === "__custom" ? "Custom..." : v}</option>
+                  ))}
+                </select>
+                {envPlacement.location === "__custom" && (
+                  <input className="w-full px-2 py-1 text-xs mt-1" style={inputStyle} disabled={textBusy}
+                    placeholder="Describe the location in your own words..."
+                    value={envPlacement.customLocation}
+                    onChange={(e) => setEnvPlacement((p) => ({ ...p, customLocation: e.target.value }))} />
+                )}
+              </div>
+
+              {/* Time of Day */}
+              <div>
+                <span className="text-[10px] font-semibold uppercase tracking-wider block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Time of Day</span>
+                <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
+                  value={envPlacement.timeOfDay}
+                  title="What time of day is it? This affects the overall mood and color temperature."
+                  onChange={(e) => setEnvPlacement((p) => ({ ...p, timeOfDay: e.target.value }))}>
+                  {ENV_TIME_OPTIONS.map((v) => <option key={v} value={v}>{v || "— select —"}</option>)}
+                </select>
+                <input className="w-full px-2 py-1 text-xs mt-1" style={inputStyle} disabled={textBusy}
+                  placeholder='Or type your own, e.g. "3 AM, fluorescent gas station lights"'
+                  value={envPlacement.timeOfDay && !ENV_TIME_OPTIONS.includes(envPlacement.timeOfDay) ? envPlacement.timeOfDay : ""}
+                  onChange={(e) => setEnvPlacement((p) => ({ ...p, timeOfDay: e.target.value }))} />
+              </div>
+
+              {/* Lighting */}
+              <div>
+                <span className="text-[10px] font-semibold uppercase tracking-wider block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Lighting</span>
+                <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
+                  value={envPlacement.lighting}
+                  title="How is the scene lit? This is one of the biggest factors in the mood of your image."
+                  onChange={(e) => setEnvPlacement((p) => ({ ...p, lighting: e.target.value }))}>
+                  {ENV_LIGHTING_OPTIONS.map((v) => <option key={v} value={v}>{v || "— select —"}</option>)}
+                </select>
+                <input className="w-full px-2 py-1 text-xs mt-1" style={inputStyle} disabled={textBusy}
+                  placeholder='Or type your own, e.g. "Backlit by a setting sun through dusty windows"'
+                  value={envPlacement.lighting && !ENV_LIGHTING_OPTIONS.includes(envPlacement.lighting) ? envPlacement.lighting : ""}
+                  onChange={(e) => setEnvPlacement((p) => ({ ...p, lighting: e.target.value }))} />
+              </div>
+
+              {/* Pose */}
+              <div>
+                <span className="text-[10px] font-semibold uppercase tracking-wider block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Pose</span>
+                {envPlacement.characters.length > 1 ? (
+                  <>
+                    <p className="text-[9px] mb-1" style={{ color: "var(--color-text-muted)" }}>Multiple characters — describe the group pose or interaction below:</p>
+                    <input className="w-full px-2 py-1 text-xs" style={inputStyle} disabled={textBusy}
+                      placeholder="e.g. Two characters standing back-to-back, weapons drawn..."
+                      value={envPlacement.customPose}
+                      onChange={(e) => setEnvPlacement((p) => ({ ...p, customPose: e.target.value }))} />
+                  </>
+                ) : (
+                  <>
+                    <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
+                      value={envPlacement.pose}
+                      title="How should the character be standing or positioned?"
+                      onChange={(e) => setEnvPlacement((p) => ({ ...p, pose: e.target.value }))}>
+                      {ENV_POSE_PRESETS.map((v) => <option key={v} value={v}>{v || "— select —"}</option>)}
+                    </select>
+                    <input className="w-full px-2 py-1 text-xs mt-1" style={inputStyle} disabled={textBusy}
+                      placeholder='Or type a custom pose, e.g. "Leaning against a wall, arms crossed"'
+                      value={envPlacement.customPose}
+                      onChange={(e) => setEnvPlacement((p) => ({ ...p, customPose: e.target.value }))} />
+                  </>
+                )}
+              </div>
+
+              {/* Props */}
+              <div>
+                <span className="text-[10px] font-semibold uppercase tracking-wider block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Props</span>
+                <input className="w-full px-2 py-1 text-xs" style={inputStyle} disabled={textBusy}
+                  placeholder="e.g. AK-47, fanny pack, torch, medieval shield..."
+                  title="List any objects, weapons, or items the character should be holding or that should be nearby."
+                  value={envPlacement.props}
+                  onChange={(e) => setEnvPlacement((p) => ({ ...p, props: e.target.value }))} />
+              </div>
+
+              {/* Camera */}
+              <div>
+                <span className="text-[10px] font-semibold uppercase tracking-wider block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Camera</span>
+                <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
+                  value={envPlacement.camera}
+                  title="The camera framing — how close or far the shot is, and from what angle."
+                  onChange={(e) => setEnvPlacement((p) => ({ ...p, camera: e.target.value }))}>
+                  {ENV_CAMERA_OPTIONS.map((v) => <option key={v} value={v}>{v || "— select —"}</option>)}
+                </select>
+                <input className="w-full px-2 py-1 text-xs mt-1" style={inputStyle} disabled={textBusy}
+                  placeholder='Or type your own, e.g. "Drone shot from above"'
+                  value={envPlacement.camera && !ENV_CAMERA_OPTIONS.includes(envPlacement.camera) ? envPlacement.camera : ""}
+                  onChange={(e) => setEnvPlacement((p) => ({ ...p, camera: e.target.value }))} />
+              </div>
+
+              {/* Output Format */}
+              <div>
+                <span className="text-[10px] font-semibold uppercase tracking-wider block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Output Format</span>
+                <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
+                  value={envPlacement.outputFormat}
+                  title="The aspect ratio of the generated image. When this section is ON, this format will be used instead of the default."
+                  onChange={(e) => setEnvPlacement((p) => ({ ...p, outputFormat: e.target.value }))}>
+                  {ENV_FORMAT_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+                </select>
+                <input className="w-full px-2 py-1 text-xs mt-1" style={inputStyle} disabled={textBusy}
+                  placeholder='Or type a custom format, e.g. "2:1 panoramic"'
+                  value={envPlacement.outputFormat && !ENV_FORMAT_OPTIONS.includes(envPlacement.outputFormat) ? envPlacement.outputFormat : ""}
+                  onChange={(e) => { if (e.target.value.trim()) setEnvPlacement((p) => ({ ...p, outputFormat: e.target.value })); }} />
+              </div>
+            </div>
+          );
+
+          if (sectionId === "preservation") return wrapSection(
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setPreservation((p) => ({ ...p, enabled: !p.enabled }))}
+                  className="px-2 py-0.5 text-[10px] rounded cursor-pointer font-medium"
+                  style={{ background: preservation.enabled ? "var(--color-accent)" : "var(--color-input-bg)", color: preservation.enabled ? "var(--color-foreground)" : "var(--color-text-muted)", border: "1px solid var(--color-border)" }}
+                  title={preservation.enabled ? "Turn off preservation rules" : "Turn on preservation rules so the AI respects your constraints"}
+                >{preservation.enabled ? "ON" : "OFF"}</button>
+                <button
+                  onClick={() => setPreservation({ ...EMPTY_PRESERVATION, preserves: DEFAULT_PRESERVES.map((p) => ({ ...p })), negatives: DEFAULT_NEGATIVES.map((n) => ({ ...n })) })}
+                  className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
+                  style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
+                  title="Reset all preservation rules back to their defaults"
+                >Reset</button>
+                <span className="text-[10px]" style={{ color: preservation.enabled ? "var(--color-text-primary)" : "var(--color-text-muted)" }}>
+                  {preservation.enabled ? "Active — the AI will try to keep these traits and avoid the negatives" : "Off — no constraints, the AI has full creative freedom"}
+                </span>
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "var(--color-text-secondary)" }} title="Check the things you want the AI to keep the same when regenerating">Preserve</p>
+                <div className="space-y-1">
+                  {preservation.preserves.map((p, i) => (
+                    <div key={p.key} className="flex items-center gap-2 group">
+                      <button
+                        onClick={() => setPreservation((prev) => {
+                          const next = { ...prev, preserves: [...prev.preserves] };
+                          next.preserves[i] = { ...next.preserves[i], enabled: !next.preserves[i].enabled };
+                          return next;
+                        })}
+                        className="w-3.5 h-3.5 rounded-sm shrink-0 cursor-pointer flex items-center justify-center text-[8px]"
+                        style={{
+                          background: p.enabled ? "var(--color-accent)" : "var(--color-input-bg)",
+                          border: "1px solid var(--color-border)",
+                          color: p.enabled ? "var(--color-foreground)" : "transparent",
+                        }}
+                      >{p.enabled ? "✓" : ""}</button>
+                      <span className="text-xs flex-1" style={{ color: p.enabled ? "var(--color-text-primary)" : "var(--color-text-muted)" }}>{p.label}</span>
+                      <button
+                        onClick={() => setPreservation((prev) => ({ ...prev, preserves: prev.preserves.filter((_, j) => j !== i) }))}
+                        className="text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-pointer"
+                        style={{ color: "var(--color-text-muted)", background: "transparent", border: "none" }}
+                        title="Remove this preserve rule"
+                      >✕</button>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={() => {
+                    const label = prompt("New preserve constraint:", "Keep ...");
+                    if (!label?.trim()) return;
+                    const p = label.trim();
+                    setPreservation((prev) => ({
+                      ...prev,
+                      preserves: [...prev.preserves, { key: `custom_${Date.now()}`, label: p, prompt: `Do NOT change: ${p}`, enabled: true }],
+                    }));
+                  }}
+                  className="mt-1.5 px-2 py-0.5 text-[10px] rounded cursor-pointer"
+                  style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
+                  title="Add a new rule telling the AI what to keep unchanged — e.g. Keep face, Keep hairstyle"
+                >+ Add Preserve</button>
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "var(--color-text-secondary)" }} title="List things the AI should never include in the generated image">Negative Constraints (must avoid)</p>
+                <div className="space-y-1">
+                  {preservation.negatives.map((n, i) => (
+                    <div key={n.id} className="flex items-center gap-2 group">
+                      <button
+                        onClick={() => setPreservation((prev) => {
+                          const next = { ...prev, negatives: [...prev.negatives] };
+                          next.negatives[i] = { ...next.negatives[i], enabled: !next.negatives[i].enabled };
+                          return next;
+                        })}
+                        className="w-3.5 h-3.5 rounded-sm shrink-0 cursor-pointer flex items-center justify-center text-[8px]"
+                        style={{
+                          background: n.enabled ? "var(--color-accent)" : "var(--color-input-bg)",
+                          border: "1px solid var(--color-border)",
+                          color: n.enabled ? "var(--color-foreground)" : "transparent",
+                        }}
+                      >{n.enabled ? "✓" : ""}</button>
+                      <span className="text-xs flex-1" style={{ color: n.enabled ? "var(--color-text-primary)" : "var(--color-text-muted)" }}>{n.text}</span>
+                      <button
+                        onClick={() => setPreservation((prev) => ({ ...prev, negatives: prev.negatives.filter((_, j) => j !== i) }))}
+                        className="text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-pointer"
+                        style={{ color: "var(--color-text-muted)", background: "transparent", border: "none" }}
+                        title="Remove this negative constraint"
+                      >✕</button>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={() => {
+                    const text = prompt("New negative constraint:", "No ...");
+                    if (!text?.trim()) return;
+                    _negIdCounter++;
+                    setPreservation((prev) => ({
+                      ...prev,
+                      negatives: [...prev.negatives, { id: `neg_${_negIdCounter}`, text: text.trim(), enabled: true }],
+                    }));
+                  }}
+                  className="mt-1.5 px-2 py-0.5 text-[10px] rounded cursor-pointer"
+                  style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
+                  title="Add something the AI must avoid — e.g. No crown, No fantasy elements"
+                >+ Add Negative</button>
+              </div>
+            </div>
+          );
+
+          if (sectionId === "multiview") return wrapSection(
+            <div className="space-y-1.5">
+              <Button className="w-full" size="sm" generating={busy.is("allviews")} generatingText={genText.allviews || "Generating views..."} onClick={handleGenerateAllViews} title="Generate front, back, and side views of your character all at once">Generate All Views</Button>
+              <Button className="w-full" size="sm" generating={busy.is("selview")} generatingText={genText.selview || "Generating..."} onClick={handleGenerateSelectedView} title="Generate only the view you currently have selected (front, back, side, etc.)">Generate Selected View</Button>
+              <NumberStepper value={viewGenCount} onChange={setViewGenCount} min={1} max={5} label="Count:" />
+            </div>
+          );
+
+          if (sectionId === "saveOptions") return wrapSection(
+            <div className="space-y-1.5">
+              <div className="grid grid-cols-3 gap-1.5">
+                <Button size="sm" className="w-full" onClick={handleSaveImage} title="Save the current image to your generated images folder">Save Current</Button>
+                <Button size="sm" className="w-full" onClick={handleSendToPS} title="Open the current image directly in Photoshop">Send to PS</Button>
+                <Button size="sm" className="w-full" onClick={handleSendAllToPS} title="Open all generated view images in Photoshop at once">Send ALL to PS</Button>
+                <Button size="sm" className="w-full" onClick={() => setShowXml(true)} title="View the full character data as XML — handy for saving or sharing your setup">Show XML</Button>
+                <Button size="sm" className="w-full" onClick={handleClearCache} title="Clear all cached AI data for this session — useful if results feel stale">Clear Cache</Button>
+                <Button size="sm" className="w-full" title="Save a log of all actions taken during this session">Save Log</Button>
+              </div>
+              <Button size="sm" className="w-full" title="Browse all images you've generated so far">Open Generated Images</Button>
+            </div>
+          );
+
+          return null;
+        })}
+
+        <button
+          onClick={handleSetDefaultLayout}
+          className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded text-[10px] font-medium cursor-pointer transition-colors"
+          style={{ background: "transparent", color: "var(--color-text-muted)", border: "1px dashed var(--color-border)" }}
+          title="Remember how you've arranged these panels — next time you open the app, they'll be in the same order and open/closed state"
+        >
+          <Save className="h-3 w-3" />
+          Set Active Layout as Default
+        </button>
       </div>
 
       {/* Middle Column - Edit Panel */}
-      <div className="w-[320px] shrink-0 flex flex-col gap-2 overflow-y-auto p-3" style={{ borderRight: "1px solid var(--color-border)" }}>
+      <div className="w-[320px] h-full shrink-0 overflow-y-auto p-3 space-y-2" style={{ borderRight: "1px solid var(--color-border)" }}>
         <Card>
           <div className="px-3 py-2 flex flex-col gap-2">
             <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Edit Character</p>
             <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>Describe changes to apply:</p>
-            <Textarea value={editPrompt} onChange={(e) => setEditPrompt(e.target.value)} rows={14} placeholder="e.g. Add a red scarf, change boots to brown..." />
-            <Button variant="primary" className="w-full" generating={busy.is("apply")} generatingText="Applying..." onClick={handleApplyEdit}>Apply Changes</Button>
-            <EditHistory entries={editHistory} defaultOpen={true} />
+            <Textarea value={editPrompt} onChange={(e) => setEditPrompt(e.target.value)} rows={14} placeholder="Tell the AI what to change — e.g. Add a red scarf, change the boots to brown leather, make the cloak longer..." disabled={busy.is("apply")} />
+            <Button variant="primary" className="w-full" generating={busy.is("apply")} generatingText="Applying..." onClick={handleApplyEdit} title="Send your edit instructions to the AI — it will modify the current image based on what you wrote above">Apply Changes</Button>
+            {!isRefTab && (
+              <EditHistory
+                entries={currentHistory}
+                activeEntryId={activeHistoryId}
+                onRestore={handleHistoryRestore}
+                onRestoreCurrent={handleRestoreCurrent}
+                onClearHistory={handleClearHistory}
+                defaultOpen={true}
+              />
+            )}
+
+            {/* Prompt Preview */}
+            <div className="rounded" style={{ border: "1px solid var(--color-border)", background: "var(--color-input-bg)" }}>
+              <button
+                onClick={() => setPromptPreviewOpen((p) => !p)}
+                className="w-full flex items-center justify-between px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider cursor-pointer"
+                style={{ background: "transparent", border: "none", color: "var(--color-text-secondary)" }}
+              >
+                <span>Prompt Preview {lastSentPrompt ? "(last sent)" : ""}</span>
+                {promptPreviewOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              </button>
+              {promptPreviewOpen && (
+                <div className="px-2.5 pb-2 space-y-1.5">
+                  <Button
+                    size="sm" className="w-full"
+                    onClick={() => { setPromptPreview(buildPromptPreview()); }}
+                    title="Build the exact prompt that will be sent to the AI — shows everything: style rules, character info, attributes, bible, costume, fusion, environment, constraints"
+                  >Preview Instructions</Button>
+                  <pre
+                    className="text-[10px] leading-relaxed whitespace-pre-wrap break-words max-h-[400px] overflow-y-auto p-2 rounded select-text"
+                    style={{ background: "var(--color-background)", color: "var(--color-text-muted)", border: "1px solid var(--color-border)" }}
+                  >{promptPreview || lastSentPrompt || "Click 'Preview Instructions' to see the full prompt"}</pre>
+                  {(promptPreview || lastSentPrompt) && (
+                    <Button
+                      size="sm" className="w-full"
+                      onClick={() => {
+                        navigator.clipboard.writeText(promptPreview || lastSentPrompt);
+                        addToast("Prompt copied to clipboard", "success");
+                      }}
+                      title="Copy the prompt text to your clipboard"
+                    >Copy Prompt</Button>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </Card>
       </div>
@@ -697,25 +2296,38 @@ export function CharacterPage() {
         <div className="flex items-center justify-between px-3 py-1.5 shrink-0" style={{ borderBottom: "1px solid var(--color-border)" }}>
           <p className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>Character Concept</p>
           <div className="flex items-center gap-2">
-            {busy.any && <Button size="sm" variant="danger" onClick={handleCancel}>Cancel</Button>}
-            <Button size="sm" generating={busy.is("quickgen")} generatingText={genText.quickgen || "Generating..."} onClick={handleQuickGenerate}>Quick Generate</Button>
+            {busy.any && <Button size="sm" variant="danger" onClick={handleCancel} title="Stop all running generations">Cancel</Button>}
+            <Button size="sm" generating={busy.is("quickgen")} generatingText={genText.quickgen || "Generating..."} onClick={handleQuickGenerate} title="Quickly re-generate the current view using your existing settings — great for getting a new variation">Quick Generate</Button>
           </div>
         </div>
-        <TabBar tabs={VIEW_TABS} active={activeTab} onSelect={setActiveTab} />
+        <GroupedTabBar
+          tabs={tabs}
+          active={activeTab}
+          onSelect={setActiveTab}
+          onAddRef={handleAddRef}
+          onRemoveTab={handleRemoveRef}
+          onEditTabPrompt={handleEditTabPrompt}
+        />
         <ImageViewer
           src={currentSrc}
-          placeholder={`No ${activeTab.toLowerCase()} image loaded`}
+          placeholder={`No ${activeTabDef?.label.toLowerCase() || "image"} loaded`}
+          locked={busy.any}
           onSaveImage={handleSaveImage}
           onCopyImage={handleCopyImage}
           onPasteImage={handlePasteImage}
           onOpenImage={handleOpenImage}
-          onClearImage={isRefTab ? handleClearRef : undefined}
+          onClearImage={handleClearImage}
+          onClearAllImages={handleClearAllImages}
+          onImageEdited={handleImageEdited}
           imageCount={currentImages.length}
           imageIndex={currentIdx}
           onPrevImage={handlePrevImage}
           onNextImage={handleNextImage}
+          refImages={editorRefImages}
+          styleContext={editorStyleContext}
         />
       </div>
+      {showXml && <XmlModal xml={buildCharacterXml()} title="Character XML" onClose={() => setShowXml(false)} />}
     </div>
   );
 }

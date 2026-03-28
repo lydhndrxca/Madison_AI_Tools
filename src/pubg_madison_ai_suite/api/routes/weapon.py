@@ -104,7 +104,7 @@ def _do_generate(req: WeaponGenerateRequest) -> WeaponResponse:
     if not api_key:
         return WeaponResponse(error="No API key configured")
 
-    from pubg_madison_ai_suite.api.server import reset_cancel_event, release_cancel_event
+    from pubg_madison_ai_suite.api.cancel import reset_cancel_event, release_cancel_event
     cancel = reset_cancel_event()
 
     prompt = _build_weapon_prompt(req)
@@ -242,7 +242,7 @@ async def multiview_generate_all(body: WeaponMultiviewRequest):
     if not api_key:
         return WeaponMultiviewResponse(errors={"_global": "No API key"})
 
-    from pubg_madison_ai_suite.api.server import reset_cancel_event, release_cancel_event
+    from pubg_madison_ai_suite.api.cancel import reset_cancel_event, release_cancel_event
     cancel = reset_cancel_event()
 
     image_size = "4K" if body.mode == "quality" else "1K"

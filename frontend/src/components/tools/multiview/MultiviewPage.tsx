@@ -5,6 +5,8 @@ import { EditHistory } from "@/components/shared/EditHistory";
 import { TabBar } from "@/components/shared/TabBar";
 import { apiFetch } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
+import { useSessionRegister } from "@/hooks/SessionContext";
+import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
 
 const VIEW_TABS = ["Main Stage", "3/4", "Front", "Back", "Side", "Top", "Bottom"];
 const DIMENSIONS = [
@@ -144,9 +146,23 @@ export function MultiviewPage() {
     reader.readAsDataURL(file); e.target.value = "";
   }, [activeTab, setTabImage]);
 
+  // Global Ctrl+V paste — uses Electron native clipboard for external images
+  useClipboardPaste(
+    useCallback((dataUrl: string) => setTabImage(activeTab, dataUrl), [activeTab, setTabImage]),
+  );
+
   const handlePaste = useCallback(async () => {
-    try { const items = await navigator.clipboard.read(); for (const item of items) { for (const type of item.types) { if (type.startsWith("image/")) { const blob = await item.getType(type); const reader = new FileReader(); reader.onload = () => setTabImage(activeTab, reader.result as string); reader.readAsDataURL(blob); return; } } } } catch { /* */ }
-  }, [activeTab, setTabImage]);
+    try {
+      const dataUrl = await readClipboardImage();
+      if (dataUrl) {
+        setTabImage(activeTab, dataUrl);
+      } else {
+        addToast("No image found in clipboard", "error");
+      }
+    } catch (err) {
+      addToast(`Paste failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+    }
+  }, [activeTab, setTabImage, addToast]);
 
   const handleSaveImage = useCallback(() => {
     if (!currentSrc) return;
@@ -161,10 +177,43 @@ export function MultiviewPage() {
 
   const handleReset = useCallback(() => { setGallery({}); setImageIdx({}); setEditHistory([]); setPrompt(""); }, []);
 
+  const handleSendToPS = useCallback(async () => {
+    if (!currentSrc) { addToast("No image to send", "error"); return; }
+    try {
+      const resp = await apiFetch<{ ok: boolean; results: { label: string; message: string }[] }>(
+        "/system/send-to-ps", { method: "POST", body: JSON.stringify({ images: [{ label: activeTab.replace(/\s+/g, "_").toLowerCase(), image_b64: currentSrc }] }) },
+      );
+      if (resp.ok) addToast(resp.results[0]?.message || "Sent to Photoshop", "success");
+      else addToast(resp.results[0]?.message || "Failed to send", "error");
+    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
+  }, [currentSrc, activeTab, addToast]);
+
   const handlePrevImage = useCallback(() => { setImageIdx((prev) => ({ ...prev, [activeTab]: Math.max(0, (prev[activeTab] ?? 0) - 1) })); }, [activeTab]);
   const handleNextImage = useCallback(() => { const max = (gallery[activeTab] || []).length - 1; setImageIdx((prev) => ({ ...prev, [activeTab]: Math.min(max, (prev[activeTab] ?? 0) + 1) })); }, [activeTab, gallery]);
 
   const modelOptions = models.map((m) => ({ value: m.id, label: `${m.label} — ${m.resolution} (${m.time_estimate})` }));
+
+  useSessionRegister(
+    "multiview",
+    () => ({ activeTab, prompt, dimension, gallery, imageIdx, editHistory, genCount, modelId }),
+    (s: unknown) => {
+      if (s === null) {
+        setActiveTab("Main Stage"); setPrompt(""); setDimension("square");
+        setGallery({}); setImageIdx({}); setEditHistory([]);
+        setGenCount(1); setModelId("");
+        return;
+      }
+      const d = s as Record<string, unknown>;
+      if (typeof d.activeTab === "string") setActiveTab(d.activeTab);
+      if (typeof d.prompt === "string") setPrompt(d.prompt);
+      if (typeof d.dimension === "string") setDimension(d.dimension);
+      if (d.gallery) setGallery(d.gallery as Record<string, string[]>);
+      if (d.imageIdx) setImageIdx(d.imageIdx as Record<string, number>);
+      if (d.editHistory) setEditHistory(d.editHistory as EditEntry[]);
+      if (typeof d.genCount === "number") setGenCount(d.genCount);
+      if (typeof d.modelId === "string") setModelId(d.modelId);
+    },
+  );
 
   return (
     <div className="flex h-full">
@@ -189,17 +238,17 @@ export function MultiviewPage() {
             <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Prompt</p>
             <Select label="Image Dimensions" options={DIMENSIONS} value={dimension} onChange={(e) => setDimension(e.target.value)} />
             <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>Describe image:</p>
-            <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={12} className="flex-1" placeholder="Describe the image you want to generate..." />
-            <Button variant="primary" className="w-full" generating={busy.is("generate")} generatingText="Generating Image..." onClick={handleGenerate}>Generate Image</Button>
-            <Button className="w-full" onClick={() => {}}>Isolate Image</Button>
-            <Button className="w-full" generating={busy.is("selected")} generatingText={genText.selected || "Generating view..."} onClick={handleGenerateSelected}>Generate Selected View</Button>
-            <Button variant="primary" className="w-full" generating={busy.is("allviews")} generatingText={genText.allviews || "Generating views..."} onClick={handleGenerateAll}>Generate All Views</Button>
-            {busy.any && <Button variant="danger" size="sm" className="w-full" onClick={handleCancel}>Cancel</Button>}
+            <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={12} className="flex-1" placeholder="Describe what you want to see — e.g. A medieval sword with ornate handle..." disabled={busy.any} />
+            <Button variant="primary" className="w-full" generating={busy.is("generate")} generatingText="Generating Image..." onClick={handleGenerate} title="Generate a new image from your prompt">Generate Image</Button>
+            <Button className="w-full" onClick={() => {}} title="Isolate the subject from the background">Isolate Image</Button>
+            <Button className="w-full" generating={busy.is("selected")} generatingText={genText.selected || "Generating view..."} onClick={handleGenerateSelected} title="Generate only the view you have selected">Generate Selected View</Button>
+            <Button variant="primary" className="w-full" generating={busy.is("allviews")} generatingText={genText.allviews || "Generating views..."} onClick={handleGenerateAll} title="Generate all views (front, back, side) at once">Generate All Views</Button>
+            {busy.any && <Button variant="danger" size="sm" className="w-full" onClick={handleCancel} title="Stop the current generation">Cancel</Button>}
             <div className="flex items-center gap-3">
               <NumberStepper value={genCount} onChange={setGenCount} min={1} max={5} label="Count:" />
             </div>
             {modelOptions.length > 0 && (
-              <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} value={modelId} onChange={(e) => setModelId(e.target.value)}>
+              <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} value={modelId} onChange={(e) => setModelId(e.target.value)} title="Choose which AI model generates your images. Higher-quality models take longer but produce better results.">
                 {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
             )}
@@ -210,9 +259,9 @@ export function MultiviewPage() {
         <Card>
           <div className="px-3 py-2 space-y-1.5">
             <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--color-text-secondary)" }}>Actions</p>
-            <Button size="sm" className="w-full">Send to Photoshop</Button>
-            <Button size="sm" className="w-full" onClick={handleSaveImage}>Save All Images</Button>
-            <Button size="sm" className="w-full">Open Generated Images</Button>
+            <Button size="sm" className="w-full" onClick={handleSendToPS} title="Open the current image in Photoshop">Send to PS</Button>
+            <Button size="sm" className="w-full" onClick={handleSaveImage} title="Save all generated view images to your images folder">Save All Images</Button>
+            <Button size="sm" className="w-full" title="Browse all images you've generated so far">Open Generated Images</Button>
           </div>
         </Card>
       </div>
@@ -224,6 +273,7 @@ export function MultiviewPage() {
           src={currentSrc}
           placeholder={`No ${activeTab.toLowerCase()} image loaded`}
           showToolbar={true}
+          locked={busy.any}
           onSaveImage={handleSaveImage}
           onCopyImage={handleCopyImage}
           onPasteImage={handlePaste}

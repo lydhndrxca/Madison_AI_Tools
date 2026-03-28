@@ -36,6 +36,11 @@ class CharacterGenerateRequest(BaseModel):
     model_id: Optional[str] = None
     bible_context: Optional[str] = None
     costume_context: Optional[str] = None
+    fusion_context: Optional[str] = None
+    style_guidance: Optional[str] = None
+    env_context: Optional[str] = None
+    lock_constraints: Optional[str] = None
+    recreate_mode: bool = False
 
 
 class CharacterResponse(BaseModel):
@@ -46,10 +51,12 @@ class CharacterResponse(BaseModel):
 
 
 class AttributeRequest(BaseModel):
-    description: str
+    description: str = ""
+    image_b64: Optional[str] = None
 
 
 class AttributeResponse(BaseModel):
+    description: str = ""
     attributes: Optional[dict] = None
     age: str = ""
     race: str = ""
@@ -57,12 +64,25 @@ class AttributeResponse(BaseModel):
     build: str = ""
     bible: Optional[dict] = None
     costume: Optional[dict] = None
+    environment: Optional[dict] = None
     error: Optional[str] = None
 
 
 class TextRequest(BaseModel):
     text: str
     operation: str = "enhance"          # enhance, randomize
+
+
+class CharacterContextRequest(BaseModel):
+    """Existing character state passed for context-aware randomize / enhance."""
+    description: str = ""
+    age: str = ""
+    race: str = ""
+    gender: str = ""
+    build: str = ""
+    attributes: Optional[dict] = None
+    bible: Optional[dict] = None
+    costume: Optional[dict] = None
 
 
 class TextResponse(BaseModel):
@@ -79,6 +99,7 @@ class RandomizeFullResponse(BaseModel):
     attributes: Optional[dict] = None
     bible: Optional[dict] = None
     costume: Optional[dict] = None
+    environment: Optional[dict] = None
     error: Optional[str] = None
 
 
@@ -126,6 +147,27 @@ _BIBLE_COSTUME_PROMPT = (
     '    "costumeNotes": string (additional costume direction or empty)\n'
 )
 
+_ENVIRONMENT_PROMPT = (
+    '- "environment": object with keys:\n'
+    '    "location": string (a vivid, specific environment description e.g. '
+    '"Abandoned summer camp", "Urban alley — night", "Industrial warehouse", '
+    '"Gothic cathedral interior", "Rooftop — city skyline", or custom),\n'
+    '    "timeOfDay": string (one of: "Dawn — cold blue", "Golden hour — warm amber", '
+    '"Midday — harsh direct", "Overcast — soft diffused", "Dusk — purple-orange", '
+    '"Night — moonlit", "Night — artificial light", "Twilight — blue hour", or custom),\n'
+    '    "lighting": string (one of: "Dappled forest light", "Harsh direct sun", '
+    '"Soft diffused overcast", "Rim-lit from behind", "Campfire / torch light", '
+    '"Neon mixed color", "Studio three-point", "Dramatic chiaroscuro", '
+    '"Volumetric fog", "Underwater caustics", "Fluorescent industrial", or custom),\n'
+    '    "pose": string (scene-appropriate pose e.g. "Standing — relaxed", '
+    '"Crouching — ready", "Action — mid-combat", or custom pose description),\n'
+    '    "props": string (environmental props/objects near the character, or empty),\n'
+    '    "camera": string (one of: "Full body", "Waist up (cowboy)", '
+    '"Portrait — head & shoulders", "Wide establishing", '
+    '"Low angle — heroic", "High angle — vulnerable", or custom),\n'
+    '    "outputFormat": string (aspect ratio like "3:4 — portrait", "16:9 — cinematic wide", etc.)\n'
+)
+
 
 def _parse_full_response(data: dict) -> dict:
     """Extract standard fields from a parsed JSON response dict."""
@@ -138,6 +180,7 @@ def _parse_full_response(data: dict) -> dict:
         attributes=data.get("attributes"),
         bible=data.get("bible"),
         costume=data.get("costume"),
+        environment=data.get("environment"),
     )
 
 
@@ -163,8 +206,40 @@ def _build_character_prompt(req: CharacterGenerateRequest) -> str:
 
     if req.bible_context:
         prompt += f"\n\n--- Character Bible ---\n{req.bible_context}"
-    if req.costume_context:
-        prompt += f"\n\n--- Costume Direction ---\n{req.costume_context}"
+
+    has_costume = bool(req.costume_context)
+    has_fusion = bool(req.fusion_context)
+    if has_costume and has_fusion:
+        prompt += (
+            f"\n\n--- Costume Direction + Style Fusion (MERGE THESE) ---\n"
+            f"The Costume Director defines the base outfit — materials, colors, hardware, and construction:\n"
+            f"{req.costume_context}\n\n"
+            f"The Style Fusion layer adds an aesthetic/fashion influence on top:\n"
+            f"{req.fusion_context}\n\n"
+            f"IMPORTANT: Blend both seamlessly. Use the Costume Director's specific garment details, "
+            f"materials, and colors as the foundation, then apply the Style Fusion's aesthetic "
+            f"influence to the overall look and feel. Where they conflict, favor the Costume Director's "
+            f"concrete details (specific colors, materials, hardware) and the Style Fusion's broader "
+            f"mood and style sensibility."
+        )
+    else:
+        if has_costume:
+            prompt += f"\n\n--- Costume Direction ---\n{req.costume_context}"
+        if has_fusion:
+            prompt += f"\n\n--- Style Fusion ---\n{req.fusion_context}"
+
+    if req.style_guidance:
+        prompt += f"\n\n--- Style Library Guidance ---\n{req.style_guidance}"
+    if req.env_context:
+        prompt += f"\n\n--- Environment & Placement ---\nPlace the character in a real scene/environment as described below. Do NOT use a flat or solid-color background.\n{req.env_context}"
+    if req.lock_constraints:
+        prompt += (
+            f"\n\n--- PRESERVATION CONSTRAINTS (CRITICAL — HIGHEST PRIORITY, DO NOT VIOLATE) ---\n"
+            f"The following constraints OVERRIDE all other instructions above. "
+            f"If any costume, style fusion, environment, or other direction conflicts with these "
+            f"constraints, the constraints WIN. Do not deviate from these under any circumstances.\n"
+            f"{req.lock_constraints}"
+        )
 
     return prompt
 
@@ -178,7 +253,7 @@ def _do_generate(req: CharacterGenerateRequest) -> CharacterResponse:
     if not api_key:
         return CharacterResponse(error="No API key configured")
 
-    from pubg_madison_ai_suite.api.server import reset_cancel_event, release_cancel_event
+    from pubg_madison_ai_suite.api.cancel import reset_cancel_event, release_cancel_event
     cancel = reset_cancel_event()
 
     prompt = _build_character_prompt(req)
@@ -193,25 +268,58 @@ def _do_generate(req: CharacterGenerateRequest) -> CharacterResponse:
         if b64:
             contents.append(core.b64_to_image(b64))
 
-    style_rules = (
-        "STRICT RULES: Realistic 3D-rendered style. NOT illustrated, NOT cartoon, NOT painted. "
-        "No text, no labels, no names, no color swatches, no annotations anywhere on the image. "
-        "Solid flat single-color background. Full body visible head to toe."
-    )
+    if req.env_context:
+        style_rules = (
+            "STRICT RULES: Realistic 3D-rendered style. NOT illustrated, NOT cartoon, NOT painted. "
+            "No text, no labels, no names, no color swatches, no annotations anywhere on the image. "
+            "Place the character in the described environment. Full body visible head to toe."
+        )
+        pose_rule = ""
+    else:
+        style_rules = (
+            "ABSOLUTE MANDATORY BACKGROUND RULE — THIS OVERRIDES EVERYTHING ELSE IN THE PROMPT: "
+            "The background MUST be a solid flat single-color studio backdrop (e.g. neutral grey, beige, or muted tone). "
+            "There must be ZERO environmental elements — NO ground textures, NO floor tiles, NO wooden planks, "
+            "NO dirt, NO concrete, NO grass, NO rocks, NO props, NO furniture, NO traffic cones, NO vehicles, "
+            "NO buildings, NO scenery, NO shadows on the ground, NO horizon line, NO anything except the character "
+            "standing on the plain solid-color backdrop. Even if the character description mentions a setting, "
+            "job, or environment — IGNORE that for the background. The character floats on a flat color.\n\n"
+            "STYLE RULES: Realistic 3D-rendered style. NOT illustrated, NOT cartoon, NOT painted. "
+            "No text, no labels, no names, no color swatches, no annotations anywhere on the image. "
+            "Full body visible head to toe."
+        )
+        pose_rule = (
+            "\nPOSE RULE: The character MUST be in a neutral A-pose (standing upright, "
+            "arms held slightly away from body at roughly 30 degrees, palms facing forward, "
+            "feet shoulder-width apart, weight evenly distributed) UNLESS the prompt explicitly "
+            "specifies a different pose. Do NOT add any action poses, leaning, crouching, "
+            "or interaction with objects unless the user specifically asked for it."
+        )
 
     if req.edit_prompt and req.reference_image_b64:
         contents.append(
-            f"{prompt}\n\nApply these changes: {req.edit_prompt}\n\n{style_rules}"
+            f"{style_rules}{pose_rule}\n\n{prompt}\n\nApply these changes: {req.edit_prompt}"
+        )
+    elif req.recreate_mode and req.reference_image_b64:
+        contents.append(
+            f"{style_rules}{pose_rule}\n\n"
+            f"RECREATE MODE: You are given a reference image of a character. "
+            f"Recreate this character as accurately as possible — match the face, body type, "
+            f"hairstyle, clothing, accessories, colors, materials, and every visual detail exactly. "
+            f"The result should look like the same character rendered fresh, not a copy/paste. "
+            f"Use the following description and attributes to guide any details not clearly visible "
+            f"in the reference:\n{prompt}"
         )
     elif req.view_type != "main" and req.reference_image_b64:
         view_label = req.view_type.replace("_", " ")
         contents.append(
+            f"{style_rules}{pose_rule}\n\n"
             f"Using the reference character image, generate a {view_label} view of this character. "
-            f"Match the exact same character, outfit, and proportions.\n{prompt}\n\n{style_rules}"
+            f"Match the exact same character, outfit, and proportions.\n{prompt}"
         )
     else:
         contents.append(
-            f"Generate a full-body character in 3/4 view.\n{prompt}\n\n{style_rules}"
+            f"{style_rules}{pose_rule}\n\nGenerate a full-body character.\n{prompt}"
         )
 
     model_info = core.get_model_info(req.model_id)
@@ -251,18 +359,23 @@ def _do_generate(req: CharacterGenerateRequest) -> CharacterResponse:
     )
 
 
-def _do_extract_attributes(description: str) -> AttributeResponse:
+def _do_extract_attributes(description: str, image_b64: str | None = None) -> AttributeResponse:
     api_key = core.get_api_key()
     if not api_key:
         return AttributeResponse(error="No API key")
 
     try:
-        import json
+        import json, base64
         import google.generativeai as genai
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel("gemini-2.0-flash")
-        resp = model.generate_content(
-            "Extract character attributes from this description as JSON with these keys:\n"
+
+        prompt = (
+            "You are a character design analyst for film and game production. "
+            "Extract extremely detailed character attributes as JSON with these keys:\n\n"
+            '- "description": string — A rich 3-5 sentence visual description. Include physique, '
+            "face shape, distinguishing marks (scars, tattoos, freckles), skin tone, "
+            "expression/mood, hair length/style/color, and overall silhouette.\n\n"
             '- "age": string (best match from: "teen (18\u201319)", "young adult (20\u201329)", '
             '"adult (30\u201345)", "middle-aged (46\u201365)", "senior (66+)", or empty string)\n'
             '- "race": string (best match from: "Black / African descent", '
@@ -273,19 +386,52 @@ def _do_extract_attributes(description: str) -> AttributeResponse:
             '"genderqueer", "trans masc", "trans femme", "androgynous", "unspecified", '
             'or empty string)\n'
             '- "build": string (best match from: "slim", "average", "athletic", '
-            '"muscular", "curvy", "heavyset", "soft/doughy", "unfit", or empty string)\n'
-            '- "attributes": object with keys Headwear, Outerwear, Top, Legwear, '
-            "Footwear, Gloves, FaceGear, UtilityRig, BackCarry, HandProp, "
-            "Accessories, ColorAccents, Detailing, Pose "
-            "(each a short string description, or empty string if not mentioned)\n"
-            + _BIBLE_COSTUME_PROMPT +
-            f"Return ONLY valid JSON.\n\n{description}",
+            '"muscular", "curvy", "heavyset", "soft/doughy", "unfit", or empty string)\n\n'
+            '- "attributes": object — Be very specific and descriptive for each. '
+            "If something is not visible or mentioned, use empty string.\n"
+            '    "Headwear": string (e.g. "black wool beanie, slightly slouched", "none")\n'
+            '    "Outerwear": string (e.g. "distressed brown leather bomber jacket, collar popped, patches on left arm")\n'
+            '    "Top": string (e.g. "faded grey henley shirt, rolled sleeves to elbows, buttons undone")\n'
+            '    "Legwear": string (e.g. "dark indigo slim-cut cargo pants, reinforced knee panels")\n'
+            '    "Footwear": string (e.g. "scuffed black combat boots, steel toe, laced halfway")\n'
+            '    "Gloves": string (e.g. "fingerless black tactical gloves, worn leather")\n'
+            '    "FaceGear": string (e.g. "round dark aviator sunglasses", "gas mask", or "none")\n'
+            '    "UtilityRig": string (e.g. "canvas chest harness with ammo pouches", "leather tool belt")\n'
+            '    "BackCarry": string (e.g. "military rucksack, olive drab, straps frayed")\n'
+            '    "HandProp": string (e.g. "baseball bat wrapped in barbed wire", or "none")\n'
+            '    "Accessories": string (e.g. "silver dog tags, braided leather wristband, ear cuff")\n'
+            '    "ColorAccents": string (e.g. "red lining in jacket, orange stitching on boots")\n'
+            '    "Detailing": string (e.g. "oil stains on pants, frayed cuffs, brass rivets on jacket")\n'
+            '    "Pose": string — ALWAYS set to "A pose" (standing upright, arms slightly away from body at ~30 degrees, palms forward, legs shoulder-width apart). Do NOT infer any other pose.\n\n'
+            + _BIBLE_COSTUME_PROMPT
+            + _ENVIRONMENT_PROMPT +
+            "\nReturn ONLY valid JSON. Be as detailed and specific as possible — "
+            "imagine you are writing notes for a 3D modeler and costume department.\n\n"
+        )
+
+        contents: list = []
+        if image_b64:
+            raw = image_b64.split(",", 1)[-1] if "," in image_b64 else image_b64
+            img_bytes = base64.b64decode(raw)
+            contents.append({"mime_type": "image/png", "data": img_bytes})
+            if description.strip():
+                prompt += f"The character description is: {description}\n"
+            else:
+                prompt += "Analyze the character in this image.\n"
+        else:
+            prompt += description
+
+        contents.append(prompt)
+
+        resp = model.generate_content(
+            contents,
             generation_config={"response_mime_type": "application/json"},
         )
         data = json.loads(resp.text)
         if isinstance(data, list):
             data = data[0] if data else {}
         return AttributeResponse(
+            description=data.get("description", ""),
             attributes=data.get("attributes"),
             age=data.get("age", ""),
             race=data.get("race", ""),
@@ -293,12 +439,13 @@ def _do_extract_attributes(description: str) -> AttributeResponse:
             build=data.get("build", ""),
             bible=data.get("bible"),
             costume=data.get("costume"),
+            environment=data.get("environment"),
         )
     except Exception as e:
         return AttributeResponse(error=str(e))
 
 
-def _do_enhance(text: str) -> RandomizeFullResponse:
+def _do_enhance(text: str, ctx: CharacterContextRequest | None = None) -> RandomizeFullResponse:
     api_key = core.get_api_key()
     if not api_key:
         return RandomizeFullResponse(error="No API key")
@@ -307,11 +454,31 @@ def _do_enhance(text: str) -> RandomizeFullResponse:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel("gemini-2.0-flash")
+
+        context_text = _build_context_summary(ctx) if ctx else ""
+        has_full_context = bool(context_text.strip())
+
+        if has_full_context:
+            instruction = (
+                "The user has a character with the following details. "
+                "Enhance and polish every field - add vivid detail, richer description, "
+                "more specific attributes, and deeper lore. Keep the same character concept "
+                "and identity, but make everything more refined, detailed, and production-ready. "
+                "Do NOT change the fundamental nature of what the user specified - only improve it.\n\n"
+                f"CURRENT CHARACTER STATE:\n{context_text}\n\n"
+            )
+        else:
+            instruction = (
+                "Enhance and expand the following character description with vivid detail. "
+                "Keep the core concept but add visual richness.\n\n"
+                f"Original description:\n\n{text}\n\n"
+            )
+
         resp = model.generate_content(
-            "Enhance and expand the following character description with vivid detail. "
-            "Keep the core concept but add visual richness. "
+            instruction +
             "Return ONLY valid JSON with these keys:\n"
-            '- "description": string (the enhanced 3-5 sentence description)\n'
+            '- "description": string (a rich 3-5 sentence visual description including physique, '
+            "face, distinguishing features, skin tone, hair, expression, and silhouette)\n"
             '- "age": string (best match from: "teen (18\u201319)", "young adult (20\u201329)", '
             '"adult (30\u201345)", "middle-aged (46\u201365)", "senior (66+)", or empty string)\n'
             '- "race": string (best match from: "Black / African descent", '
@@ -323,12 +490,23 @@ def _do_enhance(text: str) -> RandomizeFullResponse:
             'or empty string)\n'
             '- "build": string (best match from: "slim", "average", "athletic", '
             '"muscular", "curvy", "heavyset", "soft/doughy", "unfit", or empty string)\n'
-            '- "attributes": object with keys Headwear, Outerwear, Top, Legwear, '
-            "Footwear, Gloves, FaceGear, UtilityRig, BackCarry, HandProp, "
-            "Accessories, ColorAccents, Detailing, Pose "
-            "(each a short string description, or empty string if none)\n"
-            + _BIBLE_COSTUME_PROMPT +
-            f"Original description:\n\n{text}",
+            '- "attributes": object — Be very specific and descriptive for each:\n'
+            '    "Headwear": string (material, color, style, condition)\n'
+            '    "Outerwear": string (jacket/coat type, material, color, details)\n'
+            '    "Top": string (shirt/vest type, color, fit, details)\n'
+            '    "Legwear": string (pants/skirt type, color, fit, details)\n'
+            '    "Footwear": string (shoe/boot type, color, condition)\n'
+            '    "Gloves": string (type, material, style)\n'
+            '    "FaceGear": string (glasses, mask, goggles, etc.)\n'
+            '    "UtilityRig": string (belts, holsters, harnesses)\n'
+            '    "BackCarry": string (backpack, quiver, etc.)\n'
+            '    "HandProp": string (weapon, tool, item held)\n'
+            '    "Accessories": string (jewelry, wristbands, etc.)\n'
+            '    "ColorAccents": string (notable color details)\n'
+            '    "Detailing": string (wear, damage, stitching, etc.)\n'
+            '    "Pose": ALWAYS "A pose" — do NOT change this\n'
+            + _BIBLE_COSTUME_PROMPT
+            + _ENVIRONMENT_PROMPT,
             generation_config={"response_mime_type": "application/json"},
         )
         data = json.loads(resp.text)
@@ -357,7 +535,37 @@ def _do_randomize() -> TextResponse:
         return TextResponse(error=str(e))
 
 
-def _do_randomize_full() -> RandomizeFullResponse:
+def _build_context_summary(ctx: CharacterContextRequest | None) -> str:
+    """Build a human-readable summary of existing character fields for the AI prompt."""
+    if ctx is None:
+        return ""
+    parts: list[str] = []
+    if ctx.description.strip():
+        parts.append(f"Description: {ctx.description.strip()}")
+    if ctx.age:
+        parts.append(f"Age: {ctx.age}")
+    if ctx.race:
+        parts.append(f"Race: {ctx.race}")
+    if ctx.gender:
+        parts.append(f"Gender: {ctx.gender}")
+    if ctx.build:
+        parts.append(f"Build: {ctx.build}")
+    if ctx.attributes:
+        filled = {k: v for k, v in ctx.attributes.items() if v}
+        if filled:
+            parts.append("Attributes: " + ", ".join(f"{k}={v}" for k, v in filled.items()))
+    if ctx.bible:
+        filled = {k: v for k, v in ctx.bible.items() if v and v != "[]"}
+        if filled:
+            parts.append("Bible: " + ", ".join(f"{k}={v}" for k, v in filled.items()))
+    if ctx.costume:
+        filled = {k: v for k, v in ctx.costume.items() if v and v != "[]"}
+        if filled:
+            parts.append("Costume: " + ", ".join(f"{k}={v}" for k, v in filled.items()))
+    return "\n".join(parts)
+
+
+def _do_randomize_full(ctx: CharacterContextRequest | None = None) -> RandomizeFullResponse:
     """Generate a random character with description, identity, attributes, bible, and costume."""
     api_key = core.get_api_key()
     if not api_key:
@@ -367,11 +575,32 @@ def _do_randomize_full() -> RandomizeFullResponse:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel("gemini-2.0-flash")
+
+        context_text = _build_context_summary(ctx)
+        has_context = bool(context_text.strip())
+
+        if has_context:
+            instruction = (
+                "The user has already partially defined a game character. "
+                "Use the details they provided as the creative foundation. "
+                "Keep everything they specified, and expand/extrapolate all empty or missing fields "
+                "to create a fully fleshed-out character that is consistent with what they gave you. "
+                "Be creative with the parts they left blank, but stay true to the existing vision.\n\n"
+                f"EXISTING CHARACTER INFO:\n{context_text}\n\n"
+            )
+        else:
+            instruction = (
+                "Generate a random, detailed game character for a realistic 3D game. "
+                "Be creative and specific.\n\n"
+            )
+
         resp = model.generate_content(
-            "Generate a random, detailed game character for a realistic 3D game. "
+            instruction +
             "Return ONLY valid JSON with these keys:\n"
-            '- "description": string (3-5 sentences describing physical appearance, clothing, gear, '
-            "and personality. Describe as a real person, not a cartoon or illustration.)\n"
+            '- "description": string — A rich 3-5 sentence visual description. Include physique, '
+            "face shape, distinguishing marks (scars, tattoos, freckles), skin tone, "
+            "expression/mood, hair length/style/color, and overall silhouette. "
+            "Describe as a real person, not a cartoon or illustration.\n"
             '- "age": string (one of: "teen (18\u201319)", "young adult (20\u201329)", '
             '"adult (30\u201345)", "middle-aged (46\u201365)", "senior (66+)")\n'
             '- "race": string (one of: "Black / African descent", '
@@ -382,12 +611,25 @@ def _do_randomize_full() -> RandomizeFullResponse:
             '"genderqueer", "trans masc", "trans femme", "androgynous", "unspecified")\n'
             '- "build": string (one of: "slim", "average", "athletic", '
             '"muscular", "curvy", "heavyset", "soft/doughy", "unfit")\n'
-            '- "attributes": object with keys Headwear, Outerwear, Top, Legwear, '
-            "Footwear, Gloves, FaceGear, UtilityRig, BackCarry, HandProp, "
-            "Accessories, ColorAccents, Detailing, Pose "
-            "(each a short string description, or empty string if none)\n"
-            + _BIBLE_COSTUME_PROMPT +
-            "Be creative and specific. Return ONLY the JSON, no markdown.",
+            '- "attributes": object — Be very specific and descriptive for each:\n'
+            '    "Headwear": string (material, color, style, condition — or empty)\n'
+            '    "Outerwear": string (jacket/coat type, material, color, details — or empty)\n'
+            '    "Top": string (shirt/vest type, color, fit, details — or empty)\n'
+            '    "Legwear": string (pants/skirt type, color, fit, details — or empty)\n'
+            '    "Footwear": string (shoe/boot type, color, condition — or empty)\n'
+            '    "Gloves": string (type, material, style — or empty)\n'
+            '    "FaceGear": string (glasses, mask, goggles — or empty)\n'
+            '    "UtilityRig": string (belts, holsters, harnesses — or empty)\n'
+            '    "BackCarry": string (backpack, quiver, etc. — or empty)\n'
+            '    "HandProp": string (weapon, tool, item held — or empty)\n'
+            '    "Accessories": string (jewelry, wristbands, etc. — or empty)\n'
+            '    "ColorAccents": string (notable color details — or empty)\n'
+            '    "Detailing": string (wear, damage, stitching, etc. — or empty)\n'
+            '    "Pose": ALWAYS "A pose" — do NOT use any other pose\n'
+            + _BIBLE_COSTUME_PROMPT
+            + _ENVIRONMENT_PROMPT +
+            "Return ONLY the JSON, no markdown. "
+            "Be as detailed and specific as possible for every field.",
             generation_config={"response_mime_type": "application/json"},
         )
         data = json.loads(resp.text)
@@ -426,13 +668,13 @@ async def edit(body: CharacterGenerateRequest):
 @router.post("/extract-attributes", response_model=AttributeResponse)
 async def extract_attributes(body: AttributeRequest):
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(_pool, _do_extract_attributes, body.description)
+    return await loop.run_in_executor(_pool, _do_extract_attributes, body.description, body.image_b64)
 
 
 @router.post("/enhance", response_model=RandomizeFullResponse)
-async def enhance(body: TextRequest):
+async def enhance(body: CharacterContextRequest):
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(_pool, _do_enhance, body.text)
+    return await loop.run_in_executor(_pool, _do_enhance, body.description, body)
 
 
 @router.post("/randomize", response_model=TextResponse)
@@ -442,6 +684,6 @@ async def randomize():
 
 
 @router.post("/randomize-full", response_model=RandomizeFullResponse)
-async def randomize_full():
+async def randomize_full(body: CharacterContextRequest):
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(_pool, _do_randomize_full)
+    return await loop.run_in_executor(_pool, _do_randomize_full, body)

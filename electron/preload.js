@@ -1,5 +1,38 @@
-const { contextBridge } = require("electron");
+const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
   platform: process.platform,
+
+  // Pull: renderer asks main for clipboard image (used by context-menu Paste button)
+  readClipboardImage: () => ipcRenderer.invoke("clipboard:readImage"),
+
+  // Push: main tells renderer an image was pasted via Ctrl+V
+  onPasteImage: (callback) => {
+    const handler = (_event, dataUrl) => callback(dataUrl);
+    ipcRenderer.on("clipboard:paste-image", handler);
+    return () => ipcRenderer.removeListener("clipboard:paste-image", handler);
+  },
+
+  // Session: save collected state to file via native dialog
+  saveSession: (data) => ipcRenderer.invoke("session:save", data),
+
+  // Session: main requests renderer to collect & save state
+  onRequestSave: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("session:request-save", handler);
+    return () => ipcRenderer.removeListener("session:request-save", handler);
+  },
+
+  // Session: main sends loaded session data to renderer
+  onSessionLoaded: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on("session:loaded", handler);
+    return () => ipcRenderer.removeListener("session:loaded", handler);
+  },
+
+  // Menu actions triggered from renderer
+  menuOpenSession: () => ipcRenderer.invoke("menu:open-session"),
+  menuSetSaveFolder: () => ipcRenderer.invoke("menu:set-save-folder"),
+  menuResetSaveFolder: () => ipcRenderer.invoke("menu:reset-save-folder"),
+  menuResetApp: () => ipcRenderer.invoke("menu:reset-app"),
 });
