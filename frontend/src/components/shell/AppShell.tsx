@@ -3,8 +3,11 @@ import { Sidebar } from "./Sidebar";
 import { StatusBar } from "./StatusBar";
 import { SettingsPanel } from "./SettingsPanel";
 import { ConsolePanel } from "@/components/shared/ConsolePanel";
+import { AudioSettingsModal } from "@/components/shared/AudioSettingsModal";
 import { useWebSocket } from "@/hooks/useApi";
 import { useSessionContext } from "@/hooks/SessionContext";
+import { useVoiceToText } from "@/hooks/useVoiceToText";
+import { useShortcuts } from "@/hooks/useShortcuts";
 import type { PageId } from "@/app";
 
 interface AppShellProps {
@@ -144,7 +147,10 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [audioSettingsOpen, setAudioSettingsOpen] = useState(false);
   const { triggerSave, triggerOpen } = useSessionContext();
+  const voice = useVoiceToText();
+  const { registerAction, unregisterAction } = useShortcuts();
 
   const onWsMessage = useCallback(
     (msg: { type: string; data: Record<string, unknown> }) => {
@@ -157,24 +163,22 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
 
   useWebSocket(onWsMessage);
 
+  // Register global & navigation shortcuts via the shortcuts system
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === "`") {
-        e.preventDefault();
-        setConsoleOpen((prev) => !prev);
+    registerAction("openSettings", () => setSettingsOpen((p) => !p));
+    registerAction("toggleConsole", () => setConsoleOpen((p) => !p));
+    registerAction("saveSession", () => triggerSave());
+    registerAction("openSession", () => triggerOpen());
+    registerAction("navGenerate", () => onNavigate("gemini"));
+    registerAction("navMultiview", () => onNavigate("multiview"));
+    registerAction("navCharacter", () => onNavigate("character"));
+    registerAction("navWeapon", () => onNavigate("weapon"));
+    return () => {
+      for (const id of ["openSettings", "toggleConsole", "saveSession", "openSession", "navGenerate", "navMultiview", "navCharacter", "navWeapon"]) {
+        unregisterAction(id);
       }
-      if (e.ctrlKey && e.key === ",") {
-        e.preventDefault();
-        setSettingsOpen((prev) => !prev);
-      }
-      if (e.ctrlKey && e.key === "1") { e.preventDefault(); onNavigate("gemini"); }
-      if (e.ctrlKey && e.key === "2") { e.preventDefault(); onNavigate("multiview"); }
-      if (e.ctrlKey && e.key === "3") { e.preventDefault(); onNavigate("character"); }
-      if (e.ctrlKey && e.key === "4") { e.preventDefault(); onNavigate("weapon"); }
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onNavigate]);
+  }, [registerAction, unregisterAction, onNavigate, triggerSave, triggerOpen]);
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -205,8 +209,12 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
             { label: "Save Session", shortcut: "Ctrl+S", onClick: () => triggerSave() },
             { label: "Open Session", shortcut: "Ctrl+O", onClick: () => triggerOpen() },
             { separator: true },
+            { label: "Audio Settings...", onClick: () => setAudioSettingsOpen(true) },
+            { separator: true },
             { label: "Set Save Folder...", onClick: () => window.electronAPI?.menuSetSaveFolder() },
             { label: "Reset Save Folder to Default", onClick: () => window.electronAPI?.menuResetSaveFolder() },
+            { separator: true },
+            { label: "Show Console View", onClick: () => window.electronAPI?.menuShowConsole() },
             { separator: true },
             { label: "Reset App", onClick: () => window.electronAPI?.menuResetApp() },
           ]} />
@@ -220,6 +228,23 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
             { label: "Select All", shortcut: "Ctrl+A", onClick: () => document.execCommand("selectAll") },
           ]} />
           <TemplateDropdown />
+
+          {/* Voice-to-text button — onMouseDown preventDefault keeps focus in the active text field */}
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => voice.toggle()}
+            className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded cursor-pointer font-medium${voice.active ? " voice-recording-indicator" : ""}`}
+            style={{
+              background: voice.active ? "rgba(224, 80, 80, 0.15)" : "transparent",
+              border: voice.active ? "1px solid rgba(224, 80, 80, 0.4)" : "1px solid transparent",
+              color: voice.active ? "#e05050" : "var(--color-text-secondary)",
+            }}
+            title={voice.active ? "Voice recording is active — click to stop" : "Start voice-to-text — click into a text field and speak to dictate"}
+          >
+            {voice.active && <span className="voice-recording-dot" />}
+            {!voice.active && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>}
+            {voice.active ? "Voice Recording Active" : "Voice to Text"}
+          </button>
         </div>
         <main
           className="flex-1 overflow-hidden relative"
@@ -239,6 +264,7 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
       </div>
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <ConsolePanel open={consoleOpen} onClose={() => setConsoleOpen(false)} />
+      <AudioSettingsModal open={audioSettingsOpen} onClose={() => setAudioSettingsOpen(false)} />
     </div>
   );
 }

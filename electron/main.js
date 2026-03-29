@@ -5,6 +5,8 @@ const fs = require("fs");
 
 let mainWindow = null;
 let pythonProcess = null;
+let consoleWindow = null;
+const consoleLogs = [];
 
 const PYTHON_PORT = parseInt(process.env.MADISON_API_PORT || "8420", 10);
 const VITE_DEV_URL = process.env.VITE_DEV_SERVER_URL || "";
@@ -38,15 +40,20 @@ function startPythonBackend() {
   });
 
   pythonProcess.stdout.on("data", (data) => {
-    console.log(`[Python] ${data.toString().trim()}`);
+    const line = data.toString().trim();
+    console.log(`[Python] ${line}`);
+    pushConsoleLog("info", line);
   });
 
   pythonProcess.stderr.on("data", (data) => {
-    console.error(`[Python] ${data.toString().trim()}`);
+    const line = data.toString().trim();
+    console.error(`[Python] ${line}`);
+    pushConsoleLog("error", line);
   });
 
   pythonProcess.on("close", (code) => {
     console.log(`[Python] exited with code ${code}`);
+    pushConsoleLog("info", `[Python] Process exited with code ${code}`);
     pythonProcess = null;
   });
 }
@@ -90,6 +97,95 @@ function readClipboardImageDataUrl() {
     console.error("[Clipboard] readImage error:", err);
     return null;
   }
+}
+
+function pushConsoleLog(level, text) {
+  const entry = { time: new Date().toLocaleTimeString(), level, text };
+  consoleLogs.push(entry);
+  if (consoleLogs.length > 5000) consoleLogs.splice(0, consoleLogs.length - 4000);
+  if (consoleWindow && !consoleWindow.isDestroyed()) {
+    consoleWindow.webContents.send("console:log", entry);
+  }
+}
+
+function openConsoleWindow() {
+  if (consoleWindow && !consoleWindow.isDestroyed()) {
+    consoleWindow.focus();
+    return;
+  }
+  consoleWindow = new BrowserWindow({
+    width: 900,
+    height: 600,
+    title: "Madison AI Suite — Console",
+    backgroundColor: "#1e1e1e",
+    autoHideMenuBar: true,
+    webPreferences: { contextIsolation: false, nodeIntegration: true },
+  });
+
+  const html = `<!DOCTYPE html>
+<html><head><style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#1e1e1e; color:#d4d4d4; font-family:'Consolas','Courier New',monospace; font-size:12px; display:flex; flex-direction:column; height:100vh; }
+  #toolbar { display:flex; align-items:center; gap:8px; padding:6px 12px; background:#2d2d2d; border-bottom:1px solid #444; flex-shrink:0; }
+  #toolbar button { background:#3c3c3c; color:#ccc; border:1px solid #555; padding:4px 12px; border-radius:3px; cursor:pointer; font-size:11px; }
+  #toolbar button:hover { background:#4a4a4a; }
+  #toolbar span { color:#888; font-size:11px; margin-left:auto; }
+  #logs { flex:1; overflow-y:auto; padding:8px 12px; white-space:pre-wrap; word-break:break-all; }
+  .log-line { line-height:1.6; }
+  .time { color:#666; margin-right:8px; }
+  .error { color:#f48771; }
+  .info { color:#d4d4d4; }
+</style></head><body>
+  <div id="toolbar">
+    <button id="copyBtn">Copy All Text</button>
+    <button id="clearBtn">Clear</button>
+    <span id="count">0 lines</span>
+  </div>
+  <div id="logs"></div>
+  <script>
+    const {ipcRenderer} = require('electron');
+    const logsEl = document.getElementById('logs');
+    const countEl = document.getElementById('count');
+    let lineCount = 0;
+
+    function addLine(entry) {
+      const div = document.createElement('div');
+      div.className = 'log-line';
+      div.innerHTML = '<span class="time">[' + entry.time + ']</span><span class="' + entry.level + '">' +
+        entry.text.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</span>';
+      logsEl.appendChild(div);
+      lineCount++;
+      countEl.textContent = lineCount + ' lines';
+      logsEl.scrollTop = logsEl.scrollHeight;
+    }
+
+    ipcRenderer.on('console:log', (_e, entry) => addLine(entry));
+    ipcRenderer.on('console:init', (_e, entries) => { entries.forEach(addLine); });
+
+    document.getElementById('copyBtn').addEventListener('click', () => {
+      const lines = [];
+      logsEl.querySelectorAll('.log-line').forEach(el => lines.push(el.textContent));
+      navigator.clipboard.writeText(lines.join('\\n')).then(() => {
+        document.getElementById('copyBtn').textContent = 'Copied!';
+        setTimeout(() => { document.getElementById('copyBtn').textContent = 'Copy All Text'; }, 1500);
+      });
+    });
+
+    document.getElementById('clearBtn').addEventListener('click', () => {
+      logsEl.innerHTML = '';
+      lineCount = 0;
+      countEl.textContent = '0 lines';
+    });
+  </script>
+</body></html>`;
+
+  consoleWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
+
+  consoleWindow.webContents.on("did-finish-load", () => {
+    consoleWindow.webContents.send("console:init", consoleLogs);
+  });
+
+  consoleWindow.on("closed", () => { consoleWindow = null; });
 }
 
 function createWindow() {
@@ -238,6 +334,11 @@ function createWindow() {
     mainWindow.webContents.openDevTools({ mode: "detach" });
   }
 
+  mainWindow.webContents.on("console-message", (_e, level, message) => {
+    const lvl = level >= 2 ? "error" : "info";
+    pushConsoleLog(lvl, `[Renderer] ${message}`);
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -298,6 +399,10 @@ ipcMain.handle("menu:reset-save-folder", async () => {
   } catch (err) {
     console.error("[SaveFolder] Failed to reset:", err);
   }
+});
+
+ipcMain.handle("menu:show-console", () => {
+  openConsoleWindow();
 });
 
 ipcMain.handle("menu:reset-app", () => {

@@ -9,19 +9,33 @@ function getBackendBase(): string {
 
 const BACKEND = getBackendBase();
 
+const _activeControllers = new Set<AbortController>();
+
+export function cancelAllRequests(): void {
+  for (const c of _activeControllers) c.abort();
+  _activeControllers.clear();
+}
+
 export async function apiFetch<T = unknown>(
   path: string,
   options?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(`${BACKEND}/api${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status}: ${text}`);
+  const controller = new AbortController();
+  _activeControllers.add(controller);
+  try {
+    const res = await fetch(`${BACKEND}/api${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`${res.status}: ${text}`);
+    }
+    return res.json();
+  } finally {
+    _activeControllers.delete(controller);
   }
-  return res.json();
 }
 
 export function useApiPost<TReq, TRes>(path: string) {

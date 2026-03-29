@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 
   // Menu actions triggered from renderer
+  menuShowConsole: () => ipcRenderer.invoke("menu:show-console"),
   menuOpenSession: () => ipcRenderer.invoke("menu:open-session"),
   menuSetSaveFolder: () => ipcRenderer.invoke("menu:set-save-folder"),
   menuResetSaveFolder: () => ipcRenderer.invoke("menu:reset-save-folder"),

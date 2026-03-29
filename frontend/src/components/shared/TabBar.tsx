@@ -52,6 +52,7 @@ interface GroupedTabBarProps {
   onAddRef?: () => void;
   onRemoveTab?: (tabId: string) => void;
   onEditTabPrompt?: (tabId: string, newPrompt: string) => void;
+  noBorder?: boolean;
 }
 
 const GROUP_BG: Record<string, string> = {
@@ -60,7 +61,7 @@ const GROUP_BG: Record<string, string> = {
   refs: "rgba(0,0,0,0.08)",
 };
 
-export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, onEditTabPrompt }: GroupedTabBarProps) {
+export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, onEditTabPrompt, noBorder }: GroupedTabBarProps) {
   const groups: ("stage" | "views" | "refs")[] = ["stage", "views", "refs"];
 
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
@@ -105,7 +106,7 @@ export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, o
     <>
       <div
         className="flex items-end gap-0 shrink-0 overflow-x-auto"
-        style={{ background: "var(--color-background)", borderBottom: "1px solid var(--color-border)", paddingTop: 4 }}
+        style={{ background: noBorder ? "transparent" : "var(--color-background)", borderBottom: noBorder ? "none" : "1px solid var(--color-border)", paddingTop: noBorder ? 0 : 4 }}
       >
         {groups.map((group, gi) => {
           const groupTabs = tabs.filter((t) => t.group === group);

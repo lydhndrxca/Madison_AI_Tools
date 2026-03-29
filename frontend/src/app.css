@@ -104,6 +104,25 @@ main > * {
   z-index: 1;
 }
 
+/* Voice-to-text recording indicator */
+@keyframes recording-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px 1px rgba(224, 80, 80, 0.5); }
+  50% { opacity: 0.3; box-shadow: 0 0 8px 3px rgba(224, 80, 80, 0.8); }
+}
+
+.voice-recording-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e05050;
+  animation: recording-pulse 1s ease-in-out infinite;
+}
+
+.voice-recording-indicator:hover .voice-recording-dot {
+  background: #ff6060;
+}
+
 /* Draggable section feedback */
 [draggable="true"] {
   transition: opacity 0.15s ease, box-shadow 0.15s ease;

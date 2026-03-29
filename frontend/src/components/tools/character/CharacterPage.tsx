@@ -5,7 +5,7 @@ import { ImageViewer } from "@/components/shared/ImageViewer";
 import { EditHistory } from "@/components/shared/EditHistory";
 import { GroupedTabBar } from "@/components/shared/TabBar";
 import type { TabDef } from "@/components/shared/TabBar";
-import { apiFetch } from "@/hooks/useApi";
+import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
 import { useSessionRegister, useSessionContext } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
@@ -13,6 +13,7 @@ import { createHistoryEntry, pushHistory, clearHistory as clearHist, createImage
 import type { HistoryEntry, ImageRecord, HistorySettings } from "@/lib/imageHistory";
 import { XmlModal } from "@/components/shared/XmlModal";
 import { GripVertical, ChevronDown, ChevronRight, Save, Lock, Unlock } from "lucide-react";
+import { useShortcuts } from "@/hooks/useShortcuts";
 
 // ---------------------------------------------------------------------------
 // Tab model
@@ -283,7 +284,8 @@ function useBusySet() {
   const is = useCallback((key: string) => set.has(key), [set]);
   const start = useCallback((key: string) => setSet((prev) => new Set(prev).add(key)), []);
   const end = useCallback((key: string) => setSet((prev) => { const n = new Set(prev); n.delete(key); return n; }), []);
-  return { is, start, end, any: set.size > 0 };
+  const endAll = useCallback(() => setSet(new Set()), []);
+  return { is, start, end, endAll, any: set.size > 0 };
 }
 
 function tagsToPromptList(tags: TagItem[]): string {
@@ -442,10 +444,10 @@ function buildEnvBrief(env: EnvironmentPlacementState): string {
 // Layout system — section ordering + collapse state persistence
 // ---------------------------------------------------------------------------
 
-type SectionId = "identity" | "generate" | "attributes" | "bible" | "costume" | "styleFusion" | "envPlacement" | "preservation" | "multiview" | "saveOptions";
+type SectionId = "identity" | "generate" | "attributes" | "bible" | "costume" | "styleFusion" | "envPlacement" | "preservation" | "upscaleRestore" | "multiview" | "saveOptions";
 
 const DEFAULT_SECTION_ORDER: SectionId[] = [
-  "generate", "identity", "attributes", "bible", "costume", "styleFusion", "envPlacement", "preservation", "multiview", "saveOptions",
+  "generate", "identity", "attributes", "bible", "costume", "styleFusion", "envPlacement", "preservation", "upscaleRestore", "multiview", "saveOptions",
 ];
 
 const SECTION_LABELS: Record<SectionId, string> = {
@@ -457,6 +459,7 @@ const SECTION_LABELS: Record<SectionId, string> = {
   styleFusion: "Style Fusion",
   envPlacement: "Environment Placement",
   preservation: "Preservation Lock",
+  upscaleRestore: "AI Upscale & Restore",
   multiview: "Multi-View Generation",
   saveOptions: "Save Options",
 };
@@ -470,6 +473,7 @@ const SECTION_TIPS: Record<SectionId, string> = {
   styleFusion: "Blend two different style influences together. Great for unique, hybrid looks.",
   envPlacement: "Place your character in a real environment instead of a flat background. Set location, lighting, camera, and more.",
   preservation: "Lock specific traits so the AI keeps them when regenerating. Set things it must never include.",
+  upscaleRestore: "Make images bigger and sharper (Upscale) or fix AI artifacts and blur (Restore). Only affects images when you hit Generate here.",
   multiview: "Generate consistent front, back, and side views of your character.",
   saveOptions: "Save images, send to Photoshop, export XML, or clear your session.",
 };
@@ -537,7 +541,7 @@ function loadDefaultLayout(): LayoutState {
       return { order, collapsed: parsed.collapsed ?? {} };
     }
   } catch {}
-  return { order: [...DEFAULT_SECTION_ORDER], collapsed: { styleFusion: true, envPlacement: true, preservation: true, multiview: true, saveOptions: true } };
+  return { order: [...DEFAULT_SECTION_ORDER], collapsed: { styleFusion: true, envPlacement: true, preservation: true, upscaleRestore: true, multiview: true, saveOptions: true } };
 }
 
 export function CharacterPage() {
@@ -586,8 +590,9 @@ export function CharacterPage() {
     setSectionsOpen((prev) => ({ ...prev, [key]: val }));
   }, []);
 
-  const [lockedSections, setLockedSections] = useState({ identity: false, attributes: false, bible: false, costume: false });
-  const toggleLock = useCallback((key: "identity" | "attributes" | "bible" | "costume", val: boolean) => {
+  const [lockedSections, setLockedSections] = useState({ identity: false, attributes: false, bible: false, costume: false, styleFusion: false, envPlacement: false, preservation: false });
+  type LockableSection = keyof typeof lockedSections;
+  const toggleLock = useCallback((key: LockableSection, val: boolean) => {
     setLockedSections((prev) => ({ ...prev, [key]: val }));
   }, []);
 
@@ -609,6 +614,14 @@ export function CharacterPage() {
 
   // Extract mode — controls whether generation uses the source image as visual reference
   const [extractMode, setExtractMode] = useState<"inspiration" | "recreate">("inspiration");
+
+  // AI Upscale & Restore state
+  const [urMode, setUrMode] = useState<"upscale" | "restore">("upscale");
+  const [urScale, setUrScale] = useState<"x2" | "x3" | "x4">("x2");
+  const [urContext, setUrContext] = useState("");
+  const [urModelId, setUrModelId] = useState("");
+  const [urImages, setUrImages] = useState<string[]>([]);
+  const urFileRef = useRef<HTMLInputElement>(null);
 
   // Section ON/OFF — controls whether section data is included in prompts
   const [sectionEnabled, setSectionEnabled] = useState<Partial<Record<SectionId, boolean>>>({ identity: true, attributes: true });
@@ -984,32 +997,36 @@ export function CharacterPage() {
     const bibleCtx = isSectionEnabled("bible") ? bibleToCostumeContext(bible) : "";
     const costumeCtx = isSectionEnabled("costume") ? costumeToContext(costume) : "";
     const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
-    for (let i = 0; i < total; i++) {
-      setGenText((p) => ({ ...p, generate: total > 1 ? `Generating ${i + 1} of ${total}...` : "Generating character..." }));
-      try {
-        const mainRef = extractMode === "recreate" ? getMainImageB64() : null;
-        const resp = await apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
-          "/character/generate", {
-            method: "POST",
-            body: JSON.stringify({
-              description: desc,
-              age: identityOn ? age : "", race: identityOn ? race : "",
-              gender: identityOn ? gender : "", build: identityOn ? build : "",
-              view_type: "main", mode: "quality",
-              model_id: modelId || undefined,
-              bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
-              fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
-              lock_constraints: lockCtx || undefined,
-              reference_image_b64: mainRef || undefined,
-              recreate_mode: extractMode === "recreate",
-            }),
-          },
-        );
-        if (resp.image_b64) {
-          const src = `data:image/png;base64,${resp.image_b64}`;
-          if (i === 0) { setTabImage("main", src, "Initial generation"); } else { appendToGallery("main", src, `Generation ${i + 1}`); }
-        } else if (resp.error) { addToast(resp.error, "error"); break; }
-      } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); break; }
+    const mainRef = extractMode === "recreate" ? getMainImageB64() : null;
+    setGenText((p) => ({ ...p, generate: total > 1 ? `Generating ${total} images...` : "Generating character..." }));
+    const promises = Array.from({ length: total }, (_, i) =>
+      apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
+        "/character/generate", {
+          method: "POST",
+          body: JSON.stringify({
+            description: desc,
+            age: identityOn ? age : "", race: identityOn ? race : "",
+            gender: identityOn ? gender : "", build: identityOn ? build : "",
+            view_type: "main", mode: "quality",
+            model_id: modelId || undefined,
+            bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+            fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+            lock_constraints: lockCtx || undefined,
+            reference_image_b64: mainRef || undefined,
+            recreate_mode: extractMode === "recreate",
+          }),
+        },
+      ).then((resp) => ({ ok: true as const, resp, idx: i }))
+       .catch((e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e), idx: i })),
+    );
+    const results = await Promise.all(promises);
+    for (const r of results.sort((a, b) => a.idx - b.idx)) {
+      if (r.ok && r.resp.image_b64) {
+        const src = `data:image/png;base64,${r.resp.image_b64}`;
+        if (r.idx === 0) setTabImage("main", src, "Initial generation");
+        else appendToGallery("main", src, `Generation ${r.idx + 1}`);
+      } else if (r.ok && r.resp.error) { addToast(r.resp.error, "error"); }
+      else if (!r.ok) { addToast(r.error, "error"); }
     }
     addToast(total > 1 ? `Generated ${total} images` : "Character generated", "success");
     busy.end("generate");
@@ -1196,23 +1213,26 @@ export function CharacterPage() {
     const costumeCtx = isSectionEnabled("costume") ? costumeToContext(costume) : "";
     const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
     const extra = getExtraContext();
-    for (const view of ["front", "back", "side"]) {
-      setGenText((p) => ({ ...p, allviews: `Generating ${view}...` }));
-      try {
-        const resp = await apiFetch<{ image_b64: string | null; width: number; height: number }>("/character/generate", {
-          method: "POST",
-          body: JSON.stringify({
-            description: desc, age: identityOn ? age : "", race: identityOn ? race : "",
-            gender: identityOn ? gender : "", build: identityOn ? build : "",
-            view_type: view, reference_image_b64: mainB64,
-            mode: "quality", model_id: modelId || undefined,
-            bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
-            fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
-            lock_constraints: lockCtx || undefined,
-          }),
-        });
-        if (resp.image_b64) setTabImage(view, `data:image/png;base64,${resp.image_b64}`, `${view} view`);
-      } catch { break; }
+    const views = ["3/4", "front", "back", "side"];
+    setGenText((p) => ({ ...p, allviews: "Generating all views..." }));
+    const promises = views.map((view) =>
+      apiFetch<{ image_b64: string | null; width: number; height: number }>("/character/generate", {
+        method: "POST",
+        body: JSON.stringify({
+          description: desc, age: identityOn ? age : "", race: identityOn ? race : "",
+          gender: identityOn ? gender : "", build: identityOn ? build : "",
+          view_type: VIEW_TYPE_MAP[view] || view, reference_image_b64: mainB64,
+          mode: "quality", model_id: modelId || undefined,
+          bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+          fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+          lock_constraints: lockCtx || undefined,
+        }),
+      }).then((resp) => ({ ok: true as const, resp, view }))
+        .catch(() => ({ ok: false as const, resp: null, view })),
+    );
+    const results = await Promise.all(promises);
+    for (const r of results) {
+      if (r.ok && r.resp?.image_b64) setTabImage(r.view, `data:image/png;base64,${r.resp.image_b64}`, `${r.view} view`);
     }
     busy.end("allviews");
   }, [description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, modelId, setTabImage, busy]);
@@ -1231,29 +1251,31 @@ export function CharacterPage() {
     const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
     const extra = getExtraContext();
     const total = viewGenCount;
-    for (let i = 0; i < total; i++) {
-      setGenText((p) => ({ ...p, selview: total > 1 ? `Generating ${activeTabDef.label} (${i + 1}/${total})...` : `Generating ${activeTabDef.label}...` }));
-      try {
-        const promptOverride = activeTabDef.prompt ? ` Specifically: ${activeTabDef.prompt}` : "";
-        const resp = await apiFetch<{ image_b64: string | null; width: number; height: number }>("/character/generate", {
-          method: "POST",
-          body: JSON.stringify({
-            description: desc + promptOverride,
-            age: identityOn ? age : "", race: identityOn ? race : "",
-            gender: identityOn ? gender : "", build: identityOn ? build : "",
-            view_type: viewType, reference_image_b64: mainB64,
-            mode: "quality", model_id: modelId || undefined,
-            bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
-            fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
-            lock_constraints: lockCtx || undefined,
-          }),
-        });
-        if (resp.image_b64) {
-          const src = `data:image/png;base64,${resp.image_b64}`;
-          if (i === 0) setTabImage(activeTab, src, `${activeTabDef.label} view`);
-          else appendToGallery(activeTab, src, `${activeTabDef.label} #${i + 1}`);
-        }
-      } catch { break; }
+    const promptOverride = activeTabDef.prompt ? ` Specifically: ${activeTabDef.prompt}` : "";
+    setGenText((p) => ({ ...p, selview: total > 1 ? `Generating ${total} ${activeTabDef.label} views...` : `Generating ${activeTabDef.label}...` }));
+    const promises = Array.from({ length: total }, (_, i) =>
+      apiFetch<{ image_b64: string | null; width: number; height: number }>("/character/generate", {
+        method: "POST",
+        body: JSON.stringify({
+          description: desc + promptOverride,
+          age: identityOn ? age : "", race: identityOn ? race : "",
+          gender: identityOn ? gender : "", build: identityOn ? build : "",
+          view_type: viewType, reference_image_b64: mainB64,
+          mode: "quality", model_id: modelId || undefined,
+          bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+          fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+          lock_constraints: lockCtx || undefined,
+        }),
+      }).then((resp) => ({ ok: true as const, resp, idx: i }))
+        .catch(() => ({ ok: false as const, resp: null, idx: i })),
+    );
+    const results = await Promise.all(promises);
+    for (const r of results.sort((a, b) => a.idx - b.idx)) {
+      if (r.ok && r.resp?.image_b64) {
+        const src = `data:image/png;base64,${r.resp.image_b64}`;
+        if (r.idx === 0) setTabImage(activeTab, src, `${activeTabDef.label} view`);
+        else appendToGallery(activeTab, src, `${activeTabDef.label} #${r.idx + 1}`);
+      }
     }
     busy.end("selview");
   }, [description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, modelId, activeTab, activeTabDef, viewGenCount, setTabImage, appendToGallery, busy]);
@@ -1281,9 +1303,46 @@ export function CharacterPage() {
     return parts.join("\n\n");
   }, [costume, bible, isSectionEnabled, getExtraContext]);
 
+  // --- AI Upscale & Restore handler ---
+  const handleUpscaleRestoreGenerate = useCallback(async () => {
+    const busyKey = urMode === "upscale" ? "upscale" : "restore";
+    busy.start(busyKey);
+    const endpoint = urMode === "upscale" ? "/character/upscale" : "/character/restore";
+    const images = urImages.length > 0 ? [...urImages] : [getMainImageB64()].filter(Boolean) as string[];
+    if (images.length === 0) {
+      addToast("No images to process — add images or generate one on Main Stage first", "error");
+      busy.end(busyKey);
+      return;
+    }
+    const label = urMode === "upscale" ? "Upscaled" : "Restored";
+    setGenText((p) => ({ ...p, [busyKey]: images.length > 1 ? `Processing ${images.length} images...` : "Processing..." }));
+    const promises = images.map((img, i) => {
+      const raw = img.replace(/^data:image\/[^;]+;base64,/, "");
+      const body: Record<string, unknown> = { image_b64: raw, model_id: urModelId || undefined };
+      if (urMode === "upscale") body.scale_factor = urScale;
+      if (urContext.trim()) body.context = urContext.trim();
+      return apiFetch<{ image_b64?: string; width?: number; height?: number; error?: string }>(endpoint, { method: "POST", body: JSON.stringify(body) })
+        .then((resp) => ({ ok: true as const, resp, idx: i }))
+        .catch((err) => ({ ok: false as const, error: err instanceof Error ? err.message : String(err), idx: i }));
+    });
+    const results = await Promise.all(promises);
+    for (const r of results.sort((a, b) => a.idx - b.idx)) {
+      if (r.ok && r.resp.error) { addToast(r.resp.error, "error"); continue; }
+      if (r.ok && r.resp.image_b64) {
+        const src = `data:image/png;base64,${r.resp.image_b64}`;
+        if (r.idx === 0) setTabImage("main", src, `${label} image`);
+        else appendToGallery("main", src, `${label} #${r.idx + 1}`);
+      } else if (!r.ok) { addToast(`Failed on image ${r.idx + 1}: ${r.error}`, "error"); }
+    }
+    setGenText((p) => { const next = { ...p }; delete next[busyKey]; return next; });
+    busy.end(busyKey);
+  }, [urMode, urScale, urContext, urModelId, urImages, getMainImageB64, setTabImage, appendToGallery, addToast, busy]);
+
   const handleCancel = useCallback(async () => {
-    try { await apiFetch("/system/cancel", { method: "POST" }); } catch { /* */ }
-  }, []);
+    cancelAllRequests();
+    busy.endAll();
+    try { await fetch(`${window.location.protocol === "file:" ? "http://127.0.0.1:8420" : ""}/api/system/cancel`, { method: "POST" }); } catch { /* */ }
+  }, [busy]);
 
   const handleOpenImage = useCallback(() => fileInputRef.current?.click(), []);
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1487,6 +1546,45 @@ export function CharacterPage() {
 
   const modelOptions = models.map((m) => ({ value: m.id, label: `${m.label} — ${m.resolution} (${m.time_estimate})` }));
 
+  // --- Character Lab keyboard shortcuts ---
+  const { registerAction: regCharAction, unregisterAction: unregCharAction } = useShortcuts();
+  const charHandlersRef = useRef({
+    generate: handleGenerate,
+    quickGen: handleQuickGenerate,
+    allViews: handleGenerateAllViews,
+    extract: handleExtractAttributes,
+    enhance: handleEnhance,
+    randomize: handleRandomize,
+    showXml: () => setShowXml(true),
+    sendPS: handleSendToPS,
+  });
+  charHandlersRef.current = {
+    generate: handleGenerate,
+    quickGen: handleQuickGenerate,
+    allViews: handleGenerateAllViews,
+    extract: handleExtractAttributes,
+    enhance: handleEnhance,
+    randomize: handleRandomize,
+    showXml: () => setShowXml(true),
+    sendPS: handleSendToPS,
+  };
+
+  useEffect(() => {
+    regCharAction("charGenerate", () => charHandlersRef.current.generate());
+    regCharAction("charQuickGen", () => charHandlersRef.current.quickGen());
+    regCharAction("charAllViews", () => charHandlersRef.current.allViews());
+    regCharAction("charExtract", () => charHandlersRef.current.extract());
+    regCharAction("charEnhance", () => charHandlersRef.current.enhance());
+    regCharAction("charRandomize", () => charHandlersRef.current.randomize());
+    regCharAction("charShowXml", () => charHandlersRef.current.showXml());
+    regCharAction("charSendPS", () => charHandlersRef.current.sendPS());
+    return () => {
+      for (const id of ["charGenerate", "charQuickGen", "charAllViews", "charExtract", "charEnhance", "charRandomize", "charShowXml", "charSendPS"]) {
+        unregCharAction(id);
+      }
+    };
+  }, [regCharAction, unregCharAction]);
+
   // --- Session save/load ---
   useSessionRegister(
     "character",
@@ -1494,7 +1592,7 @@ export function CharacterPage() {
       tabs, activeTab, gallery, imageIdx, description, editPrompt,
       age, race, gender, build, attributes, bible, costume,
       prodStylePresets, tonePresets, costumeStylePresets, materialPresets, hwDetailPresets, originPresets,
-      sectionsOpen, lockedSections, sectionEnabled, extractTargets, extractMode, styleFusion, envPlacement, styleLibraryFolder, genCount, viewGenCount, modelId,
+      sectionsOpen, lockedSections, sectionEnabled, extractTargets, extractMode, styleFusion, envPlacement, styleLibraryFolder, genCount, viewGenCount, modelId, urMode, urScale, urContext, urModelId,
     }),
     (s: unknown) => {
       if (s === null) {
@@ -1503,7 +1601,7 @@ export function CharacterPage() {
         setAttributes(Object.fromEntries(ATTRIBUTE_FIELDS.map((f) => [f, { dropdown: f === "Pose" ? "A pose" : "", custom: "" }])));
         setBible({ ...EMPTY_BIBLE }); setCostume({ ...EMPTY_COSTUME });
         setSectionsOpen({ attributes: true, bible: false, costume: false });
-        setLockedSections({ identity: false, attributes: false, bible: false, costume: false });
+        setLockedSections({ identity: false, attributes: false, bible: false, costume: false, styleFusion: false, envPlacement: false, preservation: false });
         setSectionEnabled({ identity: true, attributes: true });
         setExtractTargets({ identity: true, attributes: true, bible: false, costume: false, environment: false });
         setExtractMode("inspiration");
@@ -1545,6 +1643,10 @@ export function CharacterPage() {
       if (typeof d.genCount === "number") setGenCount(d.genCount);
       if (typeof d.viewGenCount === "number") setViewGenCount(d.viewGenCount);
       if (typeof d.modelId === "string") setModelId(d.modelId);
+      if (typeof d.urMode === "string") setUrMode(d.urMode as "upscale" | "restore");
+      if (typeof d.urScale === "string") setUrScale(d.urScale as "x2" | "x3" | "x4");
+      if (typeof d.urContext === "string") setUrContext(d.urContext);
+      if (typeof d.urModelId === "string") setUrModelId(d.urModelId);
     },
   );
 
@@ -1604,20 +1706,20 @@ export function CharacterPage() {
                     {label}
                   </span>
                 )}
-                {(sectionId === "identity" || sectionId === "attributes" || sectionId === "bible" || sectionId === "costume") && (
+                {(sectionId in lockedSections) && (
                   <span
                     role="button"
-                    onClick={() => toggleLock(sectionId as "identity" | "attributes" | "bible" | "costume", !lockedSections[sectionId as "identity" | "attributes" | "bible" | "costume"])}
+                    onClick={() => toggleLock(sectionId as LockableSection, !lockedSections[sectionId as LockableSection])}
                     className="inline-flex items-center justify-center w-5 h-5 rounded select-none cursor-pointer"
                     style={{
-                      background: lockedSections[sectionId as "identity" | "attributes" | "bible" | "costume"] ? "rgba(255,255,255,0.12)" : "transparent",
-                      color: lockedSections[sectionId as "identity" | "attributes" | "bible" | "costume"] ? "var(--color-text-secondary)" : "var(--color-text-muted)",
+                      background: lockedSections[sectionId as LockableSection] ? "rgba(255,255,255,0.12)" : "transparent",
+                      color: lockedSections[sectionId as LockableSection] ? "var(--color-text-secondary)" : "var(--color-text-muted)",
                     }}
-                    title={lockedSections[sectionId as "identity" | "attributes" | "bible" | "costume"]
+                    title={lockedSections[sectionId as LockableSection]
                       ? "Locked — AI won't change these fields when you Extract, Enhance, or Randomize. You can still edit them yourself."
                       : "Unlocked — AI can update these fields when you use Extract, Enhance, or Randomize."}
                   >
-                    {lockedSections[sectionId as "identity" | "attributes" | "bible" | "costume"]
+                    {lockedSections[sectionId as LockableSection]
                       ? <Lock className="h-3 w-3" />
                       : <Unlock className="h-3 w-3" />}
                   </span>
@@ -1657,19 +1759,19 @@ export function CharacterPage() {
 
           if (sectionId === "generate") return wrapSection(
             <>
+              <Button className="w-full" generating={busy.is("extract")} generatingText="Extracting..." onClick={handleExtractAttributes} title="Reads the image and/or description and fills in the sections you have checked below">Extract Attributes</Button>
               <div>
                 <select
                   className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
                   style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
                   value={extractMode}
                   onChange={(e) => setExtractMode(e.target.value as "inspiration" | "recreate")}
-                  title="Inspiration: uses only the extracted text info when generating. Recreate: also sends the source image so the AI matches the character's exact appearance."
+                  title="Controls how the source image is used when generating. 'Inspiration' extracts text details only. 'Exact Match' also sends the image so the AI recreates the character's exact look."
                 >
-                  <option value="inspiration">Use image as inspiration</option>
-                  <option value="recreate">Recreate image exactly</option>
+                  <option value="inspiration">Generate from description only</option>
+                  <option value="recreate">Match source image exactly</option>
                 </select>
               </div>
-              <Button className="w-full" generating={busy.is("extract")} generatingText="Extracting..." onClick={handleExtractAttributes} title="Reads the image and/or description and fills in the sections you have checked below">Extract Attributes</Button>
               <div className="flex flex-wrap gap-1 px-0.5">
                 {([
                   ["identity", "Identity"],
@@ -2198,6 +2300,154 @@ export function CharacterPage() {
             </div>
           );
 
+          if (sectionId === "upscaleRestore") return wrapSection(
+            <div className="space-y-2.5">
+              {/* Mode selector */}
+              <div className="flex gap-1.5">
+                {(["upscale", "restore"] as const).map((m) => (
+                  <button key={m} onClick={() => setUrMode(m)}
+                    className="flex-1 px-2 py-1.5 text-xs rounded cursor-pointer font-medium"
+                    style={{
+                      background: urMode === m ? "var(--color-accent)" : "var(--color-input-bg)",
+                      color: urMode === m ? "var(--color-foreground)" : "var(--color-text-muted)",
+                      border: `1px solid ${urMode === m ? "var(--color-accent)" : "var(--color-border)"}`,
+                    }}
+                  >{m === "upscale" ? "Upscale" : "Restore"}</button>
+                ))}
+              </div>
+              <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+                {urMode === "upscale"
+                  ? "Makes images bigger and sharper without changing content"
+                  : "Fixes AI artifacts, blur, and noise by redrawing the image cleanly"}
+              </p>
+
+              {/* Scale factor (upscale only) */}
+              {urMode === "upscale" && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs shrink-0" style={{ color: "var(--color-text-secondary)" }}>Scale:</span>
+                  <div className="flex gap-1">
+                    {(["x2", "x3", "x4"] as const).map((s) => (
+                      <button key={s} onClick={() => setUrScale(s)}
+                        className="px-2.5 py-0.5 text-[11px] rounded cursor-pointer"
+                        style={{
+                          background: urScale === s ? "var(--color-accent)" : "var(--color-input-bg)",
+                          color: urScale === s ? "var(--color-foreground)" : "var(--color-text-muted)",
+                          border: `1px solid ${urScale === s ? "var(--color-accent)" : "var(--color-border)"}`,
+                        }}
+                      >{s}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Context input */}
+              <input className="w-full px-2 py-1 text-xs" style={inputStyle}
+                placeholder="Optional context — e.g. pixel art icons, game UI screenshots"
+                value={urContext} onChange={(e) => setUrContext(e.target.value)}
+                title="Give the AI a hint about what kind of images these are for better results"
+              />
+
+              {/* Model selector */}
+              {modelOptions.length > 0 && (
+                <select className="w-full min-w-0 px-2 py-1 text-xs rounded-[var(--radius-sm)] truncate"
+                  style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)", maxWidth: "100%" }}
+                  value={urModelId} onChange={(e) => setUrModelId(e.target.value)}
+                  title="Choose which AI model to use for upscaling or restoring"
+                >
+                  <option value="">Auto (best available)</option>
+                  {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              )}
+
+              {/* Image input area */}
+              <div
+                className="rounded p-2 text-center"
+                style={{ border: "1px dashed var(--color-border)", background: "var(--color-input-bg)" }}
+                onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                onDrop={(e) => {
+                  e.preventDefault(); e.stopPropagation();
+                  Array.from(e.dataTransfer.files).forEach((file) => {
+                    if (!file.type.startsWith("image/")) return;
+                    const reader = new FileReader();
+                    reader.onload = () => setUrImages((prev) => [...prev, reader.result as string]);
+                    reader.readAsDataURL(file);
+                  });
+                }}
+              >
+                {urImages.length === 0 && (
+                  <p className="text-[10px] py-2" style={{ color: "var(--color-text-muted)" }}>
+                    Defaults to Main Stage image. Drag images here or click Add.
+                  </p>
+                )}
+                {urImages.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {urImages.map((src, i) => (
+                      <div key={i} className="relative group" style={{ width: 56, height: 56 }}>
+                        <img src={src} alt="" className="w-full h-full object-cover rounded" />
+                        <button
+                          onClick={() => setUrImages((prev) => prev.filter((_, j) => j !== i))}
+                          className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[10px] flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100"
+                          style={{ background: "var(--color-error)", color: "#fff" }}
+                          title="Remove this image"
+                        >×</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-1.5 justify-center">
+                  <input ref={urFileRef} type="file" accept="image/*" multiple className="hidden"
+                    onChange={(e) => {
+                      Array.from(e.target.files || []).forEach((file) => {
+                        const reader = new FileReader();
+                        reader.onload = () => setUrImages((prev) => [...prev, reader.result as string]);
+                        reader.readAsDataURL(file);
+                      });
+                      e.target.value = "";
+                    }}
+                  />
+                  <button onClick={() => urFileRef.current?.click()}
+                    className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
+                    style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
+                    title="Add images from your computer"
+                  >+ Add Images</button>
+                  <button onClick={async () => {
+                    try {
+                      const items = await navigator.clipboard.read();
+                      for (const item of items) {
+                        const imgType = item.types.find((t) => t.startsWith("image/"));
+                        if (imgType) {
+                          const blob = await item.getType(imgType);
+                          const reader = new FileReader();
+                          reader.onload = () => setUrImages((prev) => [...prev, reader.result as string]);
+                          reader.readAsDataURL(blob);
+                        }
+                      }
+                    } catch { addToast("Could not read clipboard", "info"); }
+                  }}
+                    className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
+                    style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
+                    title="Paste images from your clipboard"
+                  >Paste</button>
+                  {urImages.length > 0 && (
+                    <button onClick={() => setUrImages([])}
+                      className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
+                      style={{ background: "var(--color-input-bg)", color: "var(--color-text-muted)", border: "1px solid var(--color-border)" }}
+                      title="Remove all images"
+                    >Clear All</button>
+                  )}
+                </div>
+              </div>
+
+              {/* Generate button */}
+              <Button variant="primary" className="w-full" size="sm"
+                generating={busy.is("upscale") || busy.is("restore")}
+                generatingText={genText.upscale || genText.restore || "Processing..."}
+                onClick={handleUpscaleRestoreGenerate}
+                title={urMode === "upscale" ? "Upscale images — makes them bigger and sharper" : "Restore images — fixes AI artifacts and blur"}
+              >Generate</Button>
+            </div>
+          );
+
           if (sectionId === "multiview") return wrapSection(
             <div className="space-y-1.5">
               <Button className="w-full" size="sm" generating={busy.is("allviews")} generatingText={genText.allviews || "Generating views..."} onClick={handleGenerateAllViews} title="Generate front, back, and side views of your character all at once">Generate All Views</Button>
@@ -2293,21 +2543,23 @@ export function CharacterPage() {
 
       {/* Right Column - Image Viewer */}
       <div className="flex-1 flex flex-col min-w-0 relative">
-        <div className="flex items-center justify-between px-3 py-1.5 shrink-0" style={{ borderBottom: "1px solid var(--color-border)" }}>
-          <p className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>Character Concept</p>
-          <div className="flex items-center gap-2">
+        <div className="flex items-end shrink-0 relative" style={{ background: "var(--color-background)", borderBottom: "1px solid var(--color-border)", paddingTop: 4 }}>
+          <div className="flex-1 min-w-0 overflow-x-auto flex items-end">
+            <GroupedTabBar
+              tabs={tabs}
+              active={activeTab}
+              onSelect={setActiveTab}
+              onAddRef={handleAddRef}
+              onRemoveTab={handleRemoveRef}
+              onEditTabPrompt={handleEditTabPrompt}
+              noBorder
+            />
+          </div>
+          <div className="flex items-center gap-2 px-2 shrink-0" style={{ paddingBottom: 5 }}>
             {busy.any && <Button size="sm" variant="danger" onClick={handleCancel} title="Stop all running generations">Cancel</Button>}
             <Button size="sm" generating={busy.is("quickgen")} generatingText={genText.quickgen || "Generating..."} onClick={handleQuickGenerate} title="Quickly re-generate the current view using your existing settings — great for getting a new variation">Quick Generate</Button>
           </div>
         </div>
-        <GroupedTabBar
-          tabs={tabs}
-          active={activeTab}
-          onSelect={setActiveTab}
-          onAddRef={handleAddRef}
-          onRemoveTab={handleRemoveRef}
-          onEditTabPrompt={handleEditTabPrompt}
-        />
         <ImageViewer
           src={currentSrc}
           placeholder={`No ${activeTabDef?.label.toLowerCase() || "image"} loaded`}

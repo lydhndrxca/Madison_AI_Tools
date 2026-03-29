@@ -176,15 +176,12 @@ def _do_text_ai(prompt: str, image_b64: str | None) -> WeaponTextResponse:
         return WeaponTextResponse(error="No API key")
 
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-pro")
-        parts: list = []
         if image_b64:
-            parts.append(core.b64_to_image(image_b64))
-        parts.append(prompt)
-        resp = model.generate_content(parts)
-        return WeaponTextResponse(text=resp.text)
+            img = core.b64_to_image(image_b64)
+            result = core.rest_generate_text_multimodal(api_key, "gemini-2.0-flash", [img, prompt])
+        else:
+            result = core.rest_generate_text(api_key, "gemini-2.0-flash", prompt)
+        return WeaponTextResponse(text=result or "")
     except Exception as e:
         return WeaponTextResponse(error=str(e))
 

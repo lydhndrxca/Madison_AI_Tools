@@ -1,0 +1,179 @@
+"""Gallery endpoints: browse generated images on disk."""
+
+from __future__ import annotations
+
+import base64
+import io
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Optional
+
+from fastapi import APIRouter, Query
+from pydantic import BaseModel
+from PIL import Image
+
+from pubg_madison_ai_suite.api import core
+
+router = APIRouter()
+
+THUMB_SIZE = 200
+
+
+def _save_root() -> Path:
+    return Path(core.get_save_folder())
+
+
+@router.get("/tree")
+async def gallery_tree():
+    root = _save_root()
+    tools = []
+    if root.is_dir():
+        for tool_dir in sorted(root.iterdir()):
+            if not tool_dir.is_dir():
+                continue
+            dates = []
+            for date_dir in sorted(tool_dir.iterdir(), reverse=True):
+                if not date_dir.is_dir():
+                    continue
+                count = sum(1 for f in date_dir.iterdir() if f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"))
+                if count > 0:
+                    dates.append({"date": date_dir.name, "count": count})
+            if dates:
+                tools.append({"name": tool_dir.name, "dates": dates})
+    return {"root": str(root), "tools": tools}
+
+
+THUMB_DIR_NAME = ".thumbs"
+
+
+def _get_or_create_thumb(image_path: Path) -> tuple[str, int, int]:
+    """Return (thumb_b64, width, height). Caches thumbnail to a .thumbs/ dir."""
+    thumb_dir = image_path.parent / THUMB_DIR_NAME
+    thumb_file = thumb_dir / (image_path.stem + ".thumb.png")
+
+    src_mtime = image_path.stat().st_mtime
+    if thumb_file.is_file() and thumb_file.stat().st_mtime >= src_mtime:
+        meta_file = thumb_dir / (image_path.stem + ".meta")
+        w, h = 0, 0
+        if meta_file.is_file():
+            parts = meta_file.read_text().strip().split(",")
+            if len(parts) == 2:
+                w, h = int(parts[0]), int(parts[1])
+        return base64.b64encode(thumb_file.read_bytes()).decode(), w, h
+
+    img = Image.open(image_path)
+    w, h = img.size
+    thumb = img.copy()
+    thumb.thumbnail((THUMB_SIZE, THUMB_SIZE), Image.LANCZOS)
+
+    thumb_dir.mkdir(exist_ok=True)
+    thumb.save(str(thumb_file), format="PNG")
+    (thumb_dir / (image_path.stem + ".meta")).write_text(f"{w},{h}")
+
+    buf = io.BytesIO()
+    thumb.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode(), w, h
+
+
+@router.get("/images")
+async def gallery_images(tool: str = Query(...), date: str = Query(...)):
+    folder = _save_root() / tool / date
+    if not folder.is_dir():
+        return {"images": []}
+    results = []
+    for f in sorted(folder.iterdir(), reverse=True):
+        if f.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+            continue
+        meta = {}
+        json_path = f.with_suffix(".json")
+        if json_path.is_file():
+            try:
+                meta = json.loads(json_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        try:
+            thumb_b64, w, h = _get_or_create_thumb(f)
+        except Exception:
+            thumb_b64 = ""
+            w, h = 0, 0
+
+        results.append({
+            "filename": f.name,
+            "width": meta.get("width", w),
+            "height": meta.get("height", h),
+            "thumbnail": thumb_b64,
+            "model": meta.get("model", ""),
+            "view": meta.get("view", ""),
+            "generation_type": meta.get("generation_type", ""),
+            "timestamp": meta.get("timestamp", ""),
+        })
+    return {"images": results}
+
+
+@router.get("/image")
+async def gallery_image(tool: str = Query(...), date: str = Query(...), filename: str = Query(...)):
+    file_path = _save_root() / tool / date / filename
+    if not file_path.is_file():
+        return {"error": "File not found", "image_b64": ""}
+    if ".." in filename or "/" in filename or "\\" in filename:
+        return {"error": "Invalid filename", "image_b64": ""}
+    try:
+        raw = file_path.read_bytes()
+        b64 = base64.b64encode(raw).decode()
+        return {"image_b64": b64, "filename": filename}
+    except Exception as e:
+        return {"error": str(e), "image_b64": ""}
+
+
+class DeleteRequest(BaseModel):
+    tool: str
+    date: str
+    filenames: list[str]
+
+
+@router.post("/delete")
+async def gallery_delete(body: DeleteRequest):
+    deleted = 0
+    for fn in body.filenames:
+        if ".." in fn or "/" in fn or "\\" in fn:
+            continue
+        fp = _save_root() / body.tool / body.date / fn
+        if fp.is_file():
+            fp.unlink(missing_ok=True)
+            deleted += 1
+            json_sidecar = fp.with_suffix(".json")
+            if json_sidecar.is_file():
+                json_sidecar.unlink(missing_ok=True)
+            history_sidecar = fp.with_name(fp.stem + ".history.json")
+            if history_sidecar.is_file():
+                history_sidecar.unlink(missing_ok=True)
+            thumb_dir = fp.parent / THUMB_DIR_NAME
+            for ext in (".thumb.png", ".meta"):
+                cached = thumb_dir / (fp.stem + ext)
+                if cached.is_file():
+                    cached.unlink(missing_ok=True)
+    return {"ok": True, "deleted": deleted}
+
+
+@router.post("/open-folder")
+async def gallery_open_folder(tool: str = "", date: str = ""):
+    target = _save_root()
+    if tool:
+        target = target / tool
+    if date:
+        target = target / date
+    if not target.is_dir():
+        target = _save_root()
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(target))
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(target)])
+        else:
+            subprocess.Popen(["xdg-open", str(target)])
+        return {"ok": True, "path": str(target)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

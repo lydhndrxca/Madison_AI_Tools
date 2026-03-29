@@ -196,7 +196,131 @@ def image_to_inline_data(img: Image.Image) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# REST-based Gemini generation (extracted & unified)
+# REST-based Gemini text/JSON generation (no SDK, avoids _rust DLL issues)
+# ---------------------------------------------------------------------------
+
+def rest_generate_json(
+    api_key: str,
+    model_name: str,
+    contents_raw: list,
+    timeout: int = 120,
+    cancel_event: Event | None = None,
+) -> dict | None:
+    """REST call to Gemini that returns parsed JSON text (no image output)."""
+    if cancel_event and cancel_event.is_set():
+        raise RuntimeError("Cancelled by user")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
+
+    parts: list[dict] = []
+    for item in contents_raw:
+        if isinstance(item, str):
+            parts.append({"text": item})
+        elif isinstance(item, Image.Image):
+            parts.append(image_to_inline_data(item))
+        elif isinstance(item, dict) and "mime_type" in item and "data" in item:
+            parts.append({"inlineData": {
+                "mimeType": item["mime_type"],
+                "data": base64.b64encode(item["data"]).decode() if isinstance(item["data"], bytes) else item["data"],
+            }})
+        elif isinstance(item, dict):
+            parts.append(item)
+
+    body: dict[str, Any] = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+        },
+    }
+
+    resp = requests.post(url, json=body, headers=headers, timeout=timeout)
+    if cancel_event and cancel_event.is_set():
+        raise RuntimeError("Cancelled by user")
+    if resp.status_code != 200:
+        raise RuntimeError(f"Gemini API returned {resp.status_code}: {resp.text[:300]}")
+    data = resp.json()
+    for cand in data.get("candidates", []):
+        for part in cand.get("content", {}).get("parts", []):
+            if "text" in part:
+                import json as _json
+                parsed = _json.loads(part["text"])
+                if isinstance(parsed, list):
+                    return parsed[0] if parsed else {}
+                return parsed
+    return None
+
+
+def rest_generate_text(
+    api_key: str,
+    model_name: str,
+    prompt: str,
+    timeout: int = 120,
+    cancel_event: Event | None = None,
+) -> str | None:
+    """REST call to Gemini that returns plain text (no SDK)."""
+    if cancel_event and cancel_event.is_set():
+        raise RuntimeError("Cancelled by user")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
+
+    body: dict[str, Any] = {
+        "contents": [{"parts": [{"text": prompt}]}],
+    }
+
+    resp = requests.post(url, json=body, headers=headers, timeout=timeout)
+    if cancel_event and cancel_event.is_set():
+        raise RuntimeError("Cancelled by user")
+    if resp.status_code != 200:
+        raise RuntimeError(f"Gemini API returned {resp.status_code}: {resp.text[:300]}")
+    data = resp.json()
+    for cand in data.get("candidates", []):
+        for part in cand.get("content", {}).get("parts", []):
+            if "text" in part:
+                return part["text"]
+    return None
+
+
+def rest_generate_text_multimodal(
+    api_key: str,
+    model_name: str,
+    contents_raw: list,
+    timeout: int = 120,
+    cancel_event: Event | None = None,
+) -> str | None:
+    """REST call to Gemini with mixed content (images + text) returning plain text."""
+    if cancel_event and cancel_event.is_set():
+        raise RuntimeError("Cancelled by user")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
+
+    parts: list[dict] = []
+    for item in contents_raw:
+        if isinstance(item, str):
+            parts.append({"text": item})
+        elif isinstance(item, Image.Image):
+            parts.append(image_to_inline_data(item))
+        elif isinstance(item, dict):
+            parts.append(item)
+
+    body: dict[str, Any] = {
+        "contents": [{"parts": parts}],
+    }
+
+    resp = requests.post(url, json=body, headers=headers, timeout=timeout)
+    if cancel_event and cancel_event.is_set():
+        raise RuntimeError("Cancelled by user")
+    if resp.status_code != 200:
+        raise RuntimeError(f"Gemini API returned {resp.status_code}: {resp.text[:300]}")
+    data = resp.json()
+    for cand in data.get("candidates", []):
+        for part in cand.get("content", {}).get("parts", []):
+            if "text" in part:
+                return part["text"]
+    return None
+
+
+# ---------------------------------------------------------------------------
+# REST-based Gemini image generation (extracted & unified)
 # ---------------------------------------------------------------------------
 
 def rest_generate(

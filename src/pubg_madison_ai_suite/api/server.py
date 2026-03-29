@@ -20,7 +20,7 @@ if str(_pkg_root) not in sys.path:
 
 from pubg_madison_ai_suite.api.ws import manager
 from pubg_madison_ai_suite.api.cancel import reset_cancel_event, release_cancel_event, cancel_all  # noqa: F401
-from pubg_madison_ai_suite.api.routes import system, gemini, character, weapon, editor, styles
+from pubg_madison_ai_suite.api.routes import system, gemini, character, weapon, editor, styles, gallery
 
 app = FastAPI(title="Madison AI Suite API", version="2.0.0")
 
@@ -37,6 +37,7 @@ app.include_router(character.router, prefix="/api/character", tags=["character"]
 app.include_router(weapon.router, prefix="/api/weapon", tags=["weapon"])
 app.include_router(editor.router, prefix="/api/editor", tags=["editor"])
 app.include_router(styles.router, prefix="/api/styles", tags=["styles"])
+app.include_router(gallery.router, prefix="/api/gallery", tags=["gallery"])
 
 
 @app.websocket("/ws/progress")

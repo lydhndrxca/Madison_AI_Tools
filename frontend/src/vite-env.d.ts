@@ -18,6 +18,8 @@ interface Window {
     onRequestSave: (callback: () => void) => () => void;
     /** Session: main sends loaded session JSON to renderer. */
     onSessionLoaded: (callback: (data: string) => void) => () => void;
+    /** Menu: open external console window. */
+    menuShowConsole: () => Promise<void>;
     /** Menu: trigger open session dialog from renderer. */
     menuOpenSession: () => Promise<void>;
     /** Menu: trigger set save folder dialog from renderer. */

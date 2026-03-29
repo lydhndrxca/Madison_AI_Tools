@@ -167,7 +167,7 @@ async def smart_select(req: SmartSelectRequest):
         contents: list = [original, prompt]
         mask_img = core.gemini_generate_image(
             api_key, contents, cancel_event=cancel,
-            model_id=req.model_id or "gemini-2.0-flash-exp-image-generation",
+            model_id=req.model_id,
         )
         if mask_img is None:
             return SmartSelectResponse(error="Failed to generate selection mask")

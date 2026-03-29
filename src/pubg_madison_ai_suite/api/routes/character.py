@@ -278,12 +278,12 @@ def _do_generate(req: CharacterGenerateRequest) -> CharacterResponse:
     else:
         style_rules = (
             "ABSOLUTE MANDATORY BACKGROUND RULE — THIS OVERRIDES EVERYTHING ELSE IN THE PROMPT: "
-            "The background MUST be a solid flat single-color studio backdrop (e.g. neutral grey, beige, or muted tone). "
+            "The background MUST be a solid flat single-color backdrop with the EXACT hex color #343434 (dark grey). "
             "There must be ZERO environmental elements — NO ground textures, NO floor tiles, NO wooden planks, "
             "NO dirt, NO concrete, NO grass, NO rocks, NO props, NO furniture, NO traffic cones, NO vehicles, "
             "NO buildings, NO scenery, NO shadows on the ground, NO horizon line, NO anything except the character "
-            "standing on the plain solid-color backdrop. Even if the character description mentions a setting, "
-            "job, or environment — IGNORE that for the background. The character floats on a flat color.\n\n"
+            "standing on the plain solid #343434 dark grey backdrop. Even if the character description mentions a setting, "
+            "job, or environment — IGNORE that for the background. The character floats on a flat #343434 color.\n\n"
             "STYLE RULES: Realistic 3D-rendered style. NOT illustrated, NOT cartoon, NOT painted. "
             "No text, no labels, no names, no color swatches, no annotations anywhere on the image. "
             "Full body visible head to toe."
@@ -365,15 +365,12 @@ def _do_extract_attributes(description: str, image_b64: str | None = None) -> At
         return AttributeResponse(error="No API key")
 
     try:
-        import json, base64
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        import base64
 
         prompt = (
             "You are a character design analyst for film and game production. "
             "Extract extremely detailed character attributes as JSON with these keys:\n\n"
-            '- "description": string — A rich 3-5 sentence visual description. Include physique, '
+            '- "description": string \u2014 A rich 3-5 sentence visual description. Include physique, '
             "face shape, distinguishing marks (scars, tattoos, freckles), skin tone, "
             "expression/mood, hair length/style/color, and overall silhouette.\n\n"
             '- "age": string (best match from: "teen (18\u201319)", "young adult (20\u201329)", '
@@ -387,7 +384,7 @@ def _do_extract_attributes(description: str, image_b64: str | None = None) -> At
             'or empty string)\n'
             '- "build": string (best match from: "slim", "average", "athletic", '
             '"muscular", "curvy", "heavyset", "soft/doughy", "unfit", or empty string)\n\n'
-            '- "attributes": object — Be very specific and descriptive for each. '
+            '- "attributes": object \u2014 Be very specific and descriptive for each. '
             "If something is not visible or mentioned, use empty string.\n"
             '    "Headwear": string (e.g. "black wool beanie, slightly slouched", "none")\n'
             '    "Outerwear": string (e.g. "distressed brown leather bomber jacket, collar popped, patches on left arm")\n'
@@ -402,10 +399,10 @@ def _do_extract_attributes(description: str, image_b64: str | None = None) -> At
             '    "Accessories": string (e.g. "silver dog tags, braided leather wristband, ear cuff")\n'
             '    "ColorAccents": string (e.g. "red lining in jacket, orange stitching on boots")\n'
             '    "Detailing": string (e.g. "oil stains on pants, frayed cuffs, brass rivets on jacket")\n'
-            '    "Pose": string — ALWAYS set to "A pose" (standing upright, arms slightly away from body at ~30 degrees, palms forward, legs shoulder-width apart). Do NOT infer any other pose.\n\n'
+            '    "Pose": string \u2014 ALWAYS set to "A pose" (standing upright, arms slightly away from body at ~30 degrees, palms forward, legs shoulder-width apart). Do NOT infer any other pose.\n\n'
             + _BIBLE_COSTUME_PROMPT
             + _ENVIRONMENT_PROMPT +
-            "\nReturn ONLY valid JSON. Be as detailed and specific as possible — "
+            "\nReturn ONLY valid JSON. Be as detailed and specific as possible \u2014 "
             "imagine you are writing notes for a 3D modeler and costume department.\n\n"
         )
 
@@ -423,13 +420,9 @@ def _do_extract_attributes(description: str, image_b64: str | None = None) -> At
 
         contents.append(prompt)
 
-        resp = model.generate_content(
-            contents,
-            generation_config={"response_mime_type": "application/json"},
-        )
-        data = json.loads(resp.text)
-        if isinstance(data, list):
-            data = data[0] if data else {}
+        data = core.rest_generate_json(api_key, "gemini-2.0-flash", contents)
+        if data is None:
+            return AttributeResponse(error="No response from Gemini")
         return AttributeResponse(
             description=data.get("description", ""),
             attributes=data.get("attributes"),
@@ -450,11 +443,6 @@ def _do_enhance(text: str, ctx: CharacterContextRequest | None = None) -> Random
     if not api_key:
         return RandomizeFullResponse(error="No API key")
     try:
-        import json
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
-
         context_text = _build_context_summary(ctx) if ctx else ""
         has_full_context = bool(context_text.strip())
 
@@ -474,7 +462,7 @@ def _do_enhance(text: str, ctx: CharacterContextRequest | None = None) -> Random
                 f"Original description:\n\n{text}\n\n"
             )
 
-        resp = model.generate_content(
+        full_prompt = (
             instruction +
             "Return ONLY valid JSON with these keys:\n"
             '- "description": string (a rich 3-5 sentence visual description including physique, '
@@ -490,7 +478,7 @@ def _do_enhance(text: str, ctx: CharacterContextRequest | None = None) -> Random
             'or empty string)\n'
             '- "build": string (best match from: "slim", "average", "athletic", '
             '"muscular", "curvy", "heavyset", "soft/doughy", "unfit", or empty string)\n'
-            '- "attributes": object — Be very specific and descriptive for each:\n'
+            '- "attributes": object \u2014 Be very specific and descriptive for each:\n'
             '    "Headwear": string (material, color, style, condition)\n'
             '    "Outerwear": string (jacket/coat type, material, color, details)\n'
             '    "Top": string (shirt/vest type, color, fit, details)\n'
@@ -504,14 +492,14 @@ def _do_enhance(text: str, ctx: CharacterContextRequest | None = None) -> Random
             '    "Accessories": string (jewelry, wristbands, etc.)\n'
             '    "ColorAccents": string (notable color details)\n'
             '    "Detailing": string (wear, damage, stitching, etc.)\n'
-            '    "Pose": ALWAYS "A pose" — do NOT change this\n'
+            '    "Pose": ALWAYS "A pose" \u2014 do NOT change this\n'
             + _BIBLE_COSTUME_PROMPT
-            + _ENVIRONMENT_PROMPT,
-            generation_config={"response_mime_type": "application/json"},
+            + _ENVIRONMENT_PROMPT
         )
-        data = json.loads(resp.text)
-        if isinstance(data, list):
-            data = data[0] if data else {}
+
+        data = core.rest_generate_json(api_key, "gemini-2.0-flash", [full_prompt])
+        if data is None:
+            return RandomizeFullResponse(error="No response from Gemini")
         return RandomizeFullResponse(**_parse_full_response(data))
     except Exception as e:
         return RandomizeFullResponse(error=str(e))
@@ -522,15 +510,13 @@ def _do_randomize() -> TextResponse:
     if not api_key:
         return TextResponse(error="No API key")
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        resp = model.generate_content(
+        text = core.rest_generate_text(
+            api_key, "gemini-2.0-flash",
             "Generate a random, detailed character description for a game character. "
             "Include appearance, clothing, gear, and personality hints. "
             "Be creative and specific. 3-5 sentences."
         )
-        return TextResponse(text=resp.text)
+        return TextResponse(text=text or "")
     except Exception as e:
         return TextResponse(error=str(e))
 
@@ -571,11 +557,6 @@ def _do_randomize_full(ctx: CharacterContextRequest | None = None) -> RandomizeF
     if not api_key:
         return RandomizeFullResponse(error="No API key")
     try:
-        import json
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
-
         context_text = _build_context_summary(ctx)
         has_context = bool(context_text.strip())
 
@@ -594,10 +575,10 @@ def _do_randomize_full(ctx: CharacterContextRequest | None = None) -> RandomizeF
                 "Be creative and specific.\n\n"
             )
 
-        resp = model.generate_content(
+        full_prompt = (
             instruction +
             "Return ONLY valid JSON with these keys:\n"
-            '- "description": string — A rich 3-5 sentence visual description. Include physique, '
+            '- "description": string \u2014 A rich 3-5 sentence visual description. Include physique, '
             "face shape, distinguishing marks (scars, tattoos, freckles), skin tone, "
             "expression/mood, hair length/style/color, and overall silhouette. "
             "Describe as a real person, not a cartoon or illustration.\n"
@@ -611,30 +592,30 @@ def _do_randomize_full(ctx: CharacterContextRequest | None = None) -> RandomizeF
             '"genderqueer", "trans masc", "trans femme", "androgynous", "unspecified")\n'
             '- "build": string (one of: "slim", "average", "athletic", '
             '"muscular", "curvy", "heavyset", "soft/doughy", "unfit")\n'
-            '- "attributes": object — Be very specific and descriptive for each:\n'
-            '    "Headwear": string (material, color, style, condition — or empty)\n'
-            '    "Outerwear": string (jacket/coat type, material, color, details — or empty)\n'
-            '    "Top": string (shirt/vest type, color, fit, details — or empty)\n'
-            '    "Legwear": string (pants/skirt type, color, fit, details — or empty)\n'
-            '    "Footwear": string (shoe/boot type, color, condition — or empty)\n'
-            '    "Gloves": string (type, material, style — or empty)\n'
-            '    "FaceGear": string (glasses, mask, goggles — or empty)\n'
-            '    "UtilityRig": string (belts, holsters, harnesses — or empty)\n'
-            '    "BackCarry": string (backpack, quiver, etc. — or empty)\n'
-            '    "HandProp": string (weapon, tool, item held — or empty)\n'
-            '    "Accessories": string (jewelry, wristbands, etc. — or empty)\n'
-            '    "ColorAccents": string (notable color details — or empty)\n'
-            '    "Detailing": string (wear, damage, stitching, etc. — or empty)\n'
-            '    "Pose": ALWAYS "A pose" — do NOT use any other pose\n'
+            '- "attributes": object \u2014 Be very specific and descriptive for each:\n'
+            '    "Headwear": string (material, color, style, condition \u2014 or empty)\n'
+            '    "Outerwear": string (jacket/coat type, material, color, details \u2014 or empty)\n'
+            '    "Top": string (shirt/vest type, color, fit, details \u2014 or empty)\n'
+            '    "Legwear": string (pants/skirt type, color, fit, details \u2014 or empty)\n'
+            '    "Footwear": string (shoe/boot type, color, condition \u2014 or empty)\n'
+            '    "Gloves": string (type, material, style \u2014 or empty)\n'
+            '    "FaceGear": string (glasses, mask, goggles \u2014 or empty)\n'
+            '    "UtilityRig": string (belts, holsters, harnesses \u2014 or empty)\n'
+            '    "BackCarry": string (backpack, quiver, etc. \u2014 or empty)\n'
+            '    "HandProp": string (weapon, tool, item held \u2014 or empty)\n'
+            '    "Accessories": string (jewelry, wristbands, etc. \u2014 or empty)\n'
+            '    "ColorAccents": string (notable color details \u2014 or empty)\n'
+            '    "Detailing": string (wear, damage, stitching, etc. \u2014 or empty)\n'
+            '    "Pose": ALWAYS "A pose" \u2014 do NOT use any other pose\n'
             + _BIBLE_COSTUME_PROMPT
             + _ENVIRONMENT_PROMPT +
             "Return ONLY the JSON, no markdown. "
-            "Be as detailed and specific as possible for every field.",
-            generation_config={"response_mime_type": "application/json"},
+            "Be as detailed and specific as possible for every field."
         )
-        data = json.loads(resp.text)
-        if isinstance(data, list):
-            data = data[0] if data else {}
+
+        data = core.rest_generate_json(api_key, "gemini-2.0-flash", [full_prompt])
+        if data is None:
+            return RandomizeFullResponse(error="No response from Gemini")
         return RandomizeFullResponse(**_parse_full_response(data))
     except Exception as e:
         return RandomizeFullResponse(error=str(e))
@@ -687,3 +668,159 @@ async def randomize():
 async def randomize_full(body: CharacterContextRequest):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(_pool, _do_randomize_full, body)
+
+
+# ---------------------------------------------------------------------------
+# Upscale & Restore
+# ---------------------------------------------------------------------------
+
+class UpscaleRequest(BaseModel):
+    image_b64: str
+    scale_factor: str = "x2"
+    context: str = ""
+    model_id: Optional[str] = None
+
+
+class RestoreRequest(BaseModel):
+    image_b64: str
+    context: str = ""
+    model_id: Optional[str] = None
+
+
+_DESCRIBE_FOR_RESTORE_PROMPT = (
+    "You are a forensic character analyst. Describe this image with OBSESSIVE precision so it can be exactly recreated. "
+    "Ignore any blur, artifacts, noise, or compression \u2014 describe what the character ACTUALLY looks like underneath the degradation.\n\n"
+    "Cover EVERY aspect in this exact order:\n"
+    "1. POSE & STANCE: Exact body position \u2014 which leg bears weight, arm positions, hand positions (open/fist/relaxed), head tilt, gaze direction, torso angle\n"
+    "2. FACE: Exact features \u2014 eye shape/color, brow shape, nose shape, lip shape/color, jaw shape, skin tone (precise shade), expression, any facial hair\n"
+    "3. HAIR: Style, length, color (precise shade), texture (straight/wavy/curly), how it falls, any accessories in hair\n"
+    "4. HEAD-TO-TOE CLOTHING \u2014 describe each garment separately:\n"
+    "   \u2022 Headwear/masks/helmets\n"
+    "   \u2022 Upper body: collar type, sleeve length, fit, closures, layering order\n"
+    "   \u2022 Lower body: type, fit, length\n"
+    "   \u2022 Footwear: type, height, closures, sole\n"
+    "5. MATERIALS for each garment: exact material (leather, denim, silk, etc.), surface finish (matte/glossy/worn), texture pattern, color (precise shade like \"oxblood leather\" not \"red\")\n"
+    "6. ACCESSORIES: Every single item \u2014 belts, buckles, chains, jewelry, weapons, pouches, straps \u2014 exact placement on body, material, color\n"
+    "7. MARKINGS: Any tattoos, scars, face paint, body paint \u2014 exact location, design, colors\n"
+    "8. PROPORTIONS: Body type, height impression, shoulder width relative to hips\n"
+    "9. CAMERA: Framing (full body/3-quarter), angle (eye-level/low/high), approximate focal length feel\n"
+    "10. BACKGROUND: Describe exactly what is behind the character\n\n"
+    "Write as one continuous, dense image generation prompt. No preamble, no commentary. Be surgically specific."
+)
+
+
+def _do_upscale(req: UpscaleRequest) -> CharacterResponse:
+    api_key = core.get_api_key()
+    if not api_key:
+        return CharacterResponse(error="No API key configured")
+
+    from pubg_madison_ai_suite.api.cancel import reset_cancel_event, release_cancel_event
+    cancel = reset_cancel_event()
+
+    try:
+        source = core.b64_to_image(req.image_b64)
+        factor_hint = {"x4": "maximum", "x3": "high"}.get(req.scale_factor, "moderate")
+
+        if req.context.strip():
+            prompt = (
+                f"Reproduce this exact image at higher resolution. "
+                f"CONTEXT: These are \"{req.context.strip()}\". "
+                f"Preserve the original art style, pixel density, and visual characteristics exactly \u2014 "
+                f"only increase clarity and detail fidelity. Do not smooth, blur, or anti-alias stylistic "
+                f"features that are intentional (e.g. hard pixel edges in pixel art). "
+                f"Preserve every detail, color, texture, and composition exactly as-is."
+            )
+        else:
+            prompt = (
+                f"Reproduce this exact image at {factor_hint} resolution. "
+                f"Preserve every detail, color, texture, and composition exactly as-is. "
+                f"Do not alter the content, style, or framing in any way. "
+                f"Only increase clarity, sharpness, and detail fidelity."
+            )
+
+        contents: list = [source, prompt]
+        result = core.gemini_generate_image(api_key, contents, cancel_event=cancel, model_id=req.model_id)
+        if result is None:
+            return CharacterResponse(error="Upscale failed \u2014 no image returned")
+        core.save_generated_image(result, "Character Generator", view_name="upscale", generation_type="upscale")
+        return CharacterResponse(image_b64=core.image_to_b64(result), width=result.width, height=result.height)
+    except RuntimeError as e:
+        return CharacterResponse(error=str(e))
+    except Exception as e:
+        return CharacterResponse(error=f"Upscale failed: {e}")
+    finally:
+        release_cancel_event(cancel)
+
+
+def _do_restore(req: RestoreRequest) -> CharacterResponse:
+    api_key = core.get_api_key()
+    if not api_key:
+        return CharacterResponse(error="No API key configured")
+
+    from pubg_madison_ai_suite.api.cancel import reset_cancel_event, release_cancel_event
+    cancel = reset_cancel_event()
+
+    try:
+        source = core.b64_to_image(req.image_b64)
+
+        # Step 1: Forensic description
+        description = core.rest_generate_text_multimodal(
+            api_key, "gemini-2.0-flash", [source, _DESCRIBE_FOR_RESTORE_PROMPT],
+            cancel_event=cancel,
+        )
+        if not description:
+            return CharacterResponse(error="Restore failed \u2014 could not analyze image")
+
+        # Step 2: Regenerate
+        user_context = req.context.strip() if req.context else ""
+        context_block = ""
+        if user_context:
+            context_block = (
+                f"\nIMPORTANT CONTEXT: The source is \"{user_context}\". You MUST preserve this art style exactly \u2014 "
+                "if these are pixel art, keep hard pixel edges and limited palette; if these are game UI icons, keep flat colors "
+                "and sharp silhouettes; if these are screenshots, restore to the native rendering style. "
+                "Do NOT smooth, anti-alias, or photorealize stylistic features that are intentional.\n\n"
+            )
+
+        restore_prompt = (
+            "QUALITY RESTORATION \u2014 Recreate this image at maximum quality.\n\n"
+            "WHAT MUST STAY IDENTICAL: Subject identity, pose, composition, camera angle, "
+            "color palette, lighting direction, background, and all spatial relationships.\n\n"
+            "WHAT MUST BE FRESHLY RENDERED: Crisp edges on every surface. Clean material textures "
+            "(leather grain, fabric weave, metal sheen). Sharp facial features with natural skin. "
+            "Precise clothing details (stitching, buttons, folds). Clean background without noise.\n\n"
+            "ZERO TEXT: Do not add any text, labels, watermarks, or annotations.\n\n"
+            f"{context_block}"
+            f"DETAILED DESCRIPTION (recreate this exactly):\n{description}"
+        )
+
+        contents: list = [source, restore_prompt]
+        result = core.gemini_generate_image(api_key, contents, cancel_event=cancel, model_id=req.model_id)
+        if result is None:
+            return CharacterResponse(error="Restore failed \u2014 regeneration returned no image")
+        core.save_generated_image(result, "Character Generator", view_name="restore", generation_type="restore")
+        return CharacterResponse(image_b64=core.image_to_b64(result), width=result.width, height=result.height)
+    except RuntimeError as e:
+        return CharacterResponse(error=str(e))
+    except Exception as e:
+        return CharacterResponse(error=f"Restore failed: {e}")
+    finally:
+        release_cancel_event(cancel)
+
+
+@router.post("/upscale", response_model=CharacterResponse)
+async def upscale(body: UpscaleRequest):
+    loop = asyncio.get_event_loop()
+    await manager.broadcast("status", {"message": "Upscaling image..."})
+    result = await loop.run_in_executor(_pool, _do_upscale, body)
+    await manager.broadcast("status", {"message": result.error or "Image upscaled"})
+    return result
+
+
+@router.post("/restore", response_model=CharacterResponse)
+async def restore(body: RestoreRequest):
+    loop = asyncio.get_event_loop()
+    await manager.broadcast("status", {"message": "Restoring image quality..."})
+    result = await loop.run_in_executor(_pool, _do_restore, body)
+    await manager.broadcast("status", {"message": result.error or "Image quality restored"})
+    return result

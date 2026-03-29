@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Bug,
   Palette,
+  FolderOpen,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { PageId } from "@/app";
@@ -25,13 +26,14 @@ type NavItem = { id: PageId; label: string; icon: React.ComponentType<{ classNam
 
 const LIBRARY_ITEMS: NavItem[] = [
   { id: "style-library", label: "Style Library", icon: Palette },
+  { id: "generated-images", label: "Generated Images", icon: FolderOpen },
 ];
 
 const TOOL_ITEMS: NavItem[] = [
-  { id: "gemini", label: "Gemini", icon: Sparkles },
+  { id: "gemini", label: "AI Generate Image", icon: Sparkles },
   { id: "multiview", label: "Multiview", icon: Image },
-  { id: "character", label: "Character Generator", icon: User },
-  { id: "weapon", label: "Weapon Generator", icon: Crosshair },
+  { id: "character", label: "AI CharacterLab", icon: User },
+  { id: "weapon", label: "AI WeaponLab", icon: Crosshair },
   { id: "3d", label: "3D GEN AI", icon: Box, disabled: true },
 ];
 

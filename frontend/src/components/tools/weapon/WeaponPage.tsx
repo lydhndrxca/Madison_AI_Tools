@@ -1,14 +1,16 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { Card, Button, Textarea, Select } from "@/components/ui";
 import { ImageViewer } from "@/components/shared/ImageViewer";
 import { EditHistory } from "@/components/shared/EditHistory";
 import { TabBar } from "@/components/shared/TabBar";
 import { PanelGroup, Panel, PanelResizeHandle } from "react-resizable-panels";
-import { apiFetch } from "@/hooks/useApi";
+import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
 import { useSessionRegister, useSessionContext } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
 import { XmlModal } from "@/components/shared/XmlModal";
+
+interface ModelInfo { id: string; label: string; resolution: string; time_estimate: string; multimodal: boolean; }
 
 const VIEW_TABS = ["Main Stage", "3/4", "Front", "Back", "Side", "Top", "Bottom", "Ref A", "Ref B", "Ref C"];
 
@@ -38,7 +40,8 @@ function useBusySet() {
   const is = useCallback((key: string) => set.has(key), [set]);
   const start = useCallback((key: string) => setSet((prev) => new Set(prev).add(key)), []);
   const end = useCallback((key: string) => setSet((prev) => { const n = new Set(prev); n.delete(key); return n; }), []);
-  return { is, start, end, any: set.size > 0 };
+  const endAll = useCallback(() => setSet(new Set()), []);
+  return { is, start, end, endAll, any: set.size > 0 };
 }
 
 export function WeaponPage() {
@@ -57,8 +60,17 @@ export function WeaponPage() {
   const [components, setComponents] = useState<Record<string, string>>(
     Object.fromEntries(COMPONENTS.map((c) => [c, ""])),
   );
+  const [modelId, setModelId] = useState("");
+  const [models, setModels] = useState<ModelInfo[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { addToast } = useToastContext();
+
+  useEffect(() => {
+    apiFetch<{ models: ModelInfo[]; current: string }>("/system/models").then((r) => {
+      setModels(r.models.filter((m) => m.multimodal));
+      if (!modelId) setModelId(r.current);
+    }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const currentImages = gallery[activeTab] || [];
   const currentIdx = imageIdx[activeTab] ?? 0;
@@ -96,7 +108,7 @@ export function WeaponPage() {
         isEdit ? "/weapon/edit" : "/weapon/generate", {
           method: "POST",
           body: JSON.stringify({ prompt: editText || `Generate a detailed ${weaponName} concept art`, weapon_name: weaponName, components, material_finish: finish, condition, view_type: "main",
-            reference_image_b64: mainB64, edit_prompt: isEdit ? editText : undefined, ref_images_b64: getRefB64s(), mode: "quality" }),
+            reference_image_b64: mainB64, edit_prompt: isEdit ? editText : undefined, ref_images_b64: getRefB64s(), mode: "quality", model_id: modelId || undefined }),
         },
       );
       if (resp.image_b64) {
@@ -106,7 +118,7 @@ export function WeaponPage() {
       } else if (resp.error) addToast(resp.error, "error");
     } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
     busy.end("generate");
-  }, [editText, weaponName, components, finish, condition, getMainB64, getRefB64s, setTabImage, addToast, busy]);
+  }, [editText, weaponName, components, finish, condition, modelId, getMainB64, getRefB64s, setTabImage, addToast, busy]);
 
   const handleExtract = useCallback(async () => {
     const mainB64 = getMainB64();
@@ -148,23 +160,43 @@ export function WeaponPage() {
     if (!mainB64) return;
     busy.start("allviews");
     const views = ["threequarter", "front", "back", "side", "top", "bottom"];
-    for (const view of views) {
+    setGenText((p) => ({ ...p, allviews: "Generating all views..." }));
+    const promises = views.map((view) => {
       const tabName = Object.entries(VIEW_KEY_MAP).find(([, v]) => v === view)?.[0] || view;
-      setGenText((p) => ({ ...p, allviews: `Generating ${tabName}...` }));
-      try {
-        const resp = await apiFetch<{ image_b64: string | null; width: number; height: number }>("/weapon/generate", {
-          method: "POST",
-          body: JSON.stringify({ prompt: editText || `Detailed ${weaponName} weapon concept`, weapon_name: weaponName, components, material_finish: finish, condition, view_type: view, reference_image_b64: mainB64, mode: "quality" }),
-        });
-        if (resp.image_b64) setTabImage(tabName, `data:image/png;base64,${resp.image_b64}`);
-      } catch { break; }
+      return apiFetch<{ image_b64: string | null; width: number; height: number }>("/weapon/generate", {
+        method: "POST",
+        body: JSON.stringify({ prompt: editText || `Detailed ${weaponName} weapon concept`, weapon_name: weaponName, components, material_finish: finish, condition, view_type: view, reference_image_b64: mainB64, mode: "quality", model_id: modelId || undefined }),
+      }).then((resp) => ({ ok: true as const, resp, tabName }))
+        .catch(() => ({ ok: false as const, resp: null, tabName }));
+    });
+    const results = await Promise.all(promises);
+    for (const r of results) {
+      if (r.ok && r.resp?.image_b64) setTabImage(r.tabName, `data:image/png;base64,${r.resp.image_b64}`);
     }
     busy.end("allviews");
-  }, [editText, weaponName, components, finish, condition, getMainB64, setTabImage, busy]);
+  }, [editText, weaponName, components, finish, condition, modelId, getMainB64, setTabImage, busy]);
+
+  const handleGenerateSelectedView = useCallback(async () => {
+    const mainB64 = getMainB64();
+    if (!mainB64 || activeTab === "Main Stage" || activeTab.startsWith("Ref")) return;
+    const viewType = VIEW_KEY_MAP[activeTab] || activeTab.toLowerCase();
+    busy.start("selview");
+    setGenText((p) => ({ ...p, selview: `Generating ${activeTab}...` }));
+    try {
+      const resp = await apiFetch<{ image_b64: string | null; width: number; height: number }>("/weapon/generate", {
+        method: "POST",
+        body: JSON.stringify({ prompt: editText || `Detailed ${weaponName} weapon concept`, weapon_name: weaponName, components, material_finish: finish, condition, view_type: viewType, reference_image_b64: mainB64, mode: "quality", model_id: modelId || undefined }),
+      });
+      if (resp.image_b64) setTabImage(activeTab, `data:image/png;base64,${resp.image_b64}`);
+    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
+    busy.end("selview");
+  }, [editText, weaponName, components, finish, condition, modelId, activeTab, getMainB64, setTabImage, addToast, busy]);
 
   const handleCancel = useCallback(async () => {
-    try { await apiFetch("/system/cancel", { method: "POST" }); } catch { /* */ }
-  }, []);
+    cancelAllRequests();
+    busy.endAll();
+    try { await fetch(`${window.location.protocol === "file:" ? "http://127.0.0.1:8420" : ""}/api/system/cancel`, { method: "POST" }); } catch { /* */ }
+  }, [busy]);
 
   const handleOpenImage = useCallback(() => fileInputRef.current?.click(), []);
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -280,13 +312,13 @@ export function WeaponPage() {
 
   useSessionRegister(
     "weapon",
-    () => ({ activeTab, editText, weaponName, finish, condition, components, gallery, imageIdx, editHistory }),
+    () => ({ activeTab, editText, weaponName, finish, condition, components, gallery, imageIdx, editHistory, modelId }),
     (s: unknown) => {
       if (s === null) {
         setActiveTab("Main Stage"); setEditText(""); setWeaponName("");
         setFinish("Blued Steel"); setCondition("1 - Factory New");
         setComponents(Object.fromEntries(COMPONENTS.map((c) => [c, ""])));
-        setGallery({}); setImageIdx({}); setEditHistory([]);
+        setGallery({}); setImageIdx({}); setEditHistory([]); setModelId("");
         return;
       }
       const d = s as Record<string, unknown>;
@@ -299,6 +331,7 @@ export function WeaponPage() {
       if (d.gallery) setGallery(d.gallery as Record<string, string[]>);
       if (d.imageIdx) setImageIdx(d.imageIdx as Record<string, number>);
       if (d.editHistory) setEditHistory(d.editHistory as EditEntry[]);
+      if (typeof d.modelId === "string") setModelId(d.modelId);
     },
   );
 
@@ -357,10 +390,15 @@ export function WeaponPage() {
             <div className="space-y-1.5">
               <div className="grid grid-cols-2 gap-1.5">
                 <Button size="sm" className="w-full" generating={busy.is("allviews")} generatingText={genText.allviews || "Generating..."} onClick={handleGenerateAllViews} title="Generate front, back, and side views of your weapon at once">Generate All Views</Button>
-                <Button size="sm" className="w-full" title="Generate only the view you have selected">Generate Selected View</Button>
+                <Button size="sm" className="w-full" generating={busy.is("selview")} generatingText={genText.selview || "Generating..."} onClick={handleGenerateSelectedView} title="Generate only the view you have selected">Generate Selected View</Button>
                 <Button size="sm" className="w-full" onClick={handleSendToPS} title="Open the current image in Photoshop">Send to PS</Button>
                 <Button size="sm" className="w-full" onClick={handleSendAllToPS} title="Open all view images in Photoshop">Send ALL to PS</Button>
               </div>
+              {models.length > 0 && (
+                <select className="w-full min-w-0 px-2 py-1 text-xs rounded-[var(--radius-sm)] truncate" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)", maxWidth: "100%" }} value={modelId} onChange={(e) => setModelId(e.target.value)} title="Choose which AI model generates your weapon images">
+                  {models.map((m) => <option key={m.id} value={m.id}>{m.label} — {m.resolution} ({m.time_estimate})</option>)}
+                </select>
+              )}
               <div className="grid grid-cols-3 gap-1.5">
                 <Button size="sm" className="w-full" onClick={() => setShowXml(true)} title="View the weapon data as XML for saving or sharing">Show XML</Button>
                 <Button size="sm" className="w-full" onClick={handleClearCache} title="Clear cached AI data for this session">Clear Cache</Button>

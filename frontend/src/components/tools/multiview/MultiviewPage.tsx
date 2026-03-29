@@ -3,7 +3,7 @@ import { Card, Button, Textarea, Select, NumberStepper } from "@/components/ui";
 import { ImageViewer } from "@/components/shared/ImageViewer";
 import { EditHistory } from "@/components/shared/EditHistory";
 import { TabBar } from "@/components/shared/TabBar";
-import { apiFetch } from "@/hooks/useApi";
+import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
 import { useSessionRegister } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
@@ -33,7 +33,8 @@ function useBusySet() {
   const is = useCallback((key: string) => set.has(key), [set]);
   const start = useCallback((key: string) => setSet((prev) => new Set(prev).add(key)), []);
   const end = useCallback((key: string) => setSet((prev) => { const n = new Set(prev); n.delete(key); return n; }), []);
-  return { is, start, end, any: set.size > 0 };
+  const endAll = useCallback(() => setSet(new Set()), []);
+  return { is, start, end, endAll, any: set.size > 0 };
 }
 
 export function MultiviewPage() {
@@ -136,8 +137,10 @@ export function MultiviewPage() {
   }, [prompt, dimension, activeTab, getMainB64, setTabImage, addToast, busy]);
 
   const handleCancel = useCallback(async () => {
-    try { await apiFetch("/system/cancel", { method: "POST" }); } catch { /* */ }
-  }, []);
+    cancelAllRequests();
+    busy.endAll();
+    try { await fetch(`${window.location.protocol === "file:" ? "http://127.0.0.1:8420" : ""}/api/system/cancel`, { method: "POST" }); } catch { /* */ }
+  }, [busy]);
 
   const handleOpenImage = useCallback(() => fileInputRef.current?.click(), []);
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {

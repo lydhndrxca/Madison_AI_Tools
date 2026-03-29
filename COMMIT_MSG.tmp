@@ -1,50 +1,18 @@
-feat: major character tools overhaul with inpainting, style system, and UX polish
+feat: add user shortcuts system, upgrade Gemini tool, fullscreen viewer, and voice-to-text improvements
 
-Character Page:
-- Add Character Bible, Costume Director, Style Fusion, Environment Placement, and Preservation Lock sections with collapsible/toggleable/lockable/reorderable panels
-- Add "Recreate image exactly" vs "Use image as inspiration" dropdown for extract mode
-- Add extract target buttons (Identity, Attributes, Bible, Costume, Environment) to control which sections get populated
-- Auto-enable extract targets when their corresponding section is turned ON
-- Add Style Library dropdown for selecting style folders during generation
-- Add Prompt Preview section showing the full outgoing prompt
-- Add draggable section reordering with "Set Active Layout as Default" persistence
-- Wire all enabled sections (attributes, bible, costume, fusion, environment, preservation) into generation prompts
-- Enforce A-pose and flat background rules in backend prompt engineering
-- Default Preservation Lock toggles to unchecked
-
-Image Viewer & Inpainting:
-- Add full inpainting toolbar (Brush, Eraser, Marquee, Lasso, Smart Select, Smart Erase, Outpaint, Remove BG, Style Transfer)
-- Wire all inpainting tools to Gemini API with ref image and style context support
-- Add visual brush size circle for brush, eraser, and smart erase
-- Reset to normal cursor after applying any inpainting action
-- Allow zoom/pan while image is generating (only block drawing tools)
-- Hard-threshold alpha in Remove Background for clean cutouts
-- Rewrite Outpaint to send two images for seamless scene extension
-- Add per-image edit history with disk persistence and "Are you sure?" clear confirmation
-- Add image shape label (Portrait/Landscape/Square) to resolution display
-
-Shell & Navigation:
-- Replace native Electron menu bar with in-app File/Edit dropdown menus
-- Add File menu: Save/Open Session, Set/Reset Save Folder, Reset App
-- Add Session Templates dropdown for saving/loading tool presets
-- Add Style Library page with three-column folder/image/guidance layout
-- Remove sidebar auto-collapse on mouse leave (manual button only)
-
-Backend:
-- Add editor API routes (inpaint, smart-select, smart-erase, outpaint, remove-bg, style-transfer)
-- Add styles API routes for Style Library CRUD
-- Add system routes for Photoshop integration, cache clearing, save folder management
-- Add recreate_mode flag to character generation for exact visual matching
-- Expand extraction prompts with detailed attribute instructions and environment fields
-- Fix circular import with cancel.py module
-
-UX Polish:
-- Fix unicode escape characters showing literally in tooltips across all pages
-- Add subtle focus border for text inputs (no flash)
-- Add hover brightness effect on section cards
-- Add section ON/OFF toggles with middle-click support and dimming
-- Add lock icons (SVG) to prevent AI from overwriting locked sections
-- Disable inputs during generation; add pulsing button animation for API calls
-- Add clipboard paste support via Electron IPC
-- Add XML export modal, number stepper, color field with eyedropper
-- Add context menu improvements and tab prompt editing
+- Add centralized keyboard shortcuts system (useShortcuts.tsx) with rebindable keys, localStorage persistence, and conflict detection
+- Add Keyboard Shortcuts section to Settings panel with grouped display, rebind UI, per-shortcut reset, and Reset All
+- Register Character Lab shortcuts: Ctrl+G generate, Ctrl+Shift+G quick generate, Ctrl+Shift+A all views, Ctrl+E extract, Ctrl+Shift+E enhance, Ctrl+Shift+R randomize, Ctrl+Shift+X XML, Ctrl+Shift+P send to PS
+- Migrate all hardcoded keydown listeners (AppShell, ImageViewer, VoiceToText) to the shortcuts registry
+- Upgrade Gemini page to AI Generate Image with model selector, dimension presets (custom W×H), batch count 1-20, concurrent generation via Promise.all, and progress bar with elapsed timer
+- Add fullscreen image viewer mode (Ctrl+F) with zoom/pan, carousel arrows, and bottom toolbar; Escape to exit
+- Add GroupedTabBar with dynamic ref tabs (+/- buttons, right-click remove) to AI Generate Image page
+- Prevent voice-to-text button from stealing focus; restore cursor to text field after mic permission
+- Remove "Character Concept" header; move view tabs flush with panel top alongside Quick Generate button
+- Add noBorder prop to GroupedTabBar for inline embedding with other controls
+- Rename tools: Character Generator -> AI CharacterLab, Gemini -> AI Generate Image, Weapon Generator -> AI WeaponLab
+- Add voice-to-text transcription endpoint, audio settings modal, and Ctrl+R toggle
+- Add generated images browser with folder tree, thumbnails, context menus, and in-memory caching
+- Add gallery API routes with thumbnail caching, image deletion, and OS folder opening
+- Expand backend REST helpers for multimodal text/JSON generation and configurable save paths
+- Add cancel infrastructure for client-side HTTP abort and backend thread cancellation

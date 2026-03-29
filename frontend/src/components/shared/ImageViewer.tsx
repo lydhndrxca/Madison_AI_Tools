@@ -1,9 +1,11 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { ZoomIn, ZoomOut, Maximize2, ChevronLeft, ChevronRight } from "lucide-react";
+import { createPortal } from "react-dom";
+import { ZoomIn, ZoomOut, Maximize2, ChevronLeft, ChevronRight, Maximize, Minimize } from "lucide-react";
 import { EditorToolbar, STYLE_PRESETS } from "./editor/EditorToolbar";
 import type { EditorTool, OutpaintDir } from "./editor/EditorToolbar";
 import * as Mask from "./editor/maskEngine";
 import { apiFetch } from "@/hooks/useApi";
+import { useShortcuts } from "@/hooks/useShortcuts";
 
 interface ContextMenuAction {
   label: string;
@@ -91,6 +93,15 @@ export function ImageViewer({
   // Outpaint preview
   const [outpaintPreview, setOutpaintPreview] = useState<{ dir: OutpaintDir; px: number } | null>(null);
 
+  // Fullscreen mode
+  const [fullscreen, setFullscreen] = useState(false);
+  const [fsZoom, setFsZoom] = useState(1);
+  const [fsPanX, setFsPanX] = useState(0);
+  const [fsPanY, setFsPanY] = useState(0);
+  const [fsPanning, setFsPanning] = useState(false);
+  const fsLastPos = useRef({ x: 0, y: 0 });
+  const fsContainerRef = useRef<HTMLDivElement>(null);
+
   const fitToContainer = useCallback(() => {
     if (!containerRef.current || !naturalSize.w || !naturalSize.h) {
       setZoom(1); setPanX(0); setPanY(0); return;
@@ -132,22 +143,23 @@ export function ImageViewer({
     if (maskCanvasRef.current) { Mask.clearMask(maskCanvasRef.current); setHasMask(false); }
   }, [src]);
 
-  // Keyboard shortcuts for tools and brush size
+  // Register image viewer tool shortcuts via the shortcuts system
+  const { registerAction: regAction, unregisterAction: unregAction } = useShortcuts();
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (lockedRef.current) return;
-      if ((e.target as HTMLElement).tagName === "INPUT" || (e.target as HTMLElement).tagName === "TEXTAREA") return;
-      if (e.key === "b" || e.key === "B") { setEditorTool("brush"); setInpaintMode(true); }
-      if (e.key === "e" || e.key === "E") { setEditorTool("eraser"); setInpaintMode(true); }
-      if (e.key === "m" || e.key === "M") { setEditorTool("marquee"); setInpaintMode(true); }
-      if (e.key === "l" || e.key === "L") { setEditorTool("lasso"); setInpaintMode(true); }
-      if (e.key === "w" || e.key === "W") { setEditorTool("smartSelect"); setInpaintMode(true); }
-      if (e.key === "[") setBrushSize((s) => Math.max(2, s - 5));
-      if (e.key === "]") setBrushSize((s) => Math.min(200, s + 5));
+    const guard = (fn: () => void) => () => { if (!lockedRef.current) fn(); };
+    regAction("toolBrush", guard(() => { setEditorTool("brush"); setInpaintMode(true); }));
+    regAction("toolEraser", guard(() => { setEditorTool("eraser"); setInpaintMode(true); }));
+    regAction("toolMarquee", guard(() => { setEditorTool("marquee"); setInpaintMode(true); }));
+    regAction("toolLasso", guard(() => { setEditorTool("lasso"); setInpaintMode(true); }));
+    regAction("toolSmartSelect", guard(() => { setEditorTool("smartSelect"); setInpaintMode(true); }));
+    regAction("brushSmaller", guard(() => setBrushSize((s) => Math.max(2, s - 5))));
+    regAction("brushLarger", guard(() => setBrushSize((s) => Math.min(200, s + 5))));
+    return () => {
+      for (const id of ["toolBrush", "toolEraser", "toolMarquee", "toolLasso", "toolSmartSelect", "brushSmaller", "brushLarger"]) {
+        unregAction(id);
+      }
     };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, []);
+  }, [regAction, unregAction]);
 
   // Robust pan via native pointer events + pointer capture.
   // Prevents middle-click autoscroll and ensures smooth vertical + horizontal pan.
@@ -373,7 +385,8 @@ export function ImageViewer({
   }, [src, getImageB64, onImageEdited, refImages, styleContext]);
 
   const handleSmartSelect = useCallback(async (subject: string) => {
-    if (!src) return;
+    if (!src) { console.warn("[SmartSelect] No image loaded"); return; }
+    if (!subject.trim()) { console.warn("[SmartSelect] No subject entered"); return; }
     setEditorBusy(true);
     try {
       const resp = await apiFetch<{ mask_b64?: string; error?: string }>("/editor/smart-select", {
@@ -385,8 +398,12 @@ export function ImageViewer({
         setInpaintMode(true);
       } else if (resp.error) {
         console.error("[SmartSelect]", resp.error);
+      } else {
+        console.warn("[SmartSelect] No mask returned from API");
       }
-    } catch { /* */ }
+    } catch (err) {
+      console.error("[SmartSelect] Request failed:", err);
+    }
     setEditorBusy(false);
   }, [src, getImageB64]);
 
@@ -475,6 +492,94 @@ export function ImageViewer({
     setInpaintMode(true);
   }, []);
 
+  // --- Fullscreen helpers ---
+
+  const enterFullscreen = useCallback(() => {
+    if (!src) return;
+    setFullscreen(true);
+    setFsPanX(0);
+    setFsPanY(0);
+    // Fit image into screen
+    if (naturalSize.w > 0 && naturalSize.h > 0) {
+      const sw = window.innerWidth;
+      const sh = window.innerHeight;
+      const scale = Math.min(sw / naturalSize.w, sh / naturalSize.h, 1);
+      setFsZoom(scale);
+    } else {
+      setFsZoom(1);
+    }
+    document.documentElement.requestFullscreen?.().catch(() => {});
+  }, [src, naturalSize]);
+
+  const exitFullscreen = useCallback(() => {
+    setFullscreen(false);
+    if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  }, []);
+
+  const fsFitToScreen = useCallback(() => {
+    if (naturalSize.w > 0 && naturalSize.h > 0) {
+      const sw = window.innerWidth;
+      const sh = window.innerHeight;
+      const scale = Math.min(sw / naturalSize.w, sh / naturalSize.h, 1);
+      setFsZoom(scale);
+    }
+    setFsPanX(0);
+    setFsPanY(0);
+  }, [naturalSize]);
+
+  // Register fullscreen shortcuts via the shortcuts system
+  const enterFsRef = useRef(enterFullscreen);
+  enterFsRef.current = enterFullscreen;
+  const exitFsRef = useRef(exitFullscreen);
+  exitFsRef.current = exitFullscreen;
+  const fullscreenRef = useRef(fullscreen);
+  fullscreenRef.current = fullscreen;
+
+  useEffect(() => {
+    regAction("toggleFullscreen", () => {
+      if (fullscreenRef.current) exitFsRef.current();
+      else enterFsRef.current();
+    });
+    regAction("exitFullscreen", () => {
+      if (fullscreenRef.current) exitFsRef.current();
+    });
+    return () => { unregAction("toggleFullscreen"); unregAction("exitFullscreen"); };
+  }, [regAction, unregAction]);
+
+  // Exit our state if browser exits fullscreen via F11 or other means
+  useEffect(() => {
+    const handler = () => {
+      if (!document.fullscreenElement && fullscreen) setFullscreen(false);
+    };
+    document.addEventListener("fullscreenchange", handler);
+    return () => document.removeEventListener("fullscreenchange", handler);
+  }, [fullscreen]);
+
+  // Fullscreen mouse handlers
+  const handleFsWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    setFsZoom((z) => Math.max(0.02, Math.min(50, z * factor)));
+  }, []);
+
+  const handleFsMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button === 0 || e.button === 1) {
+      setFsPanning(true);
+      fsLastPos.current = { x: e.clientX, y: e.clientY };
+    }
+  }, []);
+
+  const handleFsMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!fsPanning) return;
+    const dx = e.clientX - fsLastPos.current.x;
+    const dy = e.clientY - fsLastPos.current.y;
+    fsLastPos.current = { x: e.clientX, y: e.clientY };
+    setFsPanX((px) => px + dx);
+    setFsPanY((py) => py + dy);
+  }, [fsPanning]);
+
+  const handleFsMouseUp = useCallback(() => setFsPanning(false), []);
+
   return (
     <div className={`flex flex-col h-full ${className}`}>
       {showToolbar && (
@@ -489,6 +594,9 @@ export function ImageViewer({
           </button>
           <button onClick={fitToContainer} className="p-1 rounded transition-colors cursor-pointer hover:bg-[var(--color-hover)] ml-0.5" style={toolbarBtnStyle} title="Fit the whole image in the window (keyboard shortcut: F)">
             <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+          <button onClick={enterFullscreen} className="p-1 rounded transition-colors cursor-pointer hover:bg-[var(--color-hover)] ml-0.5" style={toolbarBtnStyle} title="View in full screen (Ctrl+F) — Escape to exit">
+            <Maximize className="h-3.5 w-3.5" />
           </button>
           {imageCount > 1 && (
             <span className="ml-2 text-[10px] font-mono tabular-nums" style={{ color: "var(--color-text-secondary)" }}>
@@ -668,12 +776,80 @@ export function ImageViewer({
             }}
           />
         )}
-        {locked && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.25)", cursor: "not-allowed" }}>
-            <span className="text-xs font-medium px-3 py-1.5 rounded" style={{ background: "rgba(0,0,0,0.6)", color: "var(--color-text-muted)" }}>Generating…</span>
-          </div>
-        )}
+        {/* No overlay during generation — user can still zoom and pan */}
       </div>
+
+      {/* Fullscreen portal overlay */}
+      {fullscreen && src && createPortal(
+        <div
+          ref={fsContainerRef}
+          style={{ position: "fixed", inset: 0, zIndex: 99999, background: "#000", cursor: fsPanning ? "grabbing" : "grab" }}
+          onWheel={handleFsWheel}
+          onMouseDown={handleFsMouseDown}
+          onMouseMove={handleFsMouseMove}
+          onMouseUp={handleFsMouseUp}
+          onMouseLeave={handleFsMouseUp}
+        >
+          <img
+            src={src} alt="" draggable={false}
+            style={{
+              position: "absolute", left: "50%", top: "50%",
+              transform: `translate(-50%, -50%) translate(${fsPanX}px, ${fsPanY}px) scale(${fsZoom})`,
+              transformOrigin: "center center",
+              maxWidth: "none", maxHeight: "none", pointerEvents: "none",
+              imageRendering: fsZoom > 3 ? "pixelated" : "auto",
+            }}
+          />
+
+          {/* Carousel arrows */}
+          {imageCount > 1 && onPrevImage && onNextImage && (
+            <>
+              <button className="absolute left-4 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full cursor-pointer transition-all hover:scale-110"
+                style={{ background: "rgba(255,255,255,0.1)", color: "#E0E0E0", border: "none", opacity: imageIndex > 0 ? 1 : 0.3 }}
+                onClick={(e) => { e.stopPropagation(); onPrevImage(); }} disabled={imageIndex <= 0}>
+                <ChevronLeft className="h-6 w-6" />
+              </button>
+              <button className="absolute right-4 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full cursor-pointer transition-all hover:scale-110"
+                style={{ background: "rgba(255,255,255,0.1)", color: "#E0E0E0", border: "none", opacity: imageIndex < imageCount - 1 ? 1 : 0.3 }}
+                onClick={(e) => { e.stopPropagation(); onNextImage(); }} disabled={imageIndex >= imageCount - 1}>
+                <ChevronRight className="h-6 w-6" />
+              </button>
+            </>
+          )}
+
+          {/* Bottom toolbar */}
+          <div className="absolute bottom-0 left-0 right-0 flex items-center justify-center gap-3 py-2 z-10"
+            style={{ background: "linear-gradient(transparent, rgba(0,0,0,0.7))" }}>
+            <button onClick={() => setFsZoom((z) => Math.max(0.02, z / 1.25))} className="p-1.5 rounded cursor-pointer hover:bg-white/10" style={{ background: "transparent", border: "none", color: "#ccc" }} title="Zoom out">
+              <ZoomOut className="h-4 w-4" />
+            </button>
+            <span className="text-xs font-mono tabular-nums" style={{ color: "#aaa", minWidth: 48, textAlign: "center" }}>{Math.round(fsZoom * 100)}%</span>
+            <button onClick={() => setFsZoom((z) => Math.min(50, z * 1.25))} className="p-1.5 rounded cursor-pointer hover:bg-white/10" style={{ background: "transparent", border: "none", color: "#ccc" }} title="Zoom in">
+              <ZoomIn className="h-4 w-4" />
+            </button>
+            <button onClick={fsFitToScreen} className="p-1.5 rounded cursor-pointer hover:bg-white/10" style={{ background: "transparent", border: "none", color: "#ccc" }} title="Fit to screen">
+              <Maximize2 className="h-4 w-4" />
+            </button>
+            <button onClick={exitFullscreen} className="p-1.5 rounded cursor-pointer hover:bg-white/10" style={{ background: "transparent", border: "none", color: "#ccc" }} title="Exit full screen (Escape)">
+              <Minimize className="h-4 w-4" />
+            </button>
+            {imageCount > 1 && (
+              <span className="text-[10px] font-mono tabular-nums" style={{ color: "#888" }}>{imageIndex + 1} / {imageCount}</span>
+            )}
+            {naturalSize.w > 0 && (
+              <span className="text-[10px] font-mono" style={{ color: "#666" }}>
+                {naturalSize.w} x {naturalSize.h}
+              </span>
+            )}
+          </div>
+
+          {/* Top-right hint */}
+          <div className="absolute top-3 right-3 z-10 px-2 py-1 rounded text-[10px]" style={{ background: "rgba(0,0,0,0.5)", color: "#888" }}>
+            Esc to exit
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

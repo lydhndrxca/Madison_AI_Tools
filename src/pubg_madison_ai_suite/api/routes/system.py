@@ -176,6 +176,70 @@ def _send_b64_to_ps(image_b64: str, label: str) -> dict:
             return {"ok": False, "message": f"Could not open {label}: {e}", "path": str(filepath)}
 
 
+# ---------------------------------------------------------------------------
+# Voice transcription via Gemini
+# ---------------------------------------------------------------------------
+
+class TranscribeRequest(BaseModel):
+    audio_b64: str
+    mime_type: str = "audio/webm"
+    lang: str = "en-US"
+    context: str = ""
+
+
+@router.post("/transcribe")
+async def transcribe(body: TranscribeRequest):
+    api_key = core.get_api_key()
+    if not api_key:
+        return {"text": "", "error": "No API key configured"}
+    try:
+        audio_part = {
+            "inlineData": {
+                "mimeType": body.mime_type,
+                "data": body.audio_b64,
+            }
+        }
+        lang_name = body.lang.split("-")[0] if body.lang else "en"
+
+        context_hint = ""
+        if body.context.strip():
+            context_hint = (
+                f'\nThe speaker was previously saying: "{body.context.strip()}"\n'
+                "Use this to resolve ambiguous words and maintain coherent flow.\n"
+            )
+
+        prompt = (
+            f"You are a professional speech-to-text transcriber for {lang_name}.\n"
+            f"{context_hint}"
+            "Transcribe the following audio clip into clean, accurate written text.\n\n"
+            "Rules:\n"
+            "- Produce ONLY the transcribed text. No timestamps, no speaker labels, no commentary.\n"
+            "- Clean up filler words (uh, um, like, you know) — remove them unless they carry meaning.\n"
+            "- Remove false starts and repeated stutters (e.g. 'don't don't do' → 'don't do').\n"
+            "- Fix obvious mishearings using surrounding context (e.g. 'are true' likely means 'our tool').\n"
+            "- Preserve the speaker's intended meaning exactly — do not rephrase or summarize.\n"
+            "- Use proper capitalization, punctuation, and natural sentence structure.\n"
+            "- Proper nouns and technical terms should be spelled correctly when inferable from context.\n"
+            "- If the audio is completely silent or fully unintelligible, return an empty string.\n"
+            "- Do NOT add any preamble like 'Here is the transcription:' — output ONLY the text."
+        )
+        result = core.rest_generate_text_multimodal(
+            api_key, "gemini-2.0-flash", [audio_part, prompt], timeout=30,
+        )
+        text = (result or "").strip()
+        if text.lower().startswith("here is") or text.lower().startswith("the transcription"):
+            first_newline = text.find("\n")
+            if first_newline > 0:
+                text = text[first_newline:].strip()
+        return {"text": text}
+    except Exception as e:
+        return {"text": "", "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Photoshop integration
+# ---------------------------------------------------------------------------
+
 class SendToPsRequest(BaseModel):
     images: list[dict]  # each: {"label": str, "image_b64": str}
 
