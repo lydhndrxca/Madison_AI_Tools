@@ -52,6 +52,9 @@ export function NumberStepper({
             const n = parseInt(e.target.value, 10);
             if (!isNaN(n)) onChange(Math.max(min, Math.min(max, n)));
           }}
+          onBlur={(e) => {
+            if (e.target.value.trim() === "" || isNaN(parseInt(e.target.value, 10))) onChange(min);
+          }}
         />
         <button
           className="px-1.5 py-0.5 text-xs cursor-pointer transition-colors hover:bg-[var(--color-hover)]"

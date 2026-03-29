@@ -212,14 +212,16 @@ export function ImageViewer({
         el.releasePointerCapture(e.pointerId);
       }
     };
+    const onCancel = () => { captured = false; };
     el.addEventListener("pointerdown", onDown);
     el.addEventListener("pointermove", onMove);
     el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", () => { captured = false; });
+    el.addEventListener("pointercancel", onCancel);
     return () => {
       el.removeEventListener("pointerdown", onDown);
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onCancel);
     };
   }, []);
 

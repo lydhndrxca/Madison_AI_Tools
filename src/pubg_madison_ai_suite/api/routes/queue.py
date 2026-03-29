@@ -141,8 +141,13 @@ def _ensure_worker():
         _worker_task = asyncio.get_running_loop().create_task(_worker())
 
 
+_SUPPORTED_TOOLS = {"character", "prop", "environment", "weapon"}
+
+
 @router.post("/enqueue")
 async def enqueue(body: EnqueueRequest) -> list[dict]:
+    if body.tool not in _SUPPORTED_TOOLS:
+        raise HTTPException(400, f"Unsupported tool: {body.tool}. Supported: {', '.join(sorted(_SUPPORTED_TOOLS))}")
     _ensure_worker()
     created = []
     for i in range(max(1, min(body.count, 20))):

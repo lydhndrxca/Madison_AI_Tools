@@ -58,7 +58,7 @@ export function GridGallery({
 }: GridGalleryProps) {
   const [editTexts, setEditTexts] = useState<Record<string, string>>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [trimBusy, setTrimBusy] = useState(false);
+  const [trimBusy, setTrimBusy] = useState<Record<string, boolean>>({});
   const overlayRef = useRef<HTMLDivElement>(null);
 
   const handleEditChange = useCallback((id: string, text: string) => {
@@ -90,7 +90,7 @@ export function GridGallery({
   const handleTrimAlpha = useCallback(async (id: string, pixels: number) => {
     const result = results.find((r) => r.id === id);
     if (!result || !onUpdateImage) return;
-    setTrimBusy(true);
+    setTrimBusy((prev) => ({ ...prev, [id]: true }));
     try {
       const res = await apiFetch<{ image_b64: string; width: number; height: number }>(
         "/uilab/trim-alpha",
@@ -98,7 +98,7 @@ export function GridGallery({
       );
       onUpdateImage(id, res.image_b64, res.width, res.height);
     } catch { /* */ }
-    setTrimBusy(false);
+    setTrimBusy((prev) => ({ ...prev, [id]: false }));
   }, [results, onUpdateImage]);
 
   const handleSendToPhotoshop = useCallback(async (id: string) => {
@@ -364,7 +364,7 @@ export function GridGallery({
                 <span className="text-[11px] font-medium" style={{ color: "rgba(255,255,255,0.6)" }}>Alpha Border:</span>
                 <button
                   onClick={() => handleTrimAlpha(expandedResult.id, 1)}
-                  disabled={trimBusy}
+                  disabled={!!trimBusy[expandedResult.id]}
                   className="flex items-center gap-1 px-2 py-1 text-[11px] rounded cursor-pointer font-medium"
                   style={{ background: "rgba(42,90,42,0.4)", color: "#4ec9a0", border: "1px solid rgba(74,138,74,0.5)" }}
                   title="Shrink alpha border by 1px (removes green fringe)"
@@ -373,14 +373,14 @@ export function GridGallery({
                 </button>
                 <button
                   onClick={() => handleTrimAlpha(expandedResult.id, -1)}
-                  disabled={trimBusy}
+                  disabled={!!trimBusy[expandedResult.id]}
                   className="flex items-center gap-1 px-2 py-1 text-[11px] rounded cursor-pointer font-medium"
                   style={{ background: "rgba(42,58,106,0.4)", color: "#5e9eff", border: "1px solid rgba(58,90,138,0.5)" }}
                   title="Expand alpha border by 1px"
                 >
                   <Plus className="h-3 w-3" /> Expand
                 </button>
-                {trimBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: "rgba(255,255,255,0.5)" }} />}
+                {trimBusy[expandedResult.id] && <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: "rgba(255,255,255,0.5)" }} />}
               </div>
             )}
 

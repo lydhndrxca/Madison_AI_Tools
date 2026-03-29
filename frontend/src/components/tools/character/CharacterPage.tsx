@@ -739,8 +739,9 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     setSectionEnabled({ identity: true, attributes: true });
     setLockedSections({ identity: false, attributes: false, bible: false, costume: false, styleFusion: false, envPlacement: false, preservation: false });
     setSectionsOpen({ attributes: true, bible: false, costume: false });
+    customSections.clearAll();
     addToast("Project cleared", "info");
-  }, [addToast]);
+  }, [addToast, customSections]);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -1100,15 +1101,21 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
        .catch((e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e), idx: i })),
     );
     const results = await Promise.all(promises);
+    let successCount = 0;
     for (const r of results.sort((a, b) => a.idx - b.idx)) {
       if (r.ok && r.resp.image_b64) {
+        successCount++;
         const src = `data:image/png;base64,${r.resp.image_b64}`;
         if (r.idx === 0) setTabImage("main", src, "Initial generation");
         else appendToGallery("main", src, `Generation ${r.idx + 1}`);
       } else if (r.ok && r.resp.error) { addToast(r.resp.error, "error"); }
       else if (!r.ok) { addToast(r.error, "error"); }
     }
-    addToast(total > 1 ? `Generated ${total} images` : "Character generated", "success");
+    if (successCount > 0) {
+      addToast(successCount > 1 ? `Generated ${successCount} images` : "Character generated", "success");
+    } else if (results.length > 0) {
+      addToast("All generation attempts failed", "error");
+    }
     busy.end("generate");
   }, [description, age, race, gender, build, genCount, modelId, bible, costume, preservation, attributes, extractMode, isSectionEnabled, getExtraContext, buildAttrBrief, buildPromptPreview, getMainImageB64, setTabImage, appendToGallery, addToast, busy, styleFusion]);
 
@@ -1278,6 +1285,8 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
               fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
               style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
               lock_constraints: lockCtx || undefined,
+              custom_sections_context: customSections.getPromptContributions() || undefined,
+              custom_section_images: customSections.getImageAttachments(),
             }),
           },
         );
@@ -1317,6 +1326,8 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
           fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
           style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
           lock_constraints: lockCtx || undefined,
+          custom_sections_context: customSections.getPromptContributions() || undefined,
+          custom_section_images: customSections.getImageAttachments(),
         }),
       }).then((resp) => ({ ok: true as const, resp, view }))
         .catch(() => ({ ok: false as const, resp: null, view })),
@@ -1360,6 +1371,8 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
           fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
           style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
           lock_constraints: lockCtx || undefined,
+          custom_sections_context: customSections.getPromptContributions() || undefined,
+          custom_section_images: customSections.getImageAttachments(),
         }),
       }).then((resp) => ({ ok: true as const, resp, idx: i }))
         .catch(() => ({ ok: false as const, resp: null, idx: i })),
@@ -1471,6 +1484,8 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
             lock_constraints: lockCtx || undefined,
             reference_image_b64: mainRef || undefined,
             recreate_mode: extractMode === "recreate",
+            custom_sections_context: customSections.getPromptContributions() || undefined,
+            custom_section_images: customSections.getImageAttachments(),
           }),
         },
       ).then((resp) => ({ ok: true as const, resp, idx: i }))
@@ -1490,7 +1505,11 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
       else if (!r.ok) { addToast(r.error, "error"); }
     }
     setGridResults((prev) => [...prev, ...newResults]);
-    addToast(`Generated ${newResults.length} images`, "success");
+    if (newResults.length > 0) {
+      addToast(`Generated ${newResults.length} images`, "success");
+    } else {
+      addToast("All grid generation attempts failed", "error");
+    }
     busy.end("generate");
   }, [description, age, race, gender, build, modelId, bible, costume, preservation, attributes, extractMode, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, addToast, busy, styleFusion]);
 

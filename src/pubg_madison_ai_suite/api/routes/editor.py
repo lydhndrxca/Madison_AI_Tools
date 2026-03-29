@@ -89,7 +89,10 @@ class SmartSelectResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _decode(b64: str) -> Image.Image:
-    return Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGBA")
+    raw = b64
+    if raw.startswith("data:"):
+        raw = raw.split(",", 1)[1]
+    return Image.open(io.BytesIO(base64.b64decode(raw))).convert("RGBA")
 
 def _ref_images(b64_list: list[str]) -> list[Any]:
     """Decode reference images for inclusion in Gemini contents."""
@@ -113,7 +116,7 @@ def _style_suffix(ctx: str) -> str:
 def _respond(img: Image.Image | None, tool: str) -> ImageResponse:
     if img is None:
         return ImageResponse(error="Generation failed — no image returned")
-    saved = core.save_generated_image(img, "Character Generator", generation_type=tool)
+    core.save_generated_image(img, "Editor", generation_type=tool)
     return ImageResponse(image_b64=core.image_to_b64(img), width=img.width, height=img.height)
 
 
@@ -128,18 +131,24 @@ async def inpaint(req: InpaintRequest):
         api_key = core.get_api_key()
         if not api_key:
             return ImageResponse(error="No API key configured")
-        original = _decode(req.image_b64)
-        composite = _decode(req.mask_composite_b64)
-        prompt = (
-            f"You are given two images. The first is the original. The second has areas painted in BRIGHT GREEN — "
-            f"these are the regions to edit. {req.prompt or 'Seamlessly fill the green-highlighted areas to match the surrounding image.'}. "
-            f"Return a single edited image that looks natural. Do not add text or labels."
-            f"{_style_suffix(req.style_context)}"
-        )
-        refs = _ref_images(req.ref_images)
-        contents: list = [original, composite] + refs + [prompt]
-        result = core.gemini_generate_image(api_key, contents, cancel_event=cancel, model_id=req.model_id)
+        def _do():
+            original = _decode(req.image_b64)
+            composite = _decode(req.mask_composite_b64)
+            prompt = (
+                f"You are given two images. The first is the original. The second has areas painted in BRIGHT GREEN — "
+                f"these are the regions to edit. {req.prompt or 'Seamlessly fill the green-highlighted areas to match the surrounding image.'}. "
+                f"Return a single edited image that looks natural. Do not add text or labels."
+                f"{_style_suffix(req.style_context)}"
+            )
+            refs = _ref_images(req.ref_images)
+            contents: list = [original, composite] + refs + [prompt]
+            return core.gemini_generate_image(api_key, contents, cancel_event=cancel, model_id=req.model_id)
+        import asyncio
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(_pool, _do)
         return _respond(result, "inpaint")
+    except RuntimeError as e:
+        return ImageResponse(error=str(e))
     finally:
         release_cancel_event(cancel)
 
@@ -152,33 +161,36 @@ async def smart_select(req: SmartSelectRequest):
         if not api_key:
             return SmartSelectResponse(error="No API key configured")
 
-        original = _decode(req.image_b64)
-        w, h = original.size
-        print(f"[SmartSelect] Generating mask for \"{req.subject}\" on {w}x{h} image")
+        def _do():
+            original = _decode(req.image_b64)
+            w, h = original.size
+            print(f"[SmartSelect] Generating mask for \"{req.subject}\" on {w}x{h} image")
+            prompt = (
+                f'Create a precise segmentation mask for "{req.subject}" in this image. '
+                f"Return a single image that is a black and white mask — the EXACT same dimensions as the input. "
+                f"White (pure #FFFFFF) pixels mark the selected region. Black (#000000) pixels mark everything else. "
+                f"The mask must tightly follow the contours of the subject with pixel-level accuracy. "
+                f"No grey, no antialiasing, no gradients — only pure black and pure white. "
+                f"Do not add any text, labels, or annotations."
+            )
+            contents: list = [original, prompt]
+            mask_img = core.gemini_generate_image(
+                api_key, contents, cancel_event=cancel,
+                model_id=req.model_id,
+            )
+            if mask_img is None:
+                return None, 0, 0
+            if mask_img.size != (w, h):
+                mask_img = mask_img.resize((w, h), Image.LANCZOS)
+            grey = mask_img.convert("L")
+            bw = grey.point(lambda p: 255 if p > 128 else 0, mode="1").convert("L")
+            return bw, w, h
 
-        prompt = (
-            f'Create a precise segmentation mask for "{req.subject}" in this image. '
-            f"Return a single image that is a black and white mask — the EXACT same dimensions as the input. "
-            f"White (pure #FFFFFF) pixels mark the selected region. Black (#000000) pixels mark everything else. "
-            f"The mask must tightly follow the contours of the subject with pixel-level accuracy. "
-            f"No grey, no antialiasing, no gradients — only pure black and pure white. "
-            f"Do not add any text, labels, or annotations."
-        )
-        contents: list = [original, prompt]
-        mask_img = core.gemini_generate_image(
-            api_key, contents, cancel_event=cancel,
-            model_id=req.model_id,
-        )
-        if mask_img is None:
+        import asyncio
+        loop = asyncio.get_running_loop()
+        bw, w, h = await loop.run_in_executor(_pool, _do)
+        if bw is None:
             return SmartSelectResponse(error="Failed to generate selection mask")
-
-        # Resize mask to match original if Gemini returned different dimensions
-        if mask_img.size != (w, h):
-            mask_img = mask_img.resize((w, h), Image.LANCZOS)
-
-        # Threshold to pure black/white
-        grey = mask_img.convert("L")
-        bw = grey.point(lambda p: 255 if p > 128 else 0, mode="1").convert("L")
 
         mask_b64 = core.image_to_b64(bw, fmt="PNG")
         print(f"[SmartSelect] Mask generated: {bw.size[0]}x{bw.size[1]}")
@@ -201,18 +213,24 @@ async def smart_erase(req: SmartEraseRequest):
         api_key = core.get_api_key()
         if not api_key:
             return ImageResponse(error="No API key configured")
-        original = _decode(req.image_b64)
-        composite = _decode(req.mask_composite_b64)
-        prompt = (
-            "You are given two images. The first is the original. The second has objects painted in BRIGHT GREEN. "
-            "Remove the green-highlighted objects completely and seamlessly inpaint the area to match the surroundings. "
-            "Return a single clean image with no text or labels."
-            f"{_style_suffix(req.style_context)}"
-        )
-        refs = _ref_images(req.ref_images)
-        contents: list = [original, composite] + refs + [prompt]
-        result = core.gemini_generate_image(api_key, contents, cancel_event=cancel, model_id=req.model_id)
+        def _do():
+            original = _decode(req.image_b64)
+            composite = _decode(req.mask_composite_b64)
+            prompt = (
+                "You are given two images. The first is the original. The second has objects painted in BRIGHT GREEN. "
+                "Remove the green-highlighted objects completely and seamlessly inpaint the area to match the surroundings. "
+                "Return a single clean image with no text or labels."
+                f"{_style_suffix(req.style_context)}"
+            )
+            refs = _ref_images(req.ref_images)
+            contents: list = [original, composite] + refs + [prompt]
+            return core.gemini_generate_image(api_key, contents, cancel_event=cancel, model_id=req.model_id)
+        import asyncio
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(_pool, _do)
         return _respond(result, "smart_erase")
+    except RuntimeError as e:
+        return ImageResponse(error=str(e))
     finally:
         release_cancel_event(cancel)
 
@@ -283,8 +301,16 @@ async def outpaint(req: OutpaintRequest):
 
         refs = _ref_images(req.ref_images)
         contents: list = [original, expanded] + refs + [prompt]
-        result = core.gemini_generate_image(api_key, contents, cancel_event=cancel, model_id=req.model_id)
+
+        import asyncio
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            _pool,
+            lambda: core.gemini_generate_image(api_key, contents, cancel_event=cancel, model_id=req.model_id),
+        )
         return _respond(result, "outpaint")
+    except RuntimeError as e:
+        return ImageResponse(error=str(e))
     finally:
         release_cancel_event(cancel)
 
@@ -381,17 +407,23 @@ async def style_transfer(req: StyleTransferRequest):
         api_key = core.get_api_key()
         if not api_key:
             return ImageResponse(error="No API key configured")
-        original = _decode(req.image_b64)
-        style_desc = req.custom_prompt or req.style_preset
-        prompt = (
-            f"Transform this image into the following visual style: {style_desc}. "
-            f"Maintain the exact same composition, pose, and subject placement. "
-            f"Only change the visual rendering style. Return a single image, no text."
-            f"{_style_suffix(req.style_context)}"
-        )
-        refs = _ref_images(req.ref_images)
-        contents: list = [original] + refs + [prompt]
-        result = core.gemini_generate_image(api_key, contents, cancel_event=cancel, model_id=req.model_id)
+        def _do():
+            original = _decode(req.image_b64)
+            style_desc = req.custom_prompt or req.style_preset
+            prompt = (
+                f"Transform this image into the following visual style: {style_desc}. "
+                f"Maintain the exact same composition, pose, and subject placement. "
+                f"Only change the visual rendering style. Return a single image, no text."
+                f"{_style_suffix(req.style_context)}"
+            )
+            refs = _ref_images(req.ref_images)
+            contents: list = [original] + refs + [prompt]
+            return core.gemini_generate_image(api_key, contents, cancel_event=cancel, model_id=req.model_id)
+        import asyncio
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(_pool, _do)
         return _respond(result, "style_transfer")
+    except RuntimeError as e:
+        return ImageResponse(error=str(e))
     finally:
         release_cancel_event(cancel)

@@ -127,7 +127,10 @@ const STORAGE_KEY = "madison-custom-sections";
 function loadSections(): CustomSectionDef[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    }
   } catch { /* */ }
   return [];
 }
@@ -143,7 +146,10 @@ const COLORS_KEY = "madison-section-colors";
 function loadColors(): Record<string, string> {
   try {
     const raw = localStorage.getItem(COLORS_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    }
   } catch { /* */ }
   return {};
 }

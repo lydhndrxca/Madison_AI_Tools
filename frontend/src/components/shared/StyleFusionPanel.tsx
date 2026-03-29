@@ -92,6 +92,7 @@ function SlotImageRow({
       reader.onload = () => {
         if (typeof reader.result === "string") onSetImage(reader.result);
       };
+      reader.onerror = () => { /* silently ignore read failure */ };
       reader.readAsDataURL(file);
       e.target.value = "";
     },

@@ -28,7 +28,15 @@ const MAX_CONTEXT_CHARS = 300;
 function loadSettings(): VoiceSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const merged = { ...DEFAULT_SETTINGS, ...parsed };
+        if (merged.engine !== "gemini" && merged.engine !== "native") merged.engine = DEFAULT_SETTINGS.engine;
+        if (typeof merged.sendInterval !== "number" || merged.sendInterval < 500) merged.sendInterval = DEFAULT_SETTINGS.sendInterval;
+        return merged;
+      }
+    }
   } catch { /* */ }
   return { ...DEFAULT_SETTINGS };
 }

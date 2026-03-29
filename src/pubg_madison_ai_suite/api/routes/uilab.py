@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from pubg_madison_ai_suite.api import core
 from pubg_madison_ai_suite.api.ws import manager
@@ -969,17 +969,21 @@ def _shrink_alpha_border(img, pixels: int = 1):
 
 class AlphaTrimRequest(BaseModel):
     image_b64: str
-    pixels: int = 1
+    pixels: int = Field(default=1, ge=-20, le=20)
 
 
 @router.post("/trim-alpha")
 async def trim_alpha(req: AlphaTrimRequest):
     """Shrink (positive) or expand (negative) the alpha border by N pixels."""
-    raw = req.image_b64.split(",", 1)[-1] if "," in req.image_b64 else req.image_b64
-    img = core.b64_to_image(raw)
-    result = _shrink_alpha_border(img, req.pixels)
-    return {
-        "image_b64": core.image_to_b64(result),
-        "width": result.width,
-        "height": result.height,
-    }
+    try:
+        raw = req.image_b64.split(",", 1)[-1] if "," in req.image_b64 else req.image_b64
+        img = core.b64_to_image(raw)
+        result = _shrink_alpha_border(img, req.pixels)
+        return {
+            "image_b64": core.image_to_b64(result),
+            "width": result.width,
+            "height": result.height,
+        }
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"Alpha trim failed: {e}")

@@ -20,7 +20,9 @@ function loadTemplatesFromStorage(): SessionTemplate[] {
 }
 
 function saveTemplatesToStorage(templates: SessionTemplate[]) {
-  localStorage.setItem(TEMPLATES_STORAGE_KEY, JSON.stringify(templates));
+  try {
+    localStorage.setItem(TEMPLATES_STORAGE_KEY, JSON.stringify(templates));
+  } catch { /* quota exceeded */ }
 }
 
 const IMAGE_KEYS = new Set(["gallery", "imageIdx", "imageRecords"]);

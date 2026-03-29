@@ -105,7 +105,7 @@ export function MultiviewPage() {
       const mainB64 = getMainB64();
       const resp = await apiFetch<{ images: Record<string, string | null>; errors: Record<string, string> }>("/gemini/multiview/generate-all", {
         method: "POST",
-        body: JSON.stringify({ prompt, dimension, mode: "quality", base_image_b64: mainB64 }),
+        body: JSON.stringify({ prompt, dimension, mode: "quality", base_image_b64: mainB64, model_id: modelId || undefined }),
       });
       for (const [viewKey, b64] of Object.entries(resp.images)) {
         if (b64) {
@@ -126,7 +126,7 @@ export function MultiviewPage() {
       const viewKey = VIEW_KEY_MAP[activeTab] || "front";
       const resp = await apiFetch<{ images: Record<string, string | null>; errors: Record<string, string> }>("/gemini/multiview/generate-all", {
         method: "POST",
-        body: JSON.stringify({ prompt, dimension, mode: "quality", base_image_b64: mainB64, views: [viewKey] }),
+        body: JSON.stringify({ prompt, dimension, mode: "quality", base_image_b64: mainB64, views: [viewKey], model_id: modelId || undefined }),
       });
       for (const [key, b64] of Object.entries(resp.images)) {
         if (b64) {
@@ -245,7 +245,6 @@ export function MultiviewPage() {
             <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>Describe image:</p>
             <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={12} className="flex-1" placeholder="Describe what you want to see — e.g. A medieval sword with ornate handle..." disabled={busy.any} />
             <Button variant="primary" className="w-full" generating={busy.is("generate")} generatingText="Generating Image..." onClick={handleGenerate} title="Generate a new image from your prompt">Generate Image</Button>
-            <Button className="w-full" onClick={() => {}} title="Isolate the subject from the background">Isolate Image</Button>
             <Button className="w-full" generating={busy.is("selected")} generatingText={genText.selected || "Generating view..."} onClick={handleGenerateSelected} title="Generate only the view you have selected">Generate Selected View</Button>
             <Button variant="primary" className="w-full" generating={busy.is("allviews")} generatingText={genText.allviews || "Generating views..."} onClick={handleGenerateAll} title="Generate all views (front, back, side) at once">Generate All Views</Button>
             {busy.any && <Button variant="danger" size="sm" className="w-full" onClick={handleCancel} title="Stop the current generation">Cancel</Button>}
@@ -265,8 +264,7 @@ export function MultiviewPage() {
           <div className="px-3 py-2 space-y-1.5">
             <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--color-text-secondary)" }}>Actions</p>
             <Button size="sm" className="w-full" onClick={handleSendToPS} title="Open the current image in Photoshop">Send to PS</Button>
-            <Button size="sm" className="w-full" onClick={handleSaveImage} title="Save all generated view images to your images folder">Save All Images</Button>
-            <Button size="sm" className="w-full" title="Browse all images you've generated so far">Open Generated Images</Button>
+            <Button size="sm" className="w-full" onClick={handleSaveImage} title="Save the current view image">Save Image</Button>
           </div>
         </Card>
       </div>

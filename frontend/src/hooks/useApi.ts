@@ -32,7 +32,12 @@ export async function apiFetch<T = unknown>(
       const text = await res.text();
       throw new Error(`${res.status}: ${text}`);
     }
-    return res.json();
+    const ct = res.headers.get("content-type") ?? "";
+    if (ct.includes("application/json")) {
+      return res.json();
+    }
+    const text = await res.text();
+    try { return JSON.parse(text); } catch { return text as unknown as T; }
   } finally {
     _activeControllers.delete(controller);
   }
@@ -73,6 +78,8 @@ interface ProgressMessage {
 
 export function useWebSocket(onMessage: (msg: ProgressMessage) => void) {
   const wsRef = useRef<WebSocket | null>(null);
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
 
   useEffect(() => {
     const wsBase = BACKEND
@@ -84,7 +91,7 @@ export function useWebSocket(onMessage: (msg: ProgressMessage) => void) {
     ws.onmessage = (ev) => {
       try {
         const msg: ProgressMessage = JSON.parse(ev.data);
-        onMessage(msg);
+        onMessageRef.current(msg);
       } catch { /* ignore */ }
     };
 
@@ -95,7 +102,7 @@ export function useWebSocket(onMessage: (msg: ProgressMessage) => void) {
     };
 
     return () => ws.close();
-  }, [onMessage]);
+  }, []);
 
   return wsRef;
 }

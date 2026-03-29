@@ -27,7 +27,8 @@ export type PageId = "style-library" | "prompt-builder" | "generated-images" | "
 function AppInner() {
   const [activePage, setActivePage] = useState<PageId>("character");
   const { addToast } = useToastContext();
-  const setPage = useCallback((p: string) => setActivePage(p as PageId), []);
+  const VALID_PAGES = new Set<string>(["style-library", "prompt-builder", "generated-images", "favorites", "prompt-library", "history", "gemini", "multiview", "character", "weapon", "prop", "environment", "uilab", "3d"]);
+  const setPage = useCallback((p: string) => { if (VALID_PAGES.has(p)) setActivePage(p as PageId); }, []);
 
   return (
     <SessionProvider activePage={activePage} onSetActivePage={setPage} onToast={addToast}>

@@ -597,7 +597,8 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
         else if (!r.ok) { addToast(r.error, "error"); }
       }
       setGridResults((prev) => [...prev, ...newResults]);
-      addToast(`Generated ${newResults.length} images`, "success");
+      if (newResults.length > 0) addToast(`Generated ${newResults.length} images`, "success");
+      else addToast("All grid generation attempts failed", "error");
     } catch (e) { addToast(String(e), "error"); }
     busy.end("gen");
   }, [buildRequestBody, addToast, busy]);
@@ -859,8 +860,11 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
     setReimagineStyle("photorealistic concept art");
     setTabs(BUILTIN_TABS);
     setActiveTab("main");
+    setGridResults([]);
+    setGridEditBusy({});
+    customSections.clearAll();
     addToast("Environment session cleared", "info");
-  }, [addToast]);
+  }, [addToast, customSections]);
 
   // Listen for project-clear event from ProjectTabsWrapper
   useEffect(() => {
@@ -952,9 +956,10 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
     },
   );
 
-  // Register keyboard shortcuts
+  // Register keyboard shortcuts (only when this project tab is active)
   const { registerAction, unregisterAction } = useShortcuts();
   useEffect(() => {
+    if (!active) return;
     registerAction("envGenerate", () => handleGenerate());
     registerAction("envExtract", handleExtractAttributes);
     registerAction("envEnhance", handleEnhanceDescription);
@@ -968,7 +973,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
         unregisterAction(id);
       }
     };
-  }, [registerAction, unregisterAction, handleGenerate, handleExtractAttributes, handleEnhanceDescription, handleRandomizeFull, handleReimagine, handleGenerateAllViews, handleSendToPS]);
+  }, [active, registerAction, unregisterAction, handleGenerate, handleExtractAttributes, handleEnhanceDescription, handleRandomizeFull, handleReimagine, handleGenerateAllViews, handleSendToPS]);
 
   // ---------------------------------------------------------------------------
   // Render helpers

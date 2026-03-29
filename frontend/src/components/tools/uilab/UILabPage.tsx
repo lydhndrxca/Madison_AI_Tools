@@ -734,8 +734,11 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
     setGalleryResults([]);
     setRefImages({});
     setStyleLibraryFolder("");
+    setGalleryResults([]);
+    setGridEditBusy({});
+    customSections.clearAll();
     addToast("Session cleared", "info");
-  }, [addToast]);
+  }, [addToast, customSections]);
 
   // Listen for project-clear event from ProjectTabsWrapper
   useEffect(() => {
@@ -766,6 +769,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
     if (!result) return;
     setGridEditBusy((prev) => ({ ...prev, [id]: true }));
     try {
+      const fusionCtx = resolveSection("styleFusion");
       const res = await apiFetch<{ image_b64?: string; width?: number; height?: number; error?: string }>(
         "/uilab/generate",
         {
@@ -776,6 +780,13 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
             reference_image_b64: result.image_b64,
             edit_prompt: editText,
             model_id: modelId || undefined,
+            add_color: addColor,
+            no_color: noColor,
+            fusion_context: fusionCtx || undefined,
+            fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            custom_sections_context: customSections.getPromptContributions() || undefined,
+            custom_section_images: customSections.getImageAttachments().map((img) => img.replace(/^data:image\/\w+;base64,/, "")).filter(Boolean) || undefined,
           }),
         },
       );
@@ -788,7 +799,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
       }
     } catch (e) { addToast(e instanceof Error ? e.message : "Edit failed", "error"); }
     setGridEditBusy((prev) => ({ ...prev, [id]: false }));
-  }, [galleryResults, elementType, modelId, addToast]);
+  }, [galleryResults, elementType, modelId, addColor, noColor, styleFusion, customSections, resolveSection, addToast]);
 
   const handleGridRegenerate = useCallback(async (id: string) => {
     const result = galleryResults.find((r) => r.id === id);
@@ -810,6 +821,10 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
             fusion_context: resolveSection("styleFusion") || undefined,
             fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
             fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            add_color: addColor,
+            no_color: noColor,
+            custom_sections_context: customSections.getPromptContributions() || undefined,
+            custom_section_images: customSections.getImageAttachments().map((img) => img.replace(/^data:image\/\w+;base64,/, "")).filter(Boolean) || undefined,
           }),
         },
       );
@@ -918,15 +933,16 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
     },
   );
 
-  // Keyboard shortcuts
+  // Keyboard shortcuts (only when this project tab is active)
   const { registerAction, unregisterAction } = useShortcuts();
   useEffect(() => {
+    if (!active) return;
     registerAction("uiGenerate", () => handleGenerate());
     registerAction("uiShowXml", () => setXmlOpen(true));
     return () => {
       for (const id of ["uiGenerate", "uiShowXml"]) unregisterAction(id);
     };
-  }, [registerAction, unregisterAction, handleGenerate]);
+  }, [active, registerAction, unregisterAction, handleGenerate]);
 
   // ---------------------------------------------------------------------------
   // Render helpers

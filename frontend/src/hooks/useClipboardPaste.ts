@@ -81,7 +81,7 @@ export function useClipboardPaste(onImage: ((dataUrl: string) => void) | undefin
     const unsub = window.electronAPI.onPasteImage(async (result: ClipboardResult) => {
       if (!callbackRef.current) return;
       const tag = document.activeElement?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (tag === "INPUT" || tag === "TEXTAREA" || (document.activeElement as HTMLElement)?.isContentEditable) return;
 
       const dataUrl = await resolveClipboardResult(result);
       if (dataUrl) {

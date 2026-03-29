@@ -243,7 +243,11 @@ def rest_generate_json(
         for part in cand.get("content", {}).get("parts", []):
             if "text" in part:
                 import json as _json
-                parsed = _json.loads(part["text"])
+                try:
+                    parsed = _json.loads(part["text"])
+                except (ValueError, _json.JSONDecodeError):
+                    print(f"[rest_generate_json] Non-JSON response text: {part['text'][:200]}")
+                    return None
                 if isinstance(parsed, list):
                     return parsed[0] if parsed else {}
                 return parsed

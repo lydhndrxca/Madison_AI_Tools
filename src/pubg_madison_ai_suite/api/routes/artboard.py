@@ -147,9 +147,15 @@ def save_board(req: SaveBoardReq) -> dict:
 @router.get("/boards/{name}")
 def load_board(name: str) -> BoardData:
     meta = _read_board_meta(name)
+    validated_items = []
+    for it in meta.get("items", []):
+        try:
+            validated_items.append(ArtboardItemModel(**it))
+        except Exception:
+            pass
     return BoardData(
         name=name,
-        items=[ArtboardItemModel(**it) for it in meta.get("items", [])],
+        items=validated_items,
         created_at=meta.get("created_at", ""),
         updated_at=meta.get("updated_at", ""),
     )
@@ -248,10 +254,12 @@ class Room:
         elif dtype == "move":
             ids = set(delta.get("ids", []))
             dx, dy = delta.get("dx", 0), delta.get("dy", 0)
-            self.items = [{**i, "x": i["x"] + dx, "y": i["y"] + dy} if i.get("id") in ids else i for i in self.items]
+            self.items = [{**i, "x": i.get("x", 0) + dx, "y": i.get("y", 0) + dy} if i.get("id") in ids else i for i in self.items]
         elif dtype == "resize":
             tid = delta.get("id")
-            self.items = [{**i, "w": delta["w"], "h": delta["h"]} if i.get("id") == tid else i for i in self.items]
+            w = delta.get("w", 100)
+            h = delta.get("h", 100)
+            self.items = [{**i, "w": w, "h": h} if i.get("id") == tid else i for i in self.items]
         elif dtype == "reorder":
             zmap = delta.get("zIndexMap", {})
             self.items = [{**i, "zIndex": zmap[i["id"]]} if i.get("id") in zmap else i for i in self.items]

@@ -268,28 +268,28 @@ export function ArtboardProvider({ children }: { children: ReactNode }) {
 
   const bringToFront = useCallback((ids: string[]) => {
     const idSet = new Set(ids);
+    let zMap: Record<string, number> = {};
     setItems((prev) => {
       pushUndo(prev);
       let z = Math.max(...prev.map((i) => i.zIndex)) + 1;
       const result = prev.map((i) => idSet.has(i.id) ? { ...i, zIndex: z++ } : i);
-      const zMap: Record<string, number> = {};
       result.forEach((i) => { if (idSet.has(i.id)) zMap[i.id] = i.zIndex; });
-      emitDelta({ type: "reorder", ids, zIndexMap: zMap });
       return result;
     });
+    queueMicrotask(() => emitDelta({ type: "reorder", ids, zIndexMap: zMap }));
   }, [pushUndo, emitDelta]);
 
   const sendToBack = useCallback((ids: string[]) => {
     const idSet = new Set(ids);
+    let zMap: Record<string, number> = {};
     setItems((prev) => {
       pushUndo(prev);
       let z = Math.min(...prev.map((i) => i.zIndex)) - ids.length;
       const result = prev.map((i) => idSet.has(i.id) ? { ...i, zIndex: z++ } : i);
-      const zMap: Record<string, number> = {};
       result.forEach((i) => { if (idSet.has(i.id)) zMap[i.id] = i.zIndex; });
-      emitDelta({ type: "reorder", ids, zIndexMap: zMap });
       return result;
     });
+    queueMicrotask(() => emitDelta({ type: "reorder", ids, zIndexMap: zMap }));
   }, [pushUndo, emitDelta]);
 
   const selectAll = useCallback(() => { setSelection(new Set(items.map((i) => i.id))); }, [items]);

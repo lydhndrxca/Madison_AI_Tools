@@ -582,7 +582,8 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
         else if (!r.ok) { addToast(r.error, "error"); }
       }
       setGridResults((prev) => [...prev, ...newResults]);
-      addToast(`Generated ${newResults.length} images`, "success");
+      if (newResults.length > 0) addToast(`Generated ${newResults.length} images`, "success");
+      else addToast("All grid generation attempts failed", "error");
     } catch (e) { addToast(String(e), "error"); }
     busy.end("gen");
   }, [buildRequestBody, addToast, busy]);
@@ -791,8 +792,11 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
     setPreservation({ ...EMPTY_PRESERVATION, preserves: DEFAULT_PRESERVES.map((p) => ({ ...p })), negatives: DEFAULT_NEGATIVES.map((n) => ({ ...n })) });
     setTabs(BUILTIN_TABS);
     setActiveTab("main");
+    setGridResults([]);
+    setGridEditBusy({});
+    customSections.clearAll();
     addToast("Prop session cleared", "info");
-  }, [addToast]);
+  }, [addToast, customSections]);
 
   // Listen for project-clear event from ProjectTabsWrapper
   useEffect(() => {
@@ -881,9 +885,10 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
     },
   );
 
-  // Register keyboard shortcuts
+  // Register keyboard shortcuts (only when this project tab is active)
   const { registerAction, unregisterAction } = useShortcuts();
   useEffect(() => {
+    if (!active) return;
     registerAction("propGenerate", () => handleGenerate());
     registerAction("propExtract", handleExtractAttributes);
     registerAction("propEnhance", handleEnhanceDescription);
@@ -896,7 +901,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
         unregisterAction(id);
       }
     };
-  }, [registerAction, unregisterAction, handleGenerate, handleExtractAttributes, handleEnhanceDescription, handleRandomizeFull, handleGenerateAllViews, handleSendToPS]);
+  }, [active, registerAction, unregisterAction, handleGenerate, handleExtractAttributes, handleEnhanceDescription, handleRandomizeFull, handleGenerateAllViews, handleSendToPS]);
 
   // --- Randomize a single attribute ---
   const randomizeAttr = useCallback((key: string) => {

@@ -33,7 +33,8 @@ export function FavoritesPage() {
   const handleCopy = useCallback(async (item: FavoriteItem) => {
     try {
       if (!navigator.clipboard?.write) return;
-      const res = await fetch(`data:image/png;base64,${item.image_b64}`);
+      const src = item.image_b64.startsWith("data:") ? item.image_b64 : `data:image/png;base64,${item.image_b64}`;
+      const res = await fetch(src);
       const blob = await res.blob();
       await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
     } catch { /* */ }
@@ -41,7 +42,7 @@ export function FavoritesPage() {
 
   const handleExport = useCallback((item: FavoriteItem) => {
     const a = document.createElement("a");
-    a.href = `data:image/png;base64,${item.image_b64}`;
+    a.href = item.image_b64.startsWith("data:") ? item.image_b64 : `data:image/png;base64,${item.image_b64}`;
     a.download = `favorite_${safeFilename(item.label)}_${item.id.slice(0, 8)}.png`;
     a.click();
   }, []);
@@ -50,7 +51,7 @@ export function FavoritesPage() {
     filtered.forEach((item, i) => {
       setTimeout(() => {
         const a = document.createElement("a");
-        a.href = `data:image/png;base64,${item.image_b64}`;
+        a.href = item.image_b64.startsWith("data:") ? item.image_b64 : `data:image/png;base64,${item.image_b64}`;
         a.download = `favorite_${safeFilename(item.label)}_${item.id.slice(0, 8)}.png`;
         a.click();
       }, i * 200);

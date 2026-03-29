@@ -24,7 +24,7 @@ class ConnectionManager:
     async def broadcast(self, msg_type: str, data: dict[str, Any]) -> None:
         payload = json.dumps({"type": msg_type, "data": data})
         stale: list[WebSocket] = []
-        for ws in self._connections:
+        for ws in list(self._connections):
             try:
                 await ws.send_text(payload)
             except Exception:

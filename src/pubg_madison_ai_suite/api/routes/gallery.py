@@ -143,9 +143,16 @@ def _build_image_entry(f: Path) -> dict | None:
     }
 
 
+def _validate_segment(seg: str) -> bool:
+    """Reject path segments that could escape the gallery root."""
+    return ".." not in seg and "/" not in seg and "\\" not in seg and seg.strip() != ""
+
+
 @router.get("/images")
 async def gallery_images(tool: str = Query(...), date: str = Query(...)):
     """Return image metadata (no thumbnails). Thumbnails are fetched via /thumb."""
+    if not _validate_segment(tool) or not _validate_segment(date):
+        return {"images": []}
     folder = _save_root() / tool / date
     if not folder.is_dir():
         return {"images": []}
@@ -170,6 +177,8 @@ async def gallery_images(tool: str = Query(...), date: str = Query(...)):
 @router.get("/thumb")
 async def gallery_thumb(tool: str = Query(...), date: str = Query(...), filename: str = Query(...)):
     """Serve a single thumbnail as JPEG binary. Browser can <img src> this directly."""
+    if not _validate_segment(tool) or not _validate_segment(date):
+        return Response(status_code=400, content=b"Invalid parameters")
     if ".." in filename or "/" in filename or "\\" in filename:
         return Response(status_code=400, content=b"Invalid filename")
 
@@ -208,6 +217,8 @@ async def gallery_thumb(tool: str = Query(...), date: str = Query(...), filename
 
 @router.get("/image")
 async def gallery_image(tool: str = Query(...), date: str = Query(...), filename: str = Query(...)):
+    if not _validate_segment(tool) or not _validate_segment(date):
+        return {"error": "Invalid parameters", "image_b64": ""}
     if ".." in filename or "/" in filename or "\\" in filename:
         return {"error": "Invalid filename", "image_b64": ""}
     file_path = _save_root() / tool / date / filename

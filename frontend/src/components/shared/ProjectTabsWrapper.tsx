@@ -5,6 +5,7 @@ const MAX_PROJECTS = 10;
 
 interface ProjectMeta {
   name: string;
+  uid?: string;
 }
 
 interface ProjectTabsWrapperProps {
@@ -13,19 +14,25 @@ interface ProjectTabsWrapperProps {
   children: (props: { instanceId: number; active: boolean }) => React.ReactNode;
 }
 
+function ensureUid(p: ProjectMeta): ProjectMeta {
+  return p.uid ? p : { ...p, uid: crypto.randomUUID() };
+}
+
 function loadProjects(storageKey: string, defaultName: string): ProjectMeta[] {
   try {
     const raw = localStorage.getItem(storageKey);
     if (raw) {
       const parsed = JSON.parse(raw) as ProjectMeta[];
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed.map(ensureUid);
     }
   } catch { /* */ }
-  return [{ name: `${defaultName} 1` }];
+  return [{ name: `${defaultName} 1`, uid: crypto.randomUUID() }];
 }
 
 function saveProjects(storageKey: string, projects: ProjectMeta[]) {
-  localStorage.setItem(storageKey, JSON.stringify(projects));
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(projects));
+  } catch { /* quota exceeded */ }
 }
 
 export function ProjectTabsWrapper({ storageKey, defaultProjectName = "Project", children }: ProjectTabsWrapperProps) {
@@ -62,7 +69,7 @@ export function ProjectTabsWrapper({ storageKey, defaultProjectName = "Project",
 
   const addProject = useCallback(() => {
     if (projects.length >= MAX_PROJECTS) return;
-    const next = [...projects, { name: `${defaultProjectName} ${projects.length + 1}` }];
+    const next = [...projects, { name: `${defaultProjectName} ${projects.length + 1}`, uid: crypto.randomUUID() }];
     persist(next);
     setActiveIdx(next.length - 1);
   }, [projects, defaultProjectName, persist]);
@@ -126,7 +133,7 @@ export function ProjectTabsWrapper({ storageKey, defaultProjectName = "Project",
 
           return (
             <button
-              key={idx}
+              key={proj.uid ?? idx}
               onClick={() => { if (!isEditing) setActiveIdx(idx); }}
               onDoubleClick={() => handleRename(idx)}
               onContextMenu={(e) => handleContextMenu(e, idx)}
@@ -195,9 +202,9 @@ export function ProjectTabsWrapper({ storageKey, defaultProjectName = "Project",
 
       {/* Project instances — keep all mounted for state preservation */}
       <div className="flex-1 overflow-hidden min-h-0">
-        {projects.map((_, idx) => (
+        {projects.map((proj, idx) => (
           <div
-            key={idx}
+            key={proj.uid ?? idx}
             className="h-full"
             style={{ display: idx === activeIdx ? "contents" : "none" }}
           >
