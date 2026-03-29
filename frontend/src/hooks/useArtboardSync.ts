@@ -1,0 +1,136 @@
+import { useEffect, useRef, useCallback, useState } from "react";
+import { useArtboard, type ArtboardDelta, type RoomUser, type RemoteCursor } from "./ArtboardContext";
+
+function getWsBase(): string {
+  if (window.location.protocol === "file:") return "ws://127.0.0.1:8420";
+  return `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
+}
+
+const CURSOR_THROTTLE_MS = 66;
+
+/**
+ * Manages the WebSocket connection for real-time artboard collaboration.
+ * Automatically connects when mode is "shared" and a roomId is set.
+ */
+export function useArtboardSync() {
+  const {
+    mode, roomId, applyRemoteDelta, setDeltaListener, setRoomUsers, setRemoteCursors, leaveRoom,
+  } = useArtboard();
+
+  const wsRef = useRef<WebSocket | null>(null);
+  const lastCursorSend = useRef(0);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const userNameRef = useRef("");
+  const passwordRef = useRef("");
+  const [reconnectTick, setReconnectTick] = useState(0);
+
+  // Store credentials for reconnection
+  const setCredentials = useCallback((userName: string, password?: string) => {
+    userNameRef.current = userName;
+    passwordRef.current = password || "";
+  }, []);
+
+  // Send a message over the WebSocket
+  const send = useCallback((msg: Record<string, unknown>) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(msg));
+    }
+  }, []);
+
+  // Send cursor position (throttled)
+  const sendCursor = useCallback((x: number, y: number) => {
+    const now = Date.now();
+    if (now - lastCursorSend.current < CURSOR_THROTTLE_MS) return;
+    lastCursorSend.current = now;
+    send({ op: "cursor", x, y });
+  }, [send]);
+
+  // Connect to room
+  useEffect(() => {
+    if (mode !== "shared" || !roomId) {
+      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+      return;
+    }
+
+    const wsBase = getWsBase();
+    const params = new URLSearchParams();
+    params.set("user", userNameRef.current || "Guest");
+    if (passwordRef.current) params.set("password", passwordRef.current);
+    const url = `${wsBase}/api/artboard/ws/${encodeURIComponent(roomId)}?${params}`;
+
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      // Register delta listener so local mutations get sent to the room
+      setDeltaListener((delta: ArtboardDelta) => {
+        send({ op: "delta", ...delta });
+      });
+    };
+
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        const op = msg.op;
+
+        if (op === "full_sync") {
+          applyRemoteDelta({ type: "full_sync", items: msg.items || [] });
+          if (msg.users) {
+            setRoomUsers(msg.users as RoomUser[]);
+          }
+        } else if (op === "delta") {
+          const actions = msg.actions as ArtboardDelta[];
+          if (actions) {
+            for (const action of actions) applyRemoteDelta(action);
+          }
+        } else if (op === "cursor") {
+          setRemoteCursors((prev) => {
+            const next = new Map(prev);
+            next.set(msg.user, {
+              x: msg.x, y: msg.y, color: msg.color, name: msg.user, lastUpdate: Date.now(),
+            } satisfies RemoteCursor);
+            return next;
+          });
+        } else if (op === "user_joined") {
+          setRoomUsers((prev: RoomUser[]) => {
+            if (prev.some((u) => u.name === msg.user)) return prev;
+            return [...prev, { name: msg.user, color: msg.color }];
+          });
+        } else if (op === "user_left") {
+          setRoomUsers((prev: RoomUser[]) => prev.filter((u) => u.name !== msg.user));
+          setRemoteCursors((prev) => { const n = new Map(prev); n.delete(msg.user); return n; });
+        } else if (op === "error") {
+          console.error("[ArtboardSync] Server error:", msg.message);
+        }
+      } catch { /* ignore parse errors */ }
+    };
+
+    ws.onclose = (ev) => {
+      wsRef.current = null;
+      setDeltaListener(null);
+      // Auto-reconnect on unexpected close (not a clean leave)
+      if (mode === "shared" && roomId && ev.code !== 1000 && ev.code !== 4003 && ev.code !== 4004) {
+        reconnectTimer.current = setTimeout(() => {
+          setReconnectTick((t) => t + 1);
+        }, 2000);
+      } else if (ev.code === 4003 || ev.code === 4004) {
+        leaveRoom();
+      }
+    };
+
+    ws.onerror = () => {
+      // onclose will fire after this
+    };
+
+    return () => {
+      setDeltaListener(null);
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      ws.close();
+      wsRef.current = null;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, roomId, reconnectTick]);
+
+  return { send, sendCursor, setCredentials, wsRef };
+}

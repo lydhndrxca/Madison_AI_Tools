@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { Loader2, X, Minus, Plus, FolderPlus } from "lucide-react";
+import { Loader2, X, Minus, Plus, FolderPlus, Monitor, Star } from "lucide-react";
 import { apiFetch } from "@/hooks/useApi";
 
 // ---------------------------------------------------------------------------
@@ -24,10 +24,13 @@ export interface GridGalleryProps {
   onEditSubmit: (id: string, editPrompt: string) => void;
   onRegenerate?: (id: string) => void;
   onUpdateImage?: (id: string, newB64: string, w: number, h: number) => void;
+  onSendToMainstage?: (id: string) => void;
   editBusy?: Record<string, boolean>;
   showStyleLibrary?: boolean;
   styleLibraryFolders?: { name: string }[];
   onRefreshStyleFolders?: () => void;
+  isFavorited?: (image_b64: string) => boolean;
+  onToggleFavorite?: (id: string, image_b64: string, width: number, height: number) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -45,10 +48,13 @@ export function GridGallery({
   onEditSubmit,
   onRegenerate,
   onUpdateImage,
+  onSendToMainstage,
   editBusy = {},
   showStyleLibrary = false,
   styleLibraryFolders = [],
   onRefreshStyleFolders,
+  isFavorited,
+  onToggleFavorite,
 }: GridGalleryProps) {
   const [editTexts, setEditTexts] = useState<Record<string, string>>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -200,18 +206,44 @@ export function GridGallery({
                         style={{ background: "rgba(90,42,42,0.3)", color: "#f06060", border: "1px solid rgba(138,74,74,0.5)" }}
                         title="Remove this result"
                       >Delete</button>
+                      {onToggleFavorite && (
+                        <button
+                          onClick={() => onToggleFavorite(result.id, result.image_b64, result.width, result.height)}
+                          className="px-1 py-0.5 text-[9px] rounded cursor-pointer font-medium"
+                          style={{
+                            background: isFavorited?.(result.image_b64) ? "rgba(245,166,35,0.25)" : "rgba(245,166,35,0.1)",
+                            color: isFavorited?.(result.image_b64) ? "#f5a623" : "#b08840",
+                            border: `1px solid ${isFavorited?.(result.image_b64) ? "rgba(245,166,35,0.5)" : "rgba(180,140,60,0.3)"}`,
+                          }}
+                          title={isFavorited?.(result.image_b64) ? "Remove from favorites" : "Add to favorites (saves as standalone image)"}
+                        >
+                          <Star className="h-2.5 w-2.5 inline" style={isFavorited?.(result.image_b64) ? { fill: "#f5a623" } : undefined} />
+                        </button>
+                      )}
                     </div>
 
-                    {/* Regenerate button */}
-                    {onRegenerate && (
-                      <button
-                        onClick={() => onRegenerate(result.id)}
-                        disabled={isBusy}
-                        className="w-full px-1 py-0.5 text-[9px] rounded cursor-pointer font-medium"
-                        style={{ background: "rgba(106,42,154,0.2)", color: "#b07ee8", border: "1px solid rgba(140,80,180,0.4)" }}
-                        title="Generate another batch using this image as reference"
-                      >Regenerate</button>
-                    )}
+                    {/* Regenerate + Send to Mainstage */}
+                    <div className="flex gap-1">
+                      {onRegenerate && (
+                        <button
+                          onClick={() => onRegenerate(result.id)}
+                          disabled={isBusy}
+                          className="flex-1 px-1 py-0.5 text-[9px] rounded cursor-pointer font-medium"
+                          style={{ background: "rgba(106,42,154,0.2)", color: "#b07ee8", border: "1px solid rgba(140,80,180,0.4)" }}
+                          title="Generate another batch using this image as reference"
+                        >Regen</button>
+                      )}
+                      {onSendToMainstage && (
+                        <button
+                          onClick={() => onSendToMainstage(result.id)}
+                          className="flex-1 flex items-center justify-center gap-0.5 px-1 py-0.5 text-[9px] rounded cursor-pointer font-medium"
+                          style={{ background: "rgba(42,90,106,0.25)", color: "#5ec9e0", border: "1px solid rgba(74,138,148,0.5)" }}
+                          title="Send to Mainstage for editing"
+                        >
+                          <Monitor className="h-2.5 w-2.5" /> Stage
+                        </button>
+                      )}
+                    </div>
 
                     <div className="flex gap-1 items-center">
                       <input
@@ -301,10 +333,29 @@ export function GridGallery({
               <button onClick={() => onCopy(expandedResult.id)} className="px-3 py-1.5 text-[11px] rounded cursor-pointer font-medium" style={{ background: "rgba(42,74,90,0.5)", color: "#5ec9e0", border: "1px solid rgba(74,110,138,0.6)" }}>Copy</button>
               <button onClick={() => { const l = document.createElement("a"); l.href = `data:image/png;base64,${expandedResult.image_b64}`; l.download = `${toolLabel}_${expandedResult.id}.png`; l.click(); }} className="px-3 py-1.5 text-[11px] rounded cursor-pointer font-medium" style={{ background: "rgba(42,90,42,0.5)", color: "#4ec9a0", border: "1px solid rgba(74,138,74,0.6)" }}>Export</button>
               <button onClick={() => handleSendToPhotoshop(expandedResult.id)} className="px-3 py-1.5 text-[11px] rounded cursor-pointer font-medium" style={{ background: "rgba(42,58,106,0.5)", color: "#5e9eff", border: "1px solid rgba(58,90,138,0.6)" }}>Send to Photoshop</button>
+              {onSendToMainstage && (
+                <button onClick={() => { onSendToMainstage(expandedResult.id); handleCollapse(); }} className="flex items-center gap-1 px-3 py-1.5 text-[11px] rounded cursor-pointer font-medium" style={{ background: "rgba(42,90,106,0.45)", color: "#5ec9e0", border: "1px solid rgba(74,138,148,0.6)" }}>
+                  <Monitor className="h-3.5 w-3.5" /> Send to Mainstage
+                </button>
+              )}
               {onRegenerate && (
                 <button onClick={() => { onRegenerate(expandedResult.id); handleCollapse(); }} className="px-3 py-1.5 text-[11px] rounded cursor-pointer font-medium" style={{ background: "rgba(106,42,154,0.4)", color: "#b07ee8", border: "1px solid rgba(140,80,180,0.5)" }}>Regenerate</button>
               )}
               <button onClick={() => { onDelete(expandedResult.id); handleCollapse(); }} className="px-3 py-1.5 text-[11px] rounded cursor-pointer font-medium" style={{ background: "rgba(90,42,42,0.5)", color: "#f06060", border: "1px solid rgba(138,74,74,0.6)" }}>Delete</button>
+              {onToggleFavorite && (
+                <button
+                  onClick={() => onToggleFavorite(expandedResult.id, expandedResult.image_b64, expandedResult.width, expandedResult.height)}
+                  className="flex items-center gap-1 px-3 py-1.5 text-[11px] rounded cursor-pointer font-medium"
+                  style={{
+                    background: isFavorited?.(expandedResult.image_b64) ? "rgba(245,166,35,0.35)" : "rgba(245,166,35,0.15)",
+                    color: isFavorited?.(expandedResult.image_b64) ? "#f5a623" : "#b08840",
+                    border: `1px solid ${isFavorited?.(expandedResult.image_b64) ? "rgba(245,166,35,0.6)" : "rgba(180,140,60,0.4)"}`,
+                  }}
+                >
+                  <Star className="h-3.5 w-3.5" style={isFavorited?.(expandedResult.image_b64) ? { fill: "#f5a623" } : undefined} />
+                  {isFavorited?.(expandedResult.image_b64) ? "Unfavorite" : "Favorite"}
+                </button>
+              )}
             </div>
 
             {/* Green fringe trim controls */}

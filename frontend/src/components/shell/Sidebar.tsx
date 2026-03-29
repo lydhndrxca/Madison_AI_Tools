@@ -13,6 +13,9 @@ import {
   Bug,
   Palette,
   FolderOpen,
+  Star,
+  BookOpen,
+  Clock,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { PageId } from "@/app";
@@ -30,6 +33,9 @@ type NavItem = { id: PageId; label: string; icon: React.ComponentType<{ classNam
 const LIBRARY_ITEMS: NavItem[] = [
   { id: "style-library", label: "Style Library", icon: Palette },
   { id: "generated-images", label: "Generated Images", icon: FolderOpen },
+  { id: "favorites", label: "Favorites", icon: Star },
+  { id: "prompt-library", label: "Prompt Library", icon: BookOpen },
+  { id: "history", label: "Generation History", icon: Clock },
 ];
 
 const TOOL_ITEMS: NavItem[] = [

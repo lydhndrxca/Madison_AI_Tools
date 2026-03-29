@@ -584,7 +584,45 @@ def save_generated_image(
         with open(image_path.with_suffix(".json"), "w", encoding="utf-8") as f:
             _json.dump(meta, f, indent=2, ensure_ascii=False)
 
+        # Append to generation history timeline
+        _append_history_entry(meta, image, image_path)
+
         return str(image_path)
     except Exception as e:
         print(f"[AutoSave] Failed: {e}")
         return None
+
+
+def _append_history_entry(meta: dict, image: Image.Image, image_path: Path) -> None:
+    """Append a JSONL entry to .history/<date>.jsonl for the generation timeline."""
+    import json as _json
+    from datetime import datetime
+
+    try:
+        hist_dir = _get_save_root() / ".history"
+        hist_dir.mkdir(parents=True, exist_ok=True)
+        today = datetime.now().strftime("%Y-%m-%d")
+        hist_file = hist_dir / f"{today}.jsonl"
+
+        thumb = image.copy()
+        thumb.thumbnail((128, 128))
+        thumb_b64 = image_to_b64(thumb, "PNG")
+
+        entry = {
+            "id": meta.get("image_file", "").replace(".png", ""),
+            "timestamp": meta.get("timestamp", datetime.now().isoformat()),
+            "tool": meta.get("tool", ""),
+            "view": meta.get("view", ""),
+            "generation_type": meta.get("generation_type", ""),
+            "model": meta.get("model", ""),
+            "prompt": meta.get("description", meta.get("prompt", "")),
+            "image_path": str(image_path),
+            "thumbnail_b64": thumb_b64,
+            "width": meta.get("width", 0),
+            "height": meta.get("height", 0),
+        }
+
+        with open(hist_file, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"[History] Failed to log: {e}")

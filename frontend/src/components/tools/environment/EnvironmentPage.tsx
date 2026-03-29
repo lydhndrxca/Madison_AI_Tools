@@ -3,6 +3,7 @@ import { Button, Select, Textarea, NumberStepper } from "@/components/ui";
 import { ImageViewer } from "@/components/shared/ImageViewer";
 import { EditHistory } from "@/components/shared/EditHistory";
 import { GroupedTabBar } from "@/components/shared/TabBar";
+import { ArtboardCanvas } from "@/components/shared/ArtboardCanvas";
 import type { TabDef } from "@/components/shared/TabBar";
 import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
@@ -26,6 +27,7 @@ const BUILTIN_TABS: TabDef[] = [
   { id: "birds_eye", label: "Bird's Eye", group: "views", prompt: "Top-down overhead showing layout, paths, cover positions." },
   { id: "panoramic", label: "Panoramic", group: "views", prompt: "Ultra-wide cinematic establishing shot." },
   { id: "detail", label: "Detail", group: "views", prompt: "Tight crop on a signature material or architectural detail." },
+  { id: "artboard", label: "Art Table", group: "artboard" },
   { id: "refA", label: "Ref A", group: "refs" },
   { id: "refB", label: "Ref B", group: "refs" },
   { id: "refC", label: "Ref C", group: "refs" },
@@ -1690,6 +1692,26 @@ export function EnvironmentPage() {
         <Button size="sm" className="w-full" onClick={() => setXmlOpen(true)} title="Show the XML representation of this environment">Show XML</Button>
         <Button size="sm" className="w-full" onClick={handleReset} title="Clear all environment data and images">Clear All</Button>
       </div>
+      <div className="pt-1" style={{ borderTop: "1px solid var(--color-border)" }}>
+        <Button size="sm" className="w-full" title="Export a complete handoff package as ZIP" onClick={async () => {
+          const imgs: {label: string; image_b64: string}[] = [];
+          for (const tab of ["main","hero","playerpov","birdseye","panoramic","detail"] as const) {
+            const b64 = getImageB64(tab);
+            if (b64) imgs.push({ label: tab, image_b64: `data:image/png;base64,${b64}` });
+          }
+          if (imgs.length === 0) return;
+          try {
+            const res = await fetch(`${window.location.protocol === "file:" ? "http://127.0.0.1:8420" : ""}/api/export/package`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ images: imgs, xml_data: "", prompt_text: "", settings: {}, palette: [], include_ref_sheet: true, tool_name: "environment", character_name: "environment" })
+            });
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a"); a.href = url; a.download = `env_export_${Date.now()}.zip`; a.click();
+            URL.revokeObjectURL(url);
+          } catch {}
+        }}>Export ZIP</Button>
+      </div>
     </div>
   );
 
@@ -1740,7 +1762,9 @@ export function EnvironmentPage() {
         </div>
 
         <div className="flex-1 flex overflow-hidden min-h-0">
-          {generationMode === "grid" && activeTab === "main" && gridResults.length > 0 ? (
+          {activeTab === "artboard" ? (
+            <ArtboardCanvas />
+          ) : generationMode === "grid" && activeTab === "main" && gridResults.length > 0 ? (
             <div className="flex-1 min-w-0">
               <GridGallery
                 results={gridResults}

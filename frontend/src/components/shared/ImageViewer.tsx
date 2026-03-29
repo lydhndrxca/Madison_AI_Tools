@@ -1,11 +1,12 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { ZoomIn, ZoomOut, Maximize2, ChevronLeft, ChevronRight, Maximize, Minimize } from "lucide-react";
+import { ZoomIn, ZoomOut, Maximize2, ChevronLeft, ChevronRight, Maximize, Minimize, Star, Pipette } from "lucide-react";
 import { EditorToolbar, STYLE_PRESETS } from "./editor/EditorToolbar";
 import type { EditorTool, OutpaintDir } from "./editor/EditorToolbar";
 import * as Mask from "./editor/maskEngine";
 import { apiFetch } from "@/hooks/useApi";
 import { useShortcuts } from "@/hooks/useShortcuts";
+import { AnnotationToolbar, AnnotationCanvas, exportWithAnnotations, type Annotation, type AnnotationType } from "./AnnotationLayer";
 
 interface ContextMenuAction {
   label: string;
@@ -38,6 +39,9 @@ interface ImageViewerProps {
   onNextImage?: () => void;
   refImages?: string[];
   styleContext?: string;
+  isFavorited?: boolean;
+  onToggleFavorite?: () => void;
+  onExtractPalette?: () => void;
 }
 
 export function ImageViewer({
@@ -59,6 +63,9 @@ export function ImageViewer({
   onNextImage,
   refImages = [],
   styleContext = "",
+  isFavorited = false,
+  onToggleFavorite,
+  onExtractPalette,
 }: ImageViewerProps) {
   const [zoom, setZoom] = useState(1);
   const [panX, setPanX] = useState(0);
@@ -81,6 +88,13 @@ export function ImageViewer({
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
   const drawingRef = useRef(false);
   const prevDrawPos = useRef<{ x: number; y: number } | null>(null);
+
+  // Annotation state
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [annotationTool, setAnnotationTool] = useState<AnnotationType | null>(null);
+  const [annotationVisible, setAnnotationVisible] = useState(true);
+  const [annotationColor, setAnnotationColor] = useState("#ff4444");
+  const [annotationLineWidth, setAnnotationLineWidth] = useState(3);
 
   const lockedRef = useRef(locked);
   lockedRef.current = locked;
@@ -598,6 +612,26 @@ export function ImageViewer({
           <button onClick={enterFullscreen} className="p-1 rounded transition-colors cursor-pointer hover:bg-[var(--color-hover)] ml-0.5" style={toolbarBtnStyle} title="View in full screen (Ctrl+F) — Escape to exit">
             <Maximize className="h-3.5 w-3.5" />
           </button>
+          {onToggleFavorite && src && (
+            <button
+              onClick={onToggleFavorite}
+              className="p-1 rounded transition-colors cursor-pointer hover:bg-[var(--color-hover)] ml-1"
+              style={{ ...toolbarBtnStyle, color: isFavorited ? "#f5a623" : undefined }}
+              title={isFavorited ? "Remove from favorites" : "Add to favorites"}
+            >
+              <Star className="h-3.5 w-3.5" style={isFavorited ? { fill: "#f5a623" } : undefined} />
+            </button>
+          )}
+          {onExtractPalette && src && (
+            <button
+              onClick={onExtractPalette}
+              className="p-1 rounded transition-colors cursor-pointer hover:bg-[var(--color-hover)] ml-0.5"
+              style={toolbarBtnStyle}
+              title="Extract color palette from the current image"
+            >
+              <Pipette className="h-3.5 w-3.5" />
+            </button>
+          )}
           {imageCount > 1 && (
             <span className="ml-2 text-[10px] font-mono tabular-nums" style={{ color: "var(--color-text-secondary)" }}>
               {imageIndex + 1} / {imageCount}
@@ -625,10 +659,30 @@ export function ImageViewer({
         locked={locked}
       />
 
+      <AnnotationToolbar
+        annotations={annotations}
+        onAnnotationsChange={setAnnotations}
+        activeTool={annotationTool}
+        onToolChange={setAnnotationTool}
+        visible={annotationVisible}
+        onVisibilityChange={setAnnotationVisible}
+        color={annotationColor}
+        onColorChange={setAnnotationColor}
+        lineWidth={annotationLineWidth}
+        onLineWidthChange={setAnnotationLineWidth}
+        onExportWithAnnotations={src ? async () => {
+          const dataUrl = await exportWithAnnotations(src, annotations);
+          const a = document.createElement("a");
+          a.href = dataUrl;
+          a.download = `annotated_${Date.now()}.png`;
+          a.click();
+        } : undefined}
+      />
+
       <div
         ref={containerRef}
         className="flex-1 overflow-hidden relative select-none"
-        style={{ background: "var(--color-canvas, #343434)", cursor: canvasCursor }}
+        style={{ background: "var(--color-canvas, #343434)", cursor: annotationTool ? "crosshair" : canvasCursor }}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -656,6 +710,19 @@ export function ImageViewer({
                 pointerEvents: "none", opacity: inpaintMode ? 0.45 : 0,
                 width: naturalSize.w, height: naturalSize.h,
               }}
+            />
+            {/* Annotation overlay canvas */}
+            <AnnotationCanvas
+              width={naturalSize.w}
+              height={naturalSize.h}
+              zoom={zoom}
+              transform={imgTransform}
+              visible={annotationVisible}
+              annotations={annotations}
+              onAnnotationsChange={setAnnotations}
+              activeTool={annotationTool}
+              color={annotationColor}
+              lineWidth={annotationLineWidth}
             />
             {/* Lasso outline while drawing */}
             {lassoPoints.length > 1 && (

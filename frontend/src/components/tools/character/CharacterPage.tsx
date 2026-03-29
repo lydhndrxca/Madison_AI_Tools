@@ -6,6 +6,7 @@ import { GridGallery } from "@/components/shared/GridGallery";
 import type { GridGalleryResult } from "@/components/shared/GridGallery";
 import { EditHistory } from "@/components/shared/EditHistory";
 import { GroupedTabBar } from "@/components/shared/TabBar";
+import { ArtboardCanvas } from "@/components/shared/ArtboardCanvas";
 import type { TabDef } from "@/components/shared/TabBar";
 import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
@@ -27,6 +28,7 @@ const BUILTIN_TABS: TabDef[] = [
   { id: "front", label: "Front", group: "views", prompt: "Front view" },
   { id: "back", label: "Back", group: "views", prompt: "Back view" },
   { id: "side", label: "Side", group: "views", prompt: "Side view" },
+  { id: "artboard", label: "Art Table", group: "artboard" },
   { id: "refA", label: "Ref A", group: "refs" },
   { id: "refB", label: "Ref B", group: "refs" },
   { id: "refC", label: "Ref C", group: "refs" },
@@ -2586,6 +2588,40 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                 <Button size="sm" className="w-full" title="Save a log of all actions taken during this session">Save Log</Button>
               </div>
               <Button size="sm" className="w-full" title="Browse all images you've generated so far">Open Generated Images</Button>
+              <div className="grid grid-cols-2 gap-1.5 pt-1" style={{ borderTop: "1px solid var(--color-border)" }}>
+                <Button size="sm" className="w-full" title="Composite all views into a single reference sheet" onClick={async () => {
+                  const imgs: {label: string; image_b64: string}[] = [];
+                  for (const tab of ["main","front","back","side","threequarter"] as const) {
+                    const b64 = getImageB64?.(tab);
+                    if (b64) imgs.push({ label: tab, image_b64: `data:image/png;base64,${b64}` });
+                  }
+                  if (imgs.length === 0) return;
+                  try {
+                    const res = await (await import("@/hooks/useApi")).apiFetch<{image_b64: string}>("/export/consistency-sheet", {
+                      method: "POST", body: JSON.stringify({ images: imgs, layout: imgs.length <= 2 ? "1x4" : "2x2", title: "", include_labels: true })
+                    });
+                    const a = document.createElement("a"); a.href = `data:image/png;base64,${res.image_b64}`; a.download = `ref_sheet_${Date.now()}.png`; a.click();
+                  } catch {}
+                }}>Ref Sheet</Button>
+                <Button size="sm" className="w-full" title="Export a complete handoff package as ZIP" onClick={async () => {
+                  const imgs: {label: string; image_b64: string}[] = [];
+                  for (const tab of ["main","front","back","side","threequarter"] as const) {
+                    const b64 = getImageB64?.(tab);
+                    if (b64) imgs.push({ label: tab, image_b64: `data:image/png;base64,${b64}` });
+                  }
+                  if (imgs.length === 0) return;
+                  try {
+                    const res = await fetch(`${window.location.protocol === "file:" ? "http://127.0.0.1:8420" : ""}/api/export/package`, {
+                      method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ images: imgs, xml_data: "", prompt_text: buildPromptPreview?.() || "", settings: {}, palette: [], include_ref_sheet: true, tool_name: "character", character_name: "character" })
+                    });
+                    const blob = await res.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a"); a.href = url; a.download = `character_export_${Date.now()}.zip`; a.click();
+                    URL.revokeObjectURL(url);
+                  } catch {}
+                }}>Export ZIP</Button>
+              </div>
             </div>
           );
 
@@ -2679,7 +2715,9 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
             <Button size="sm" generating={busy.is("quickgen")} generatingText={genText.quickgen || "Generating..."} onClick={handleQuickGenerate} title="Quickly re-generate the current view using your existing settings — great for getting a new variation">Quick Generate</Button>
           </div>
         </div>
-        {generationMode === "grid" && activeTab === "main" && gridResults.length > 0 ? (
+        {activeTab === "artboard" ? (
+          <ArtboardCanvas />
+        ) : generationMode === "grid" && activeTab === "main" && gridResults.length > 0 ? (
           <GridGallery
             results={gridResults}
             title="Character Variations"

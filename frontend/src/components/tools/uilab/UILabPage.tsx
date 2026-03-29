@@ -4,13 +4,16 @@ import { ImageViewer } from "@/components/shared/ImageViewer";
 import { GridGallery } from "@/components/shared/GridGallery";
 import type { GridGalleryResult } from "@/components/shared/GridGallery";
 import { GroupedTabBar } from "@/components/shared/TabBar";
+import { ArtboardCanvas } from "@/components/shared/ArtboardCanvas";
 import type { TabDef } from "@/components/shared/TabBar";
 import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
 import { useSessionRegister } from "@/hooks/SessionContext";
 import { useClipboardPaste } from "@/hooks/useClipboardPaste";
 import { XmlModal } from "@/components/shared/XmlModal";
-import { GripVertical, ChevronDown, ChevronRight, Save, FolderPlus, Trash2, Pencil, ImagePlus, X, FolderOpen, ArrowLeft, Eye, EyeOff } from "lucide-react";
+import { GripVertical, ChevronDown, ChevronRight, Save, FolderPlus, Trash2, Pencil, ImagePlus, X, FolderOpen, ArrowLeft, Eye, EyeOff, Monitor } from "lucide-react";
+import { EditHistory } from "@/components/shared/EditHistory";
+import type { HistoryEntry } from "@/lib/imageHistory";
 import { useShortcuts } from "@/hooks/useShortcuts";
 
 // ---------------------------------------------------------------------------
@@ -18,9 +21,11 @@ import { useShortcuts } from "@/hooks/useShortcuts";
 // ---------------------------------------------------------------------------
 
 const BUILTIN_TABS: TabDef[] = [
-  { id: "main", label: "Mainstage — UI Generator", group: "stage" },
+  { id: "main", label: "Mainstage", group: "stage" },
+  { id: "grid", label: "4×4 Grid", group: "stage" },
   { id: "styleLib", label: "Style Library", group: "library" },
   { id: "userLib", label: "User Library", group: "library" },
+  { id: "artboard", label: "Art Table", group: "artboard" },
   { id: "refA", label: "Ref A", group: "refs" },
   { id: "refB", label: "Ref B", group: "refs" },
   { id: "refC", label: "Ref C", group: "refs" },
@@ -101,15 +106,14 @@ function buildFusionBrief(fusion: StyleFusionState): string {
 // Layout system
 // ---------------------------------------------------------------------------
 
-type SectionId = "generate" | "elementConfig" | "refImage" | "buttonLayout" | "scrollbarParts" | "charGen" | "styleFusion" | "saveOptions";
+type SectionId = "generate" | "refImage" | "buttonLayout" | "scrollbarParts" | "charGen" | "styleFusion" | "saveOptions";
 
 const DEFAULT_SECTION_ORDER: SectionId[] = [
-  "generate", "elementConfig", "refImage", "buttonLayout", "scrollbarParts", "charGen", "styleFusion", "saveOptions",
+  "generate", "refImage", "buttonLayout", "scrollbarParts", "charGen", "styleFusion", "saveOptions",
 ];
 
 const SECTION_LABELS: Record<SectionId, string> = {
   generate: "Generate UI Element",
-  elementConfig: "Element Configuration",
   refImage: "Reference Image",
   buttonLayout: "Button Layout",
   scrollbarParts: "Scrollbar Components",
@@ -119,8 +123,7 @@ const SECTION_LABELS: Record<SectionId, string> = {
 };
 
 const SECTION_TIPS: Record<SectionId, string> = {
-  generate: "Generate new UI elements, set element type, prompt, count, and model.",
-  elementConfig: "Output size, grid mode, re-envision, and color options.",
+  generate: "Element type, prompt, output size, color, count, and model.",
   refImage: "Reference image for style transfer or re-envisioning.",
   buttonLayout: "Shape, border, icon, and text layout for buttons.",
   scrollbarParts: "Select which scrollbar pieces to generate.",
@@ -149,7 +152,7 @@ function loadDefaultLayout(): LayoutState {
       return { order, collapsed: parsed.collapsed ?? {} };
     }
   } catch { /* */ }
-  return { order: [...DEFAULT_SECTION_ORDER], collapsed: { elementConfig: true, refImage: true, styleFusion: true, saveOptions: true } };
+  return { order: [...DEFAULT_SECTION_ORDER], collapsed: { refImage: true, styleFusion: true, saveOptions: true } };
 }
 
 function useBusySet() {
@@ -177,12 +180,18 @@ export function UILabPage() {
   // Ref tab images (for Ref A/B/C tabs)
   const [refImages, setRefImages] = useState<Record<string, string>>({});
 
-  // Gallery for mainstage
+  // Gallery for grid tab
   const [galleryResults, setGalleryResults] = useState<GridGalleryResult[]>([]);
   const [gridEditBusy, setGridEditBusy] = useState<Record<string, boolean>>({});
 
+  // Mainstage viewer state
+  const [mainstageSrc, setMainstageSrc] = useState<string | null>(null);
+  const [mainstageHistory, setMainstageHistory] = useState<HistoryEntry[]>([]);
+  const [mainstageHistoryActiveId, setMainstageHistoryActiveId] = useState<string | null>(null);
+  const mainstageFileInputRef = useRef<HTMLInputElement>(null);
+
   // UI Generator state
-  const [elementType, setElementType] = useState("button");
+  const [elementType, setElementType] = useState("icon");
   const [prompt, setPrompt] = useState("");
   const [genCount, setGenCount] = useState(1);
   const [modelId, setModelId] = useState("");
@@ -399,6 +408,109 @@ export function UILabPage() {
     return [256, 256];
   }, [cellSize]);
 
+  // --- Mainstage callbacks ---
+  const _histCounter = useRef(0);
+  const addMainstageHistory = useCallback((label: string, src: string) => {
+    const entry: HistoryEntry = {
+      id: `${Date.now()}-${++_histCounter.current}`,
+      timestamp: new Date().toISOString(),
+      label,
+      image_b64: src,
+      settings: { description: "", age: "", race: "", gender: "", build: "", editPrompt: "" },
+    };
+    setMainstageHistory((prev) => [...prev, entry]);
+    setMainstageHistoryActiveId(entry.id);
+  }, []);
+
+  const setMainstageImage = useCallback((src: string, label = "Generation") => {
+    setMainstageSrc(src);
+    addMainstageHistory(label, src);
+  }, [addMainstageHistory]);
+
+  const handleMainstageImageEdited = useCallback((newSrc: string, label: string) => {
+    setMainstageSrc(newSrc);
+    addMainstageHistory(label, newSrc);
+  }, [addMainstageHistory]);
+
+  const handleMainstageSave = useCallback(() => {
+    if (!mainstageSrc) return;
+    const a = document.createElement("a");
+    a.href = mainstageSrc;
+    a.download = `uilab_mainstage_${Date.now()}.png`;
+    a.click();
+  }, [mainstageSrc]);
+
+  const handleMainstageCopy = useCallback(async () => {
+    if (!mainstageSrc) return;
+    try {
+      const resp = await fetch(mainstageSrc);
+      const blob = await resp.blob();
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+      addToast("Image copied", "info");
+    } catch { addToast("Failed to copy", "error"); }
+  }, [mainstageSrc, addToast]);
+
+  const handleMainstagePaste = useCallback(async () => {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imgType = item.types.find((t) => t.startsWith("image/"));
+        if (imgType) {
+          const blob = await item.getType(imgType);
+          const reader = new FileReader();
+          reader.onload = () => { setMainstageImage(reader.result as string, "Pasted image"); };
+          reader.readAsDataURL(blob);
+          return;
+        }
+      }
+      addToast("No image on clipboard", "info");
+    } catch { addToast("Could not read clipboard", "info"); }
+  }, [addToast, setMainstageImage]);
+
+  const handleMainstageOpen = useCallback(() => { mainstageFileInputRef.current?.click(); }, []);
+  const handleMainstageFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => { setMainstageImage(reader.result as string, "Opened image"); };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }, [setMainstageImage]);
+
+  const handleMainstageClear = useCallback(() => {
+    setMainstageSrc(null);
+  }, []);
+
+  const handleMainstageHistoryRestore = useCallback((entryId: string) => {
+    const entry = mainstageHistory.find((h) => h.id === entryId);
+    if (!entry) return;
+    setMainstageHistoryActiveId(entryId);
+    setMainstageSrc(entry.image_b64);
+  }, [mainstageHistory]);
+
+  const handleMainstageHistoryRestoreCurrent = useCallback(() => {
+    if (mainstageHistory.length === 0) return;
+    const last = mainstageHistory[mainstageHistory.length - 1];
+    setMainstageHistoryActiveId(last.id);
+    setMainstageSrc(last.image_b64);
+  }, [mainstageHistory]);
+
+  const handleMainstageHistoryClear = useCallback(() => {
+    setMainstageHistory([]);
+    setMainstageHistoryActiveId(null);
+  }, []);
+
+  const editorRefImagesB64 = useMemo(() => {
+    const result: string[] = [];
+    for (const tab of tabs) {
+      if (tab.group === "refs" && refImages[tab.id]) {
+        const src = refImages[tab.id];
+        result.push(src.startsWith("data:") ? src : `data:image/png;base64,${src}`);
+      }
+    }
+    return result;
+  }, [tabs, refImages]);
+
   // --- Generation handlers ---
   const handleGenerate = useCallback(async () => {
     if (busy.any) return;
@@ -436,7 +548,7 @@ export function UILabPage() {
 
     if (shouldUseGrid) {
       busy.start("gen");
-      setActiveTab("main");
+      setActiveTab("grid");
       try {
         const [cw, ch] = resolveCellDims();
         for (let page = 0; page < genCount; page++) {
@@ -476,7 +588,7 @@ export function UILabPage() {
       }
     } else if (elementType === "scrollbar") {
       busy.start("gen");
-      setActiveTab("main");
+      setActiveTab("grid");
       const components: string[] = [];
       if (sbTrack) components.push("track");
       if (sbThumb) components.push("thumb");
@@ -508,7 +620,7 @@ export function UILabPage() {
       }
     } else if (elementType === "font" || elementType === "number") {
       busy.start("gen");
-      setActiveTab("main");
+      setActiveTab("grid");
       const chars = fontChars.trim() || (elementType === "font" ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ" : "0123456789");
       const uniqueChars = [...new Set(chars.toUpperCase().split(""))];
       try {
@@ -546,12 +658,8 @@ export function UILabPage() {
           );
           if (res.error) { addToast(res.error, "error"); break; }
           if (res.image_b64) {
-            setGalleryResults((prev) => [...prev, {
-              id: `single_${Date.now()}_${i}`,
-              image_b64: res.image_b64!,
-              width: res.width || outW,
-              height: res.height || outH,
-            }]);
+            const src = `data:image/png;base64,${res.image_b64}`;
+            setMainstageImage(src, `Generation ${i + 1}`);
           }
         }
       } catch (e) {
@@ -563,7 +671,7 @@ export function UILabPage() {
     }
   }, [busy, elementType, prompt, genCount, modelId, refImageB64, reenvision, matchRefDims, addColor, noColor,
     useGrid, buttonShape, borderStyle, addIcon, addText, textSize, sbTrack, sbThumb, sbArrows, sbOrientation,
-    fontChars, styleFusion, styleLibraryFolder, styleLibraryFolders, resolveOutputDims, resolveCellDims, collectRefImagesB64, addToast]);
+    fontChars, styleFusion, styleLibraryFolder, styleLibraryFolders, resolveOutputDims, resolveCellDims, collectRefImagesB64, setMainstageImage, addToast]);
 
   const handleCancel = useCallback(() => {
     cancelAllRequests();
@@ -581,7 +689,7 @@ export function UILabPage() {
 
   const handleReset = useCallback(() => {
     setPrompt("");
-    setElementType("button");
+    setElementType("icon");
     setGenCount(1);
     setOutputSize("");
     setMatchRefDims(false);
@@ -653,7 +761,7 @@ export function UILabPage() {
     const result = galleryResults.find((r) => r.id === id);
     if (!result || busy.any) return;
     busy.start("gen");
-    setActiveTab("main");
+    setActiveTab("grid");
     try {
       const res = await apiFetch<{ image_b64?: string; width?: number; height?: number; error?: string }>(
         "/uilab/generate",
@@ -689,6 +797,15 @@ export function UILabPage() {
       prev.map((r) => r.id === id ? { ...r, image_b64: newB64, width: w, height: h } : r),
     );
   }, []);
+
+  const handleSendToMainstage = useCallback((id: string) => {
+    const result = galleryResults.find((r) => r.id === id);
+    if (!result) return;
+    const src = `data:image/png;base64,${result.image_b64}`;
+    setMainstageImage(src, "From grid");
+    setActiveTab("main");
+    addToast("Sent to Mainstage", "success");
+  }, [galleryResults, setMainstageImage, addToast]);
 
   // XML content
   const xmlContent = useMemo(() => {
@@ -810,7 +927,33 @@ export function UILabPage() {
           data-voice-target="uiPrompt"
         />
 
-        {/* Row 3: Style Library + Generation View side by side */}
+        {/* Row 3: Output size + Color */}
+        <div className="flex items-end gap-2">
+          <div className="flex-1 min-w-0">
+            <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Output Size</label>
+            <input
+              className="w-full text-[11px] px-2 py-1 rounded"
+              style={inputStyle}
+              placeholder="1024×1024"
+              value={outputSize}
+              onChange={(e) => setOutputSize(e.target.value)}
+              disabled={busy.any}
+              title="Custom output size in WxH format. Leave blank for 1024x1024."
+            />
+          </div>
+          <div className="flex items-center gap-3 shrink-0 pb-0.5">
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input type="checkbox" checked={addColor} onChange={(e) => { setAddColor(e.target.checked); if (e.target.checked) setNoColor(false); }} disabled={busy.any} />
+              <span className="text-[10px]" style={{ color: "var(--color-text-primary)" }}>Color</span>
+            </label>
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input type="checkbox" checked={noColor} onChange={(e) => { setNoColor(e.target.checked); if (e.target.checked) setAddColor(false); }} disabled={busy.any} />
+              <span className="text-[10px]" style={{ color: "var(--color-text-primary)" }}>Grayscale</span>
+            </label>
+          </div>
+        </div>
+
+        {/* Row 4: Style Library + Generation View side by side */}
         <div className="flex gap-2">
           <div className="flex-1 min-w-0">
             <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Style</label>
@@ -844,7 +987,7 @@ export function UILabPage() {
           )}
         </div>
 
-        {/* Row 4: Model selector */}
+        {/* Row 5: Model selector */}
         {models.length > 0 && (
           <select
             className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)] truncate"
@@ -859,7 +1002,7 @@ export function UILabPage() {
           </select>
         )}
 
-        {/* Row 5: Cell size (grid mode only) */}
+        {/* Row 6: Cell size (grid mode only) */}
         {useGrid && showGridOptions && (
           <div>
             <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Cell Size (WxH)</label>
@@ -894,79 +1037,77 @@ export function UILabPage() {
     );
   };
 
-  const renderElementConfigSection = () => (
-    <div className="space-y-2">
-      {/* Output size */}
-      <div>
-        <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Output Size (WxH)</label>
-        <input
-          className="w-full text-[11px] px-2 py-1 rounded"
-          style={inputStyle}
-          placeholder="e.g. 256x256 (default 1024x1024)"
-          value={outputSize}
-          onChange={(e) => setOutputSize(e.target.value)}
-          disabled={busy.any}
-          title="Custom output size in WxH format. Leave blank for 1024x1024."
-        />
-      </div>
+  const refMode = reenvision ? "reenvision" : matchRefDims ? "match" : "none";
+  const handleRefModeChange = useCallback((mode: string) => {
+    setMatchRefDims(mode === "match");
+    setReenvision(mode === "reenvision");
+  }, []);
 
-      {/* Color options */}
-      <div className="flex items-center gap-4 pt-0.5">
-        <span className="text-[10px] font-medium shrink-0" style={{ color: "var(--color-text-muted)" }}>Color:</span>
-        <label className="flex items-center gap-1.5 cursor-pointer">
-          <input type="checkbox" checked={addColor} onChange={(e) => { setAddColor(e.target.checked); if (e.target.checked) setNoColor(false); }} disabled={busy.any} />
-          <span className="text-[11px]" style={{ color: "var(--color-text-primary)" }}>Full Color</span>
-        </label>
-        <label className="flex items-center gap-1.5 cursor-pointer">
-          <input type="checkbox" checked={noColor} onChange={(e) => { setNoColor(e.target.checked); if (e.target.checked) setAddColor(false); }} disabled={busy.any} />
-          <span className="text-[11px]" style={{ color: "var(--color-text-primary)" }}>Grayscale</span>
-        </label>
-      </div>
-    </div>
-  );
+  const REF_MODE_HINTS: Record<string, string> = {
+    none: "Image used as visual context only — AI sees it but makes no dimensional or creative guarantees.",
+    match: "AI will match the aspect ratio and dimensions of your reference image in its output.",
+    reenvision: "AI reimagines the reference as a new element in your chosen style, preserving subject and composition.",
+  };
 
   const renderRefImageSection = () => (
-    <div className="space-y-2">
+    <div className="space-y-2.5">
       <input ref={refFileInputRef} type="file" accept="image/*" className="hidden" onChange={handleRefFileSelect} />
 
-      {/* Preview + action buttons in a horizontal row */}
-      <div className="flex items-center gap-2">
-        <div
-          className="shrink-0 rounded flex items-center justify-center overflow-hidden cursor-pointer"
-          style={{ width: 48, height: 48, background: "var(--color-input-bg)", border: "1px solid var(--color-border)" }}
-          onClick={refImageB64 ? undefined : handleRefOpen}
-          title={refImageB64 ? "Reference loaded" : "Click to open a reference image"}
+      {/* Drop-zone / preview area */}
+      <div
+        className="relative rounded-lg flex flex-col items-center justify-center gap-1 cursor-pointer transition-colors"
+        style={{
+          minHeight: refImageB64 ? 80 : 72,
+          background: refImageB64 ? "var(--color-input-bg)" : "transparent",
+          border: refImageB64 ? "1px solid var(--color-border)" : "2px dashed var(--color-border)",
+        }}
+        onClick={refImageB64 ? undefined : handleRefOpen}
+        title={refImageB64 ? "Reference loaded" : "Click to open a reference image"}
+      >
+        {refImageB64 ? (
+          <div className="flex items-center gap-3 w-full p-2">
+            <div className="shrink-0 rounded overflow-hidden" style={{ width: 64, height: 64 }}>
+              <img src={`data:image/png;base64,${refImageB64}`} alt="" className="w-full h-full object-cover" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[11px] font-medium truncate" style={{ color: "var(--color-text-primary)" }}>Reference loaded</p>
+              <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>Used as {refMode === "reenvision" ? "re-envision source" : refMode === "match" ? "dimension reference" : "visual context"}</p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <ImagePlus className="h-5 w-5" style={{ color: "var(--color-text-muted)", opacity: 0.5 }} />
+            <span className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>Click to open or paste an image</span>
+          </>
+        )}
+      </div>
+
+      {/* Action buttons */}
+      <div className="flex gap-1.5">
+        <button onClick={handleRefOpen} className="flex-1 px-2 py-1.5 text-[10px] font-medium rounded cursor-pointer transition-colors" style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}>Open</button>
+        <button onClick={handleRefPaste} className="flex-1 px-2 py-1.5 text-[10px] font-medium rounded cursor-pointer transition-colors" style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}>Paste</button>
+        <button onClick={handleRefClear} className="flex-1 px-2 py-1.5 text-[10px] font-medium rounded cursor-pointer transition-colors disabled:opacity-30 disabled:cursor-not-allowed" style={{ background: "var(--color-input-bg)", color: "var(--color-text-muted)", border: "1px solid var(--color-border)" }} disabled={!refImageB64}>Clear</button>
+      </div>
+
+      {/* Reference mode selector */}
+      <div>
+        <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Use as Reference</label>
+        <select
+          className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
+          style={inputStyle}
+          value={refMode}
+          onChange={(e) => handleRefModeChange(e.target.value)}
+          disabled={!refImageB64 || busy.any}
         >
-          {refImageB64 ? (
-            <img src={`data:image/png;base64,${refImageB64}`} alt="" className="w-full h-full object-cover" />
-          ) : (
-            <span className="text-[9px]" style={{ color: "var(--color-text-muted)" }}>None</span>
-          )}
-        </div>
-        <div className="flex items-center gap-1 flex-wrap flex-1">
-          <button onClick={handleRefOpen} className="px-2 py-1 text-[10px] rounded cursor-pointer" style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}>Open</button>
-          <button onClick={handleRefPaste} className="px-2 py-1 text-[10px] rounded cursor-pointer" style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}>Paste</button>
-          <button onClick={handleRefClear} className="px-2 py-1 text-[10px] rounded cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed" style={{ background: "var(--color-input-bg)", color: "var(--color-text-muted)", border: "1px solid var(--color-border)" }} disabled={!refImageB64}>Clear</button>
-        </div>
+          <option value="none">Visual Context Only</option>
+          <option value="match">Match Dimensions</option>
+          <option value="reenvision">Re-envision</option>
+        </select>
       </div>
 
-      {/* Ref-dependent options */}
-      <div className="flex items-center gap-4">
-        <label className="flex items-center gap-1.5 cursor-pointer">
-          <input type="checkbox" checked={matchRefDims} onChange={(e) => setMatchRefDims(e.target.checked)} disabled={!refImageB64 || busy.any} />
-          <span className="text-[11px]" style={{ color: refImageB64 ? "var(--color-text-primary)" : "var(--color-text-muted)" }}>Match Dimensions</span>
-        </label>
-        <label className="flex items-center gap-1.5 cursor-pointer">
-          <input type="checkbox" checked={reenvision} onChange={(e) => setReenvision(e.target.checked)} disabled={!refImageB64 || busy.any} />
-          <span className="text-[11px]" style={{ color: refImageB64 ? "var(--color-text-primary)" : "var(--color-text-muted)" }}>Re-envision</span>
-        </label>
-      </div>
-
-      {refImageB64 && (
-        <p className="text-[9px] leading-tight" style={{ color: "var(--color-text-muted)" }}>
-          Enable "Re-envision" to creatively reimagine the reference, or leave unchecked to use as a content guide.
-        </p>
-      )}
+      <p className="text-[9px] leading-snug" style={{ color: "var(--color-text-muted)" }}>
+        {REF_MODE_HINTS[refMode]}
+      </p>
     </div>
   );
 
@@ -1281,6 +1422,47 @@ export function UILabPage() {
     addToast(`Style "${folderName}" applied`, "success");
   }, [addToast]);
 
+  // --- Context menu state ---
+  interface CtxMenuItem { label: string; action: () => void; danger?: boolean }
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; items: CtxMenuItem[] } | null>(null);
+
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const dismiss = () => setCtxMenu(null);
+    window.addEventListener("click", dismiss);
+    window.addEventListener("contextmenu", dismiss);
+    window.addEventListener("keydown", (e) => { if (e.key === "Escape") dismiss(); });
+    return () => {
+      window.removeEventListener("click", dismiss);
+      window.removeEventListener("contextmenu", dismiss);
+      window.removeEventListener("keydown", (e) => { if (e.key === "Escape") dismiss(); });
+    };
+  }, [ctxMenu]);
+
+  const handleSlPasteImage = useCallback(async () => {
+    if (!slSelectedFolder) { addToast("Select a folder first", "info"); return; }
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imgType = item.types.find((t) => t.startsWith("image/"));
+        if (imgType) {
+          const blob = await item.getType(imgType);
+          const dataUrl = await new Promise<string>((resolve) => {
+            const reader = new FileReader(); reader.onload = () => resolve(reader.result as string); reader.readAsDataURL(blob);
+          });
+          await apiFetch(`/styles/folders/${encodeURIComponent(slSelectedFolder)}/images`, {
+            method: "POST", body: JSON.stringify([{ filename: `pasted_${Date.now()}.png`, data_url: dataUrl }]),
+          });
+          loadSlImages(slSelectedFolder, slActiveSub);
+          loadSlFolders();
+          addToast("Image pasted", "success");
+          return;
+        }
+      }
+      addToast("No image on clipboard", "info");
+    } catch { addToast("Could not read clipboard", "info"); }
+  }, [slSelectedFolder, slActiveSub, loadSlImages, loadSlFolders, addToast]);
+
   const renderStyleLibraryTab = () => (
     <div className="flex h-full gap-0 overflow-hidden" style={{ background: "var(--color-background)" }}>
       {/* Folder list */}
@@ -1390,7 +1572,15 @@ export function UILabPage() {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-3">
+        <div className="flex-1 overflow-y-auto p-3" onContextMenu={(e) => {
+          if (!slSelectedFolder) return;
+          e.preventDefault();
+          const menuItems: CtxMenuItem[] = [
+            { label: "Add Images…", action: handleSlAddImages },
+            { label: "Paste Image", action: handleSlPasteImage },
+          ];
+          setCtxMenu({ x: e.clientX, y: e.clientY, items: menuItems });
+        }}>
           {!slSelectedFolder ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
@@ -1415,6 +1605,22 @@ export function UILabPage() {
                   onClick={() => setSlSelectedImage(img.filename === slSelectedImage ? null : img.filename)}
                   onDoubleClick={() => setSlPreview(img.data_url)}
                   onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); handleSlToggleDisabled(img.filename); } }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSlSelectedImage(img.filename);
+                    const menuItems: CtxMenuItem[] = [
+                      { label: "Preview", action: () => setSlPreview(img.data_url) },
+                      { label: img.disabled ? "Enable" : "Disable", action: () => handleSlToggleDisabled(img.filename) },
+                      { label: "Delete Image", action: () => {
+                        setSlSelectedImage(img.filename);
+                        const qs = slActiveSub ? `?subfolder=${encodeURIComponent(slActiveSub)}` : "";
+                        apiFetch(`/styles/folders/${encodeURIComponent(slSelectedFolder!)}/images/${encodeURIComponent(img.filename)}${qs}`, { method: "DELETE" })
+                          .then(() => { setSlSelectedImage(null); loadSlImages(slSelectedFolder!, slActiveSub); loadSlFolders(); });
+                      }, danger: true },
+                    ];
+                    setCtxMenu({ x: e.clientX, y: e.clientY, items: menuItems });
+                  }}
                   title={`${img.filename}${img.disabled ? " (disabled)" : ""}\nDouble-click to preview\nMiddle-click to toggle disabled`}>
                   <img src={img.data_url} alt={img.filename} className="w-full h-full object-cover rounded" draggable={false} />
                   {img.disabled && (
@@ -1555,6 +1761,30 @@ export function UILabPage() {
     } catch (e) { console.error(e); }
   }, [ulSelectedFolder, ulSelectedImage, loadUlImages, loadUlFolders]);
 
+  const handleUlPasteImage = useCallback(async () => {
+    if (!ulSelectedFolder) { addToast("Select a folder first", "info"); return; }
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imgType = item.types.find((t) => t.startsWith("image/"));
+        if (imgType) {
+          const blob = await item.getType(imgType);
+          const dataUrl = await new Promise<string>((resolve) => {
+            const reader = new FileReader(); reader.onload = () => resolve(reader.result as string); reader.readAsDataURL(blob);
+          });
+          await apiFetch(`/userlib/folders/${encodeURIComponent(ulSelectedFolder)}/images`, {
+            method: "POST", body: JSON.stringify([{ filename: `pasted_${Date.now()}.png`, data_url: dataUrl }]),
+          });
+          loadUlImages(ulSelectedFolder);
+          loadUlFolders();
+          addToast("Image pasted", "success");
+          return;
+        }
+      }
+      addToast("No image on clipboard", "info");
+    } catch { addToast("Could not read clipboard", "info"); }
+  }, [ulSelectedFolder, loadUlImages, loadUlFolders, addToast]);
+
   const renderUserLibraryTab = () => (
     <div className="flex h-full gap-0 overflow-hidden" style={{ background: "var(--color-background)" }}>
       {/* Folder list */}
@@ -1612,7 +1842,15 @@ export function UILabPage() {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-3">
+        <div className="flex-1 overflow-y-auto p-3" onContextMenu={(e) => {
+          if (!ulSelectedFolder) return;
+          e.preventDefault();
+          const menuItems: CtxMenuItem[] = [
+            { label: "Add Images…", action: handleUlAddImages },
+            { label: "Paste Image", action: handleUlPasteImage },
+          ];
+          setCtxMenu({ x: e.clientX, y: e.clientY, items: menuItems });
+        }}>
           {!ulSelectedFolder ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
@@ -1636,6 +1874,19 @@ export function UILabPage() {
                   style={{ width: 104, height: 104, border: ulSelectedImage === img.filename ? "2px solid var(--color-accent)" : "2px solid transparent" }}
                   onClick={() => setUlSelectedImage(img.filename === ulSelectedImage ? null : img.filename)}
                   onDoubleClick={() => setUlPreview(img.data_url)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setUlSelectedImage(img.filename);
+                    const menuItems: CtxMenuItem[] = [
+                      { label: "Preview", action: () => setUlPreview(img.data_url) },
+                      { label: "Delete Image", action: () => {
+                        apiFetch(`/userlib/folders/${encodeURIComponent(ulSelectedFolder!)}/images/${encodeURIComponent(img.filename)}`, { method: "DELETE" })
+                          .then(() => { setUlSelectedImage(null); loadUlImages(ulSelectedFolder!); loadUlFolders(); });
+                      }, danger: true },
+                    ];
+                    setCtxMenu({ x: e.clientX, y: e.clientY, items: menuItems });
+                  }}
                   title={`${img.filename}\nDouble-click to preview`}>
                   <img src={img.data_url} alt={img.filename} className="w-full h-full object-cover rounded" draggable={false} />
                   <div className="absolute bottom-0 left-0 right-0 truncate text-center text-[8px] py-0.5 opacity-0 group-hover:opacity-100 transition-opacity rounded-b" style={{ background: "rgba(0,0,0,0.7)", color: "var(--color-text-muted)" }}>
@@ -1746,7 +1997,6 @@ export function UILabPage() {
           );
 
           if (sectionId === "generate") return wrapSection(renderGenerateSection());
-          if (sectionId === "elementConfig") return wrapSection(renderElementConfigSection());
           if (sectionId === "refImage") return wrapSection(renderRefImageSection());
           if (sectionId === "buttonLayout") return wrapSection(renderButtonLayoutSection());
           if (sectionId === "scrollbarParts") return wrapSection(renderScrollbarSection());
@@ -1792,6 +2042,38 @@ export function UILabPage() {
         {/* Content area */}
         <div className="flex-1 overflow-hidden min-h-0">
           {activeTab === "main" && (
+            <div className="flex h-full overflow-hidden">
+              <div className="flex-1 min-w-0 h-full">
+                <input ref={mainstageFileInputRef} type="file" accept="image/*" className="hidden" onChange={handleMainstageFileSelect} />
+                <ImageViewer
+                  src={mainstageSrc}
+                  placeholder="No image loaded — generate or send an image from the 4×4 Grid"
+                  locked={busy.any}
+                  onSaveImage={handleMainstageSave}
+                  onCopyImage={handleMainstageCopy}
+                  onPasteImage={handleMainstagePaste}
+                  onOpenImage={handleMainstageOpen}
+                  onClearImage={handleMainstageClear}
+                  onImageEdited={handleMainstageImageEdited}
+                  refImages={editorRefImagesB64}
+                  styleContext={styleLibraryFolder || ""}
+                />
+              </div>
+              {mainstageHistory.length > 0 && (
+                <div className="w-[220px] shrink-0 overflow-y-auto p-2" style={{ borderLeft: "1px solid var(--color-border)" }}>
+                  <EditHistory
+                    entries={mainstageHistory}
+                    activeEntryId={mainstageHistoryActiveId}
+                    onRestore={handleMainstageHistoryRestore}
+                    onRestoreCurrent={handleMainstageHistoryRestoreCurrent}
+                    onClearHistory={handleMainstageHistoryClear}
+                    defaultOpen
+                  />
+                </div>
+              )}
+            </div>
+          )}
+          {activeTab === "grid" && (
             <GridGallery
               results={galleryResults}
               title="UI Generator Results"
@@ -1803,12 +2085,14 @@ export function UILabPage() {
               onEditSubmit={handleGridEdit}
               onRegenerate={handleGridRegenerate}
               onUpdateImage={handleGridUpdateImage}
+              onSendToMainstage={handleSendToMainstage}
               editBusy={gridEditBusy}
               showStyleLibrary
               styleLibraryFolders={slFolders.map((f) => ({ name: f.name }))}
               onRefreshStyleFolders={loadSlFolders}
             />
           )}
+          {activeTab === "artboard" && <ArtboardCanvas />}
           {activeTab === "styleLib" && renderStyleLibraryTab()}
           {activeTab === "userLib" && renderUserLibraryTab()}
           {isRefTab && (
@@ -1822,6 +2106,37 @@ export function UILabPage() {
           )}
         </div>
       </div>
+
+      {/* Context menu */}
+      {ctxMenu && (
+        <div
+          className="fixed z-[9999] py-1 rounded-md shadow-lg min-w-[140px]"
+          style={{
+            left: ctxMenu.x,
+            top: ctxMenu.y,
+            background: "var(--color-card)",
+            border: "1px solid var(--color-border)",
+          }}
+          onClick={() => setCtxMenu(null)}
+        >
+          {ctxMenu.items.map((item, i) => (
+            <button
+              key={i}
+              onClick={(e) => { e.stopPropagation(); item.action(); setCtxMenu(null); }}
+              className="w-full text-left px-3 py-1.5 text-[12px] transition-colors cursor-pointer"
+              style={{
+                background: "transparent",
+                border: "none",
+                color: item.danger ? "var(--color-destructive, #e55)" : "var(--color-text-primary)",
+              }}
+              onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--color-hover)"; }}
+              onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* XML Modal */}
       {xmlOpen && <XmlModal xml={xmlContent} title="UI Lab XML" onClose={() => setXmlOpen(false)} />}

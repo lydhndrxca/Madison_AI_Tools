@@ -20,7 +20,7 @@ if str(_pkg_root) not in sys.path:
 
 from pubg_madison_ai_suite.api.ws import manager
 from pubg_madison_ai_suite.api.cancel import reset_cancel_event, release_cancel_event, cancel_all  # noqa: F401
-from pubg_madison_ai_suite.api.routes import system, gemini, character, weapon, prop, environment, uilab, editor, styles, gallery, userlib
+from pubg_madison_ai_suite.api.routes import system, gemini, character, weapon, prop, environment, uilab, editor, styles, gallery, userlib, artboard, prompts, palette, history, queue, export
 
 app = FastAPI(title="Madison AI Suite API", version="2.0.0")
 
@@ -42,6 +42,12 @@ app.include_router(editor.router, prefix="/api/editor", tags=["editor"])
 app.include_router(styles.router, prefix="/api/styles", tags=["styles"])
 app.include_router(gallery.router, prefix="/api/gallery", tags=["gallery"])
 app.include_router(userlib.router, prefix="/api/userlib", tags=["userlib"])
+app.include_router(artboard.router, prefix="/api/artboard", tags=["artboard"])
+app.include_router(prompts.router, prefix="/api/prompts", tags=["prompts"])
+app.include_router(palette.router, prefix="/api/palette", tags=["palette"])
+app.include_router(history.router, prefix="/api/history", tags=["history"])
+app.include_router(queue.router, prefix="/api/queue", tags=["queue"])
+app.include_router(export.router, prefix="/api/export", tags=["export"])
 
 
 @app.websocket("/ws/progress")
@@ -57,4 +63,5 @@ async def ws_progress(ws: WebSocket):
 if __name__ == "__main__":
     port = int(os.environ.get("MADISON_API_PORT", "8420"))
     print(f"[Madison API] Starting on port {port}")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+    host = os.environ.get("MADISON_BIND_HOST", "127.0.0.1")
+    uvicorn.run(app, host=host, port=port, log_level="info")

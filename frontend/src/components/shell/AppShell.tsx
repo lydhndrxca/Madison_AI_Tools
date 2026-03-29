@@ -142,6 +142,22 @@ function TemplateDropdown() {
   );
 }
 
+const PAGE_LABELS: Record<PageId, string> = {
+  "style-library": "Style Library",
+  "generated-images": "Generated Images",
+  "favorites": "Favorites",
+  "prompt-library": "Prompt Library",
+  "history": "Generation History",
+  "gemini": "AI Generate Image",
+  "multiview": "Multiview",
+  "character": "AI CharacterLab",
+  "weapon": "AI WeaponLab",
+  "prop": "AI PropLab",
+  "environment": "AI Environment Lab",
+  "uilab": "AI UI Lab",
+  "3d": "3D GEN AI",
+};
+
 export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
   const [statusMessage, setStatusMessage] = useState("Ready");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -205,7 +221,7 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
               style={{ background: "transparent", border: "none", color: "var(--color-foreground)", borderRight: "1px solid var(--color-border)", marginRight: 2 }}
               title="Click to open the tools panel"
             >
-              Madison AI Suite
+              {PAGE_LABELS[activePage] || "Madison AI Suite"}
             </button>
           )}
           <MenuBarDropdown label="File" items={[

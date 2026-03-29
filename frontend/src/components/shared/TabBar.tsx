@@ -40,7 +40,7 @@ export function TabBar({ tabs, active, onSelect }: TabBarProps) {
 export interface TabDef {
   id: string;
   label: string;
-  group: "stage" | "views" | "refs" | "library";
+  group: "stage" | "views" | "refs" | "library" | "artboard";
   prompt?: string;
   isCustom?: boolean;
 }
@@ -59,11 +59,12 @@ const GROUP_BG: Record<string, string> = {
   stage: "rgba(255,255,255,0.04)",
   views: "transparent",
   library: "rgba(255,255,255,0.02)",
+  artboard: "rgba(200,200,200,0.08)",
   refs: "rgba(0,0,0,0.08)",
 };
 
 export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, onEditTabPrompt, noBorder }: GroupedTabBarProps) {
-  const groups: ("stage" | "views" | "library" | "refs")[] = ["stage", "views", "library", "refs"];
+  const groups: ("stage" | "views" | "library" | "artboard" | "refs")[] = ["stage", "views", "library", "artboard", "refs"];
 
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
   const [editingTab, setEditingTab] = useState<{ id: string; label: string; prompt: string } | null>(null);
@@ -135,7 +136,7 @@ export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, o
                       border: isActive ? "1px solid var(--color-border)" : "1px solid transparent",
                       borderBottom: isActive ? "1px solid var(--color-card)" : "1px solid var(--color-border)",
                       borderRadius: isActive ? "6px 6px 0 0" : "4px 4px 0 0",
-                      padding: isActive ? "6px 14px 5px" : "4px 12px 5px",
+                      padding: isActive ? "6px 14px 5px" : tab.group === "artboard" ? "5px 16px 5px" : "4px 12px 5px",
                       marginBottom: -1,
                       zIndex: isActive ? 2 : 1,
                     }}

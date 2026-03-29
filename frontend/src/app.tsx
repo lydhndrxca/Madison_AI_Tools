@@ -13,8 +13,13 @@ import { ToastProvider, useToastContext } from "./hooks/ToastContext";
 import { SessionProvider } from "./hooks/SessionContext";
 import { ShortcutsProvider } from "./hooks/useShortcuts";
 import { VoiceToTextProvider } from "./hooks/useVoiceToText";
+import { ArtboardProvider } from "./hooks/ArtboardContext";
+import { FavoritesProvider } from "./hooks/FavoritesContext";
+import { FavoritesPage } from "./components/tools/favorites/FavoritesPage";
+import { PromptLibraryPage } from "./components/tools/prompt-library/PromptLibraryPage";
+import { HistoryTimeline } from "./components/tools/history/HistoryTimeline";
 
-export type PageId = "style-library" | "generated-images" | "gemini" | "multiview" | "character" | "weapon" | "prop" | "environment" | "uilab" | "3d";
+export type PageId = "style-library" | "generated-images" | "favorites" | "prompt-library" | "history" | "gemini" | "multiview" | "character" | "weapon" | "prop" | "environment" | "uilab" | "3d";
 
 function AppInner() {
   const [activePage, setActivePage] = useState<PageId>("character");
@@ -26,6 +31,9 @@ function AppInner() {
       <AppShell activePage={activePage} onNavigate={setActivePage}>
         <div className="h-full" style={{ display: activePage === "style-library" ? "contents" : "none" }}><StyleLibraryPage /></div>
         <div className="h-full" style={{ display: activePage === "generated-images" ? "contents" : "none" }}><GeneratedImagesPage /></div>
+        <div className="h-full" style={{ display: activePage === "favorites" ? "contents" : "none" }}><FavoritesPage /></div>
+        <div className="h-full" style={{ display: activePage === "prompt-library" ? "contents" : "none" }}><PromptLibraryPage /></div>
+        <div className="h-full" style={{ display: activePage === "history" ? "contents" : "none" }}><HistoryTimeline /></div>
         <div className="h-full" style={{ display: activePage === "gemini" ? "contents" : "none" }}><GeminiPage /></div>
         <div className="h-full" style={{ display: activePage === "multiview" ? "contents" : "none" }}><MultiviewPage /></div>
         <div className="h-full" style={{ display: activePage === "character" ? "contents" : "none" }}><CharacterLabWrapper /></div>
@@ -48,7 +56,11 @@ export function App() {
     <ToastProvider>
       <ShortcutsProvider>
         <VoiceToTextProvider>
-          <AppInner />
+          <ArtboardProvider>
+            <FavoritesProvider>
+              <AppInner />
+            </FavoritesProvider>
+          </ArtboardProvider>
         </VoiceToTextProvider>
       </ShortcutsProvider>
     </ToastProvider>
