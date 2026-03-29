@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Clock, Search, Filter, X, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
+import { Clock, Search, X, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
 import { apiFetch } from "@/hooks/useApi";
 
 const TOOL_LABELS: Record<string, string> = {
@@ -174,7 +174,7 @@ export function HistoryTimeline() {
                           {TOOL_LABELS[entry.tool] || entry.tool}
                         </span>
                         <span className="text-[9px]" style={{ color: "var(--color-text-muted)" }}>
-                          {entry.view} \u00b7 {entry.generation_type}
+                          {entry.view} {"\u00b7"} {entry.generation_type}
                         </span>
                       </div>
                       {entry.prompt && (
@@ -188,7 +188,7 @@ export function HistoryTimeline() {
                         {new Date(entry.timestamp).toLocaleTimeString()}
                       </span>
                       <span className="text-[8px]" style={{ color: "var(--color-text-muted)" }}>
-                        {entry.width}\u00d7{entry.height}
+                        {entry.width}{"\u00d7"}{entry.height}
                       </span>
                     </div>
                     <button
@@ -265,10 +265,10 @@ export function HistoryTimeline() {
                   {TOOL_LABELS[expandedEntry.tool] || expandedEntry.tool}
                 </span>
                 <span className="text-[10px]" style={{ color: "rgba(255,255,255,0.5)" }}>
-                  {expandedEntry.view} \u00b7 {expandedEntry.generation_type}
+                  {expandedEntry.view} {"\u00b7"} {expandedEntry.generation_type}
                 </span>
                 <span className="text-[10px] ml-auto font-mono" style={{ color: "rgba(255,255,255,0.4)" }}>
-                  {expandedEntry.width}\u00d7{expandedEntry.height}
+                  {expandedEntry.width}{"\u00d7"}{expandedEntry.height}
                 </span>
               </div>
               <p className="text-[11px]" style={{ color: "rgba(255,255,255,0.6)" }}>

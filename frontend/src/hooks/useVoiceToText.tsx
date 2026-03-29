@@ -7,13 +7,17 @@ import { useShortcuts } from "@/hooks/useShortcuts";
 const SETTINGS_KEY = "madison-voice-settings";
 const DEVICE_KEY = "madison-audio-device-id";
 
+export type VoiceEngine = "gemini" | "native";
+
 export interface VoiceSettings {
+  engine: VoiceEngine;
   lang: string;
   continuous: boolean;
   sendInterval: number;
 }
 
 const DEFAULT_SETTINGS: VoiceSettings = {
+  engine: "gemini",
   lang: "en-US",
   continuous: true,
   sendInterval: 7000,
@@ -85,7 +89,53 @@ const VoiceToTextContext = createContext<VoiceToTextContextValue>({
 
 export const useVoiceToText = () => useContext(VoiceToTextContext);
 
-/* ── Provider (MediaRecorder + Gemini transcription) ────────── */
+/* ── Web Speech API types (not in all TS libs) ───────────────── */
+
+interface NativeSpeechRecognitionResult {
+  readonly isFinal: boolean;
+  readonly length: number;
+  [index: number]: { transcript: string; confidence: number };
+}
+
+interface NativeSpeechRecognitionResultList {
+  readonly length: number;
+  [index: number]: NativeSpeechRecognitionResult;
+}
+
+interface NativeSpeechRecognitionEvent extends Event {
+  readonly resultIndex: number;
+  readonly results: NativeSpeechRecognitionResultList;
+}
+
+interface NativeSpeechRecognitionErrorEvent extends Event {
+  readonly error: string;
+}
+
+interface NativeSpeechRecognition extends EventTarget {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((ev: NativeSpeechRecognitionEvent) => void) | null;
+  onerror: ((ev: NativeSpeechRecognitionErrorEvent) => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+  stop(): void;
+  abort(): void;
+}
+
+type NativeSpeechRecognitionCtor = new () => NativeSpeechRecognition;
+
+/* ── Native Web Speech API check ─────────────────────────────── */
+
+const SpeechRecognitionCtor: NativeSpeechRecognitionCtor | null =
+  typeof window !== "undefined"
+    ? (window as unknown as Record<string, unknown>).SpeechRecognition as NativeSpeechRecognitionCtor ??
+      (window as unknown as Record<string, unknown>).webkitSpeechRecognition as NativeSpeechRecognitionCtor ?? null
+    : null;
+
+export const nativeSpeechSupported = !!SpeechRecognitionCtor;
+
+/* ── Provider (Gemini transcription + native Web Speech API) ── */
 
 export function VoiceToTextProvider({ children }: { children: React.ReactNode }) {
   const [active, setActive] = useState(false);
@@ -93,6 +143,7 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
 
+  // Gemini engine refs
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -100,6 +151,9 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
   const activeRef = useRef(false);
   const targetStampRef = useRef<string | null>(null);
   const recentTranscriptsRef = useRef<string[]>([]);
+
+  // Native engine ref
+  const recognitionRef = useRef<NativeSpeechRecognition | null>(null);
 
   const updateSettings = useCallback((patch: Partial<VoiceSettings>) => {
     setSettings((prev) => {
@@ -131,14 +185,10 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
 
     el.focus();
 
-    // execCommand('insertText') is the most reliable way to insert text
-    // into a focused input/textarea in Chromium — it properly triggers
-    // React's synthetic event system and maintains undo history.
     const spacer = el.value.length > 0 && el.selectionStart === el.value.length && !el.value.endsWith(" ") ? " " : "";
     const inserted = document.execCommand("insertText", false, spacer + text);
 
     if (!inserted) {
-      // Fallback: direct value manipulation
       console.log("[VoiceToText] execCommand failed, using fallback setter");
       const start = el.selectionStart ?? el.value.length;
       const end = el.selectionEnd ?? el.value.length;
@@ -160,6 +210,8 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
     console.log("[VoiceToText] Inserted text into", el.tagName, el.placeholder || el.name || "");
   }, [resolveTarget]);
 
+  /* ── Gemini engine ──────────────────────────────────────────── */
+
   const sendChunk = useCallback(async (blob: Blob) => {
     if (blob.size < 200) return;
     try {
@@ -167,7 +219,8 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
       const b64 = arrayBufferToBase64(buf);
       console.log(`[VoiceToText] Sending ${(blob.size / 1024).toFixed(1)}KB audio chunk...`);
 
-      const context = recentTranscriptsRef.current.join(" ").slice(-MAX_CONTEXT_CHARS);
+      const unique = [...new Set(recentTranscriptsRef.current)];
+      const context = unique.slice(-3).join(" ").slice(-MAX_CONTEXT_CHARS);
 
       const resp = await apiFetch<{ text?: string; error?: string }>("/system/transcribe", {
         method: "POST",
@@ -183,10 +236,20 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
       }
       const transcript = resp.text?.trim();
       if (transcript) {
-        console.log("[VoiceToText] Transcript:", transcript);
-        recentTranscriptsRef.current.push(transcript);
-        if (recentTranscriptsRef.current.length > 10) recentTranscriptsRef.current.shift();
-        insertText(transcript);
+        const recent = recentTranscriptsRef.current;
+        const isDuplicate =
+          recent.length >= 2 &&
+          recent[recent.length - 1] === transcript &&
+          recent[recent.length - 2] === transcript;
+        if (isDuplicate) {
+          console.warn("[VoiceToText] Dropping duplicate transcript (likely hallucination loop):", transcript);
+          recentTranscriptsRef.current = [];
+        } else {
+          console.log("[VoiceToText] Transcript:", transcript);
+          recent.push(transcript);
+          if (recent.length > 10) recent.shift();
+          insertText(transcript);
+        }
       } else {
         console.log("[VoiceToText] Empty transcript (silence or unintelligible)");
       }
@@ -228,7 +291,7 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
     }, settingsRef.current.sendInterval);
   }, [sendChunk]);
 
-  const stopRecording = useCallback(() => {
+  const stopGemini = useCallback(() => {
     activeRef.current = false;
     if (sendTimerRef.current) { clearTimeout(sendTimerRef.current); sendTimerRef.current = null; }
     if (recorderRef.current && recorderRef.current.state !== "inactive") {
@@ -236,12 +299,9 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
     }
     recorderRef.current = null;
     if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
-    setActive(false);
   }, []);
 
-  const startRecording = useCallback(async () => {
-    // Capture the currently focused text field BEFORE getUserMedia (which may steal focus)
-    const preTarget = resolveTarget();
+  const startGemini = useCallback(async (preTarget: HTMLInputElement | HTMLTextAreaElement | null) => {
     try {
       const deviceId = getSavedDeviceId();
       const constraints: MediaStreamConstraints = {
@@ -259,15 +319,96 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
       setActive(true);
       beginSegment();
 
-      // Restore focus to the text field so the cursor stays visible while user speaks
-      if (preTarget) {
-        requestAnimationFrame(() => preTarget.focus());
-      }
+      if (preTarget) requestAnimationFrame(() => preTarget.focus());
     } catch (err) {
-      console.error("[VoiceToText] Could not start recording:", err);
+      console.error("[VoiceToText] Could not start Gemini recording:", err);
       setActive(false);
     }
-  }, [beginSegment, resolveTarget]);
+  }, [beginSegment]);
+
+  /* ── Native Web Speech API engine ───────────────────────────── */
+
+  const stopNative = useCallback(() => {
+    if (recognitionRef.current) {
+      recognitionRef.current.onresult = null;
+      recognitionRef.current.onend = null;
+      recognitionRef.current.onerror = null;
+      recognitionRef.current.abort();
+      recognitionRef.current = null;
+    }
+  }, []);
+
+  const startNative = useCallback((preTarget: HTMLInputElement | HTMLTextAreaElement | null) => {
+    if (!SpeechRecognitionCtor) {
+      console.error("[VoiceToText] Native speech recognition not available in this browser");
+      setActive(false);
+      return;
+    }
+
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = settingsRef.current.lang;
+    recognition.continuous = true;
+    recognition.interimResults = false;
+
+    recognition.onresult = (event: NativeSpeechRecognitionEvent) => {
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        if (event.results[i].isFinal) {
+          const text = event.results[i][0].transcript.trim();
+          if (text) {
+            console.log("[VoiceToText/Native] Transcript:", text);
+            insertText(text);
+          }
+        }
+      }
+    };
+
+    recognition.onerror = (event: NativeSpeechRecognitionErrorEvent) => {
+      console.warn("[VoiceToText/Native] Error:", event.error);
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        stopNative();
+        setActive(false);
+      }
+    };
+
+    recognition.onend = () => {
+      // Auto-restart if still supposed to be active
+      if (activeRef.current && recognitionRef.current) {
+        try { recognitionRef.current.start(); } catch { /* already started */ }
+      }
+    };
+
+    recognitionRef.current = recognition;
+    activeRef.current = true;
+    setActive(true);
+
+    try {
+      recognition.start();
+    } catch (err) {
+      console.error("[VoiceToText/Native] Could not start:", err);
+      setActive(false);
+      return;
+    }
+
+    if (preTarget) requestAnimationFrame(() => preTarget.focus());
+  }, [insertText, stopNative]);
+
+  /* ── Unified start / stop / toggle ──────────────────────────── */
+
+  const stopRecording = useCallback(() => {
+    stopGemini();
+    stopNative();
+    activeRef.current = false;
+    setActive(false);
+  }, [stopGemini, stopNative]);
+
+  const startRecording = useCallback(async () => {
+    const preTarget = resolveTarget();
+    if (settingsRef.current.engine === "native") {
+      startNative(preTarget);
+    } else {
+      await startGemini(preTarget);
+    }
+  }, [resolveTarget, startGemini, startNative]);
 
   const toggle = useCallback(() => {
     if (active) stopRecording();
@@ -303,6 +444,7 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
       if (sendTimerRef.current) clearTimeout(sendTimerRef.current);
       if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
       if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
+      if (recognitionRef.current) { recognitionRef.current.abort(); recognitionRef.current = null; }
     };
   }, []);
 

@@ -37,10 +37,14 @@ class CharacterGenerateRequest(BaseModel):
     bible_context: Optional[str] = None
     costume_context: Optional[str] = None
     fusion_context: Optional[str] = None
+    fusion_image_1_b64: Optional[str] = None
+    fusion_image_2_b64: Optional[str] = None
     style_guidance: Optional[str] = None
     env_context: Optional[str] = None
     lock_constraints: Optional[str] = None
     recreate_mode: bool = False
+    custom_sections_context: Optional[str] = None
+    custom_section_images: Optional[list[str]] = None
 
 
 class CharacterResponse(BaseModel):
@@ -232,6 +236,8 @@ def _build_character_prompt(req: CharacterGenerateRequest) -> str:
         prompt += f"\n\n--- Style Library Guidance ---\n{req.style_guidance}"
     if req.env_context:
         prompt += f"\n\n--- Environment & Placement ---\nPlace the character in a real scene/environment as described below. Do NOT use a flat or solid-color background.\n{req.env_context}"
+    if req.custom_sections_context:
+        prompt += f"\n\n--- Custom Directions ---\n{req.custom_sections_context}"
     if req.lock_constraints:
         prompt += (
             f"\n\n--- PRESERVATION CONSTRAINTS (CRITICAL — HIGHEST PRIORITY, DO NOT VIOLATE) ---\n"
@@ -265,6 +271,12 @@ def _do_generate(req: CharacterGenerateRequest) -> CharacterResponse:
     if req.reference_image_b64:
         contents.append(core.b64_to_image(req.reference_image_b64))
     for label, b64 in [("ref_a", req.ref_a_b64), ("ref_b", req.ref_b_b64), ("ref_c", req.ref_c_b64)]:
+        if b64:
+            contents.append(core.b64_to_image(b64))
+    for b64 in [req.fusion_image_1_b64, req.fusion_image_2_b64]:
+        if b64:
+            contents.append(core.b64_to_image(b64))
+    for b64 in (req.custom_section_images or []):
         if b64:
             contents.append(core.b64_to_image(b64))
 

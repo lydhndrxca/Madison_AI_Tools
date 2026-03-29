@@ -35,7 +35,7 @@ export function ColorPalette({ swatches, onSwatchesChange, imageSrc, compact = f
 
   const handleCopy = useCallback(() => {
     const text = swatches.map((s) => s.hex).join(", ");
-    navigator.clipboard.writeText(text).catch(() => {});
+    navigator.clipboard?.writeText(text).catch(() => {});
   }, [swatches]);
 
   const paletteString = swatches.map((s) => s.hex).join(", ");

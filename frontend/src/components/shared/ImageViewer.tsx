@@ -80,7 +80,7 @@ export function ImageViewer({
 
   // Inpainting state
   const [inpaintMode, setInpaintMode] = useState(false);
-  const [editorTool, setEditorTool] = useState<EditorTool>("brush");
+  const [editorTool, setEditorTool] = useState<EditorTool>("select");
   const [brushSize, setBrushSize] = useState(30);
   const [hasMask, setHasMask] = useState(false);
   const [editorBusy, setEditorBusy] = useState(false);
@@ -152,15 +152,18 @@ export function ImageViewer({
     }
   }, [naturalSize]);
 
-  // Clear mask when source image changes
+  // Reset editor state when source image changes (e.g. tab switch)
   useEffect(() => {
     if (maskCanvasRef.current) { Mask.clearMask(maskCanvasRef.current); setHasMask(false); }
+    setEditorTool("select");
+    setInpaintMode(false);
   }, [src]);
 
   // Register image viewer tool shortcuts via the shortcuts system
   const { registerAction: regAction, unregisterAction: unregAction } = useShortcuts();
   useEffect(() => {
     const guard = (fn: () => void) => () => { if (!lockedRef.current) fn(); };
+    regAction("toolSelect", guard(() => { setEditorTool("select"); setInpaintMode(false); }));
     regAction("toolBrush", guard(() => { setEditorTool("brush"); setInpaintMode(true); }));
     regAction("toolEraser", guard(() => { setEditorTool("eraser"); setInpaintMode(true); }));
     regAction("toolMarquee", guard(() => { setEditorTool("marquee"); setInpaintMode(true); }));
@@ -169,7 +172,7 @@ export function ImageViewer({
     regAction("brushSmaller", guard(() => setBrushSize((s) => Math.max(2, s - 5))));
     regAction("brushLarger", guard(() => setBrushSize((s) => Math.min(200, s + 5))));
     return () => {
-      for (const id of ["toolBrush", "toolEraser", "toolMarquee", "toolLasso", "toolSmartSelect", "brushSmaller", "brushLarger"]) {
+      for (const id of ["toolSelect", "toolBrush", "toolEraser", "toolMarquee", "toolLasso", "toolSmartSelect", "brushSmaller", "brushLarger"]) {
         unregAction(id);
       }
     };
@@ -503,7 +506,7 @@ export function ImageViewer({
 
   const handleToolChange = useCallback((tool: EditorTool) => {
     setEditorTool(tool);
-    setInpaintMode(true);
+    setInpaintMode(tool !== "select");
   }, []);
 
   // --- Fullscreen helpers ---
@@ -671,11 +674,13 @@ export function ImageViewer({
         lineWidth={annotationLineWidth}
         onLineWidthChange={setAnnotationLineWidth}
         onExportWithAnnotations={src ? async () => {
-          const dataUrl = await exportWithAnnotations(src, annotations);
-          const a = document.createElement("a");
-          a.href = dataUrl;
-          a.download = `annotated_${Date.now()}.png`;
-          a.click();
+          try {
+            const dataUrl = await exportWithAnnotations(src, annotations);
+            const a = document.createElement("a");
+            a.href = dataUrl;
+            a.download = `annotated_${Date.now()}.png`;
+            a.click();
+          } catch (e) { console.error("Annotation export failed:", e); }
         } : undefined}
       />
 

@@ -8,13 +8,21 @@ import { ArtboardCanvas } from "@/components/shared/ArtboardCanvas";
 import type { TabDef } from "@/components/shared/TabBar";
 import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
+import { useFavorites } from "@/hooks/FavoritesContext";
 import { useSessionRegister } from "@/hooks/SessionContext";
 import { useClipboardPaste } from "@/hooks/useClipboardPaste";
 import { XmlModal } from "@/components/shared/XmlModal";
 import { GripVertical, ChevronDown, ChevronRight, Save, FolderPlus, Trash2, Pencil, ImagePlus, X, FolderOpen, ArrowLeft, Eye, EyeOff, Monitor } from "lucide-react";
 import { EditHistory } from "@/components/shared/EditHistory";
+import { StyleFusionPanel, buildFusionBrief, EMPTY_FUSION } from "@/components/shared/StyleFusionPanel";
+import type { StyleFusionState } from "@/components/shared/StyleFusionPanel";
 import type { HistoryEntry } from "@/lib/imageHistory";
 import { useShortcuts } from "@/hooks/useShortcuts";
+import { usePromptOverrides } from "@/hooks/PromptOverridesContext";
+import { EditPromptModal } from "@/components/shared/EditPromptModal";
+import { useCustomSections } from "@/hooks/CustomSectionsContext";
+import { useCustomSectionState } from "@/hooks/useCustomSectionState";
+import { CustomSectionRenderer } from "@/components/shared/CustomSectionRenderer";
 
 // ---------------------------------------------------------------------------
 // Tab model — UI Lab uses "library" group instead of "views"
@@ -79,29 +87,6 @@ const TAKE_OPTIONS = [
   "detail work & hardware", "cultural reference", "attitude & energy",
 ];
 
-interface FusionSlot { label: string; takeFrom: string }
-interface StyleFusionState { slots: [FusionSlot, FusionSlot]; blend: number }
-
-const EMPTY_FUSION: StyleFusionState = {
-  slots: [{ label: "", takeFrom: "overall vibe" }, { label: "", takeFrom: "overall vibe" }],
-  blend: 50,
-};
-
-function buildFusionBrief(fusion: StyleFusionState): string {
-  const [s1, s2] = fusion.slots;
-  const has1 = !!s1.label.trim();
-  const has2 = !!s2.label.trim();
-  if (!has1 && !has2) return "";
-  const w1 = 100 - fusion.blend;
-  const w2 = fusion.blend;
-  if (has1 && has2) {
-    return [`Style blend: "${s1.label}" (${w1}%) + "${s2.label}" (${w2}%)`,
-      `  From "${s1.label}": ${s1.takeFrom}`, `  From "${s2.label}": ${s2.takeFrom}`].join("\n");
-  }
-  const slot = has1 ? s1 : s2;
-  return `Style: "${slot.label}" — ${slot.takeFrom}`;
-}
-
 // ---------------------------------------------------------------------------
 // Layout system
 // ---------------------------------------------------------------------------
@@ -134,16 +119,19 @@ const SECTION_TIPS: Record<SectionId, string> = {
 
 const NON_COLLAPSIBLE: Set<SectionId> = new Set(["generate"]);
 const TOGGLEABLE_SECTIONS: Set<SectionId> = new Set(["buttonLayout", "scrollbarParts", "charGen", "styleFusion"]);
+const PROMPT_EDITABLE_SECTIONS: Set<SectionId> = new Set(["styleFusion"]);
 
 interface ModelInfo { id: string; label: string; resolution: string; time_estimate: string; multimodal: boolean }
 
 interface LayoutState { order: SectionId[]; collapsed: Partial<Record<SectionId, boolean>> }
 
-const LAYOUT_STORAGE_KEY = "madison-uilab-layout";
+function layoutStorageKeyFor(instanceId: number) {
+  return `madison-uilab-layout${instanceId ? `-${instanceId}` : ""}`;
+}
 
-function loadDefaultLayout(): LayoutState {
+function loadDefaultLayout(key?: string): LayoutState {
   try {
-    const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
+    const raw = localStorage.getItem(key || "madison-uilab-layout");
     if (raw) {
       const parsed = JSON.parse(raw) as LayoutState;
       const allIds = new Set<SectionId>(DEFAULT_SECTION_ORDER);
@@ -172,7 +160,14 @@ const inputStyle = { background: "var(--color-input-bg)", border: "1px solid var
 // Component
 // ---------------------------------------------------------------------------
 
-export function UILabPage() {
+interface UILabPageProps {
+  instanceId?: number;
+  active?: boolean;
+}
+
+export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
+  const layoutStorageKey = layoutStorageKeyFor(instanceId);
+  const sessionKey = `uilab${instanceId ? `-${instanceId}` : ""}`;
   const [tabs, setTabs] = useState<TabDef[]>(BUILTIN_TABS);
   const [activeTab, setActiveTab] = useState("main");
   const busy = useBusySet();
@@ -247,10 +242,17 @@ export function UILabPage() {
   }, []);
 
   // Layout
-  const [layout, setLayout] = useState<LayoutState>(loadDefaultLayout);
+  const [layout, setLayout] = useState<LayoutState>(() => loadDefaultLayout(layoutStorageKey));
   const [dragOverId, setDragOverId] = useState<SectionId | null>(null);
   const dragItemRef = useRef<SectionId | null>(null);
   const { addToast } = useToastContext();
+  const { addFavorite, removeFavorite, isFavorited, getFavoriteId } = useFavorites();
+  const promptOverrides = usePromptOverrides();
+  const { getSectionColor, setSectionColor } = useCustomSections();
+  const customSections = useCustomSectionState("uilab");
+  const TOOL_ID = "uilab";
+  const [promptEditSection, setPromptEditSection] = useState<SectionId | null>(null);
+  const [promptCtxMenu, setPromptCtxMenu] = useState<{ x: number; y: number; section: SectionId } | null>(null);
 
   const [xmlOpen, setXmlOpen] = useState(false);
 
@@ -287,9 +289,9 @@ export function UILabPage() {
   const handleSetDefaultLayout = useCallback(() => {
     const collapsed: Partial<Record<SectionId, boolean>> = {};
     for (const id of layout.order) { if (NON_COLLAPSIBLE.has(id)) continue; collapsed[id] = isSectionCollapsed(id); }
-    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify({ order: layout.order, collapsed }));
+    localStorage.setItem(layoutStorageKey, JSON.stringify({ order: layout.order, collapsed }));
     addToast("Layout saved as default", "success");
-  }, [layout.order, isSectionCollapsed, addToast]);
+  }, [layout.order, isSectionCollapsed, addToast, layoutStorageKey]);
 
   const refCounter = useRef(0);
 
@@ -326,13 +328,12 @@ export function UILabPage() {
   const isRefTab = activeTab.startsWith("ref");
 
   // Clipboard paste for ref tabs
-  useClipboardPaste(
-    useCallback((dataUrl: string) => {
-      if (isRefTab) {
-        setRefImages((prev) => ({ ...prev, [activeTab]: dataUrl }));
-      }
-    }, [activeTab, isRefTab]),
-  );
+  const clipboardPasteCb = useCallback((dataUrl: string) => {
+    if (isRefTab) {
+      setRefImages((prev) => ({ ...prev, [activeTab]: dataUrl }));
+    }
+  }, [activeTab, isRefTab]);
+  useClipboardPaste(activeTab === "artboard" ? undefined : clipboardPasteCb);
 
   // --- Ref image helpers ---
   const handleRefOpen = useCallback(() => { refFileInputRef.current?.click(); }, []);
@@ -511,11 +512,26 @@ export function UILabPage() {
     return result;
   }, [tabs, refImages]);
 
+  // --- Prompt override helpers ---
+  const getDefaultSectionPrompt = useCallback((sectionId: SectionId): string => {
+    switch (sectionId) {
+      case "styleFusion": return buildFusionBrief(styleFusion);
+      default: return "";
+    }
+  }, [styleFusion]);
+
+  const resolveSection = useCallback((sectionId: SectionId): string => {
+    if (!isSectionEnabled(sectionId)) return "";
+    const override = promptOverrides.getOverride(TOOL_ID, sectionId);
+    if (override !== null) return override;
+    return getDefaultSectionPrompt(sectionId);
+  }, [isSectionEnabled, promptOverrides, getDefaultSectionPrompt]);
+
   // --- Generation handlers ---
   const handleGenerate = useCallback(async () => {
     if (busy.any) return;
 
-    const fusionContext = buildFusionBrief(styleFusion);
+    const fusionContext = resolveSection("styleFusion");
     const [outW, outH] = resolveOutputDims();
     const refImagesB64 = collectRefImagesB64();
 
@@ -542,6 +558,10 @@ export function UILabPage() {
       model_id: modelId || undefined,
       style_context: styleLibraryFolder || undefined,
       fusion_context: fusionContext || undefined,
+      fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+      fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+      custom_sections_context: customSections.getPromptContributions() || undefined,
+      custom_section_images: customSections.getImageAttachments().map((img) => img.replace(/^data:image\/\w+;base64,/, "")).filter(Boolean) || undefined,
     };
 
     const shouldUseGrid = useGrid && elementType !== "scrollbar" && elementType !== "font" && elementType !== "number";
@@ -671,7 +691,8 @@ export function UILabPage() {
     }
   }, [busy, elementType, prompt, genCount, modelId, refImageB64, reenvision, matchRefDims, addColor, noColor,
     useGrid, buttonShape, borderStyle, addIcon, addText, textSize, sbTrack, sbThumb, sbArrows, sbOrientation,
-    fontChars, styleFusion, styleLibraryFolder, styleLibraryFolders, resolveOutputDims, resolveCellDims, collectRefImagesB64, setMainstageImage, addToast]);
+    fontChars, styleFusion, styleLibraryFolder, styleLibraryFolders, resolveOutputDims, resolveCellDims, collectRefImagesB64, setMainstageImage, addToast,
+    resolveSection, customSections.getPromptContributions, customSections.getImageAttachments]);
 
   const handleCancel = useCallback(() => {
     cancelAllRequests();
@@ -715,6 +736,18 @@ export function UILabPage() {
     setStyleLibraryFolder("");
     addToast("Session cleared", "info");
   }, [addToast]);
+
+  // Listen for project-clear event from ProjectTabsWrapper
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.storageKey === "madison-uilab-projects" && detail?.instanceId === instanceId) {
+        handleReset();
+      }
+    };
+    window.addEventListener("project-clear", handler);
+    return () => window.removeEventListener("project-clear", handler);
+  }, [instanceId, handleReset]);
 
   // Grid cell handlers
   const handleGridCopy = useCallback(async (id: string) => {
@@ -774,7 +807,9 @@ export function UILabPage() {
             model_id: modelId || undefined,
             style_context: styleLibraryFolder || undefined,
             style_guidance: styleLibraryFolder ? (styleLibraryFolders.find((f) => f.name === styleLibraryFolder)?.guidance_text || "") : "",
-            fusion_context: buildFusionBrief(styleFusion) || undefined,
+            fusion_context: resolveSection("styleFusion") || undefined,
+            fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
           }),
         },
       );
@@ -843,7 +878,7 @@ export function UILabPage() {
 
   // Session persistence
   useSessionRegister(
-    "uilab",
+    sessionKey,
     () => ({
       elementType, prompt, genCount, outputSize, matchRefDims, reenvision, addColor, noColor,
       useGrid, cellSize, buttonShape, borderStyle, addIcon, addText, textSize,
@@ -1184,77 +1219,12 @@ export function UILabPage() {
   );
 
   const renderStyleFusionSection = () => (
-    <div className="space-y-3">
-      <div className="rounded p-2 space-y-1.5" style={{ border: "1px solid var(--color-border)", background: "rgba(106,27,154,0.06)" }}>
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Reference 1</span>
-          <span className="text-[10px] tabular-nums" style={{ color: "var(--color-text-muted)" }}>{100 - styleFusion.blend}%</span>
-        </div>
-        <input
-          className="w-full px-2 py-1 text-xs"
-          style={inputStyle}
-          disabled={busy.any}
-          placeholder='Name a style, e.g. "pixel art RPG", "sci-fi holographic"'
-          value={styleFusion.slots[0].label}
-          onChange={(e) => setStyleFusion((p) => ({ ...p, slots: [{ ...p.slots[0], label: e.target.value }, p.slots[1]] }))}
-        />
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] shrink-0" style={{ color: "var(--color-text-muted)" }}>Take</span>
-          <select
-            className="flex-1 px-1.5 py-0.5 text-[10px] rounded-[var(--radius-sm)]"
-            style={inputStyle}
-            disabled={busy.any}
-            value={styleFusion.slots[0].takeFrom}
-            onChange={(e) => setStyleFusion((p) => ({ ...p, slots: [{ ...p.slots[0], takeFrom: e.target.value }, p.slots[1]] }))}
-          >
-            {TAKE_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </div>
-      </div>
-
-      <div className="rounded p-2 space-y-1" style={{ border: "1px solid var(--color-border)" }}>
-        <div className="flex justify-between text-[10px]" style={{ color: "var(--color-text-secondary)" }}>
-          <span>{styleFusion.slots[0].label || "Ref 1"} <span className="tabular-nums">{100 - styleFusion.blend}%</span></span>
-          <span><span className="tabular-nums">{styleFusion.blend}%</span> {styleFusion.slots[1].label || "Ref 2"}</span>
-        </div>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          value={styleFusion.blend}
-          className="w-full h-3"
-          onChange={(e) => setStyleFusion((p) => ({ ...p, blend: Number(e.target.value) }))}
-        />
-        <p className="text-[9px] text-center" style={{ color: "var(--color-text-muted)" }}>Drag the slider to mix more of one style into the other</p>
-      </div>
-
-      <div className="rounded p-2 space-y-1.5" style={{ border: "1px solid var(--color-border)", background: "rgba(106,27,154,0.06)" }}>
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Reference 2</span>
-          <span className="text-[10px] tabular-nums" style={{ color: "var(--color-text-muted)" }}>{styleFusion.blend}%</span>
-        </div>
-        <input
-          className="w-full px-2 py-1 text-xs"
-          style={inputStyle}
-          disabled={busy.any}
-          placeholder='Name a second style, e.g. "minimalist flat", "hand-painted"'
-          value={styleFusion.slots[1].label}
-          onChange={(e) => setStyleFusion((p) => ({ ...p, slots: [p.slots[0], { ...p.slots[1], label: e.target.value }] }))}
-        />
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] shrink-0" style={{ color: "var(--color-text-muted)" }}>Take</span>
-          <select
-            className="flex-1 px-1.5 py-0.5 text-[10px] rounded-[var(--radius-sm)]"
-            style={inputStyle}
-            disabled={busy.any}
-            value={styleFusion.slots[1].takeFrom}
-            onChange={(e) => setStyleFusion((p) => ({ ...p, slots: [p.slots[0], { ...p.slots[1], takeFrom: e.target.value }] }))}
-          >
-            {TAKE_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </div>
-      </div>
-    </div>
+    <StyleFusionPanel
+      fusion={styleFusion}
+      onChange={setStyleFusion}
+      takeOptions={TAKE_OPTIONS}
+      disabled={busy.any}
+    />
   );
 
   const renderSaveSection = () => (
@@ -1931,6 +1901,9 @@ export function UILabPage() {
           const canToggle = TOGGLEABLE_SECTIONS.has(sectionId);
           const enabled = isSectionEnabled(sectionId);
           const label = SECTION_LABELS[sectionId];
+          const isPromptEditable = PROMPT_EDITABLE_SECTIONS.has(sectionId);
+          const sectionHasOverride = isPromptEditable && promptOverrides.hasOverride(TOOL_ID, sectionId);
+          const sectionColor = getSectionColor(TOOL_ID, sectionId);
 
           const wrapSection = (children: ReactNode) => (
             <div
@@ -1942,11 +1915,19 @@ export function UILabPage() {
               onDragEnd={handleDragEnd}
               onDragLeave={() => { if (dragOverId === sectionId) setDragOverId(null); }}
               onMouseDown={(e) => { if (e.button === 1 && canToggle) { e.preventDefault(); toggleSectionEnabled(sectionId); } }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setPromptCtxMenu({ x: e.clientX, y: e.clientY, section: sectionId });
+              }}
               className="section-card-hover"
               style={{
                 border: dragOverId === sectionId && dragItemRef.current !== sectionId
                   ? "1px solid var(--color-accent, #6a6aff)"
-                  : "1px solid var(--color-border)",
+                  : sectionColor
+                    ? `1px solid ${sectionColor}`
+                    : sectionHasOverride
+                      ? "1px solid var(--color-accent)"
+                      : "1px solid var(--color-border)",
                 borderRadius: "var(--radius-lg)",
                 background: "var(--color-card)",
                 opacity: enabled ? 1 : 0.4,
@@ -1960,6 +1941,7 @@ export function UILabPage() {
                 <span className="cursor-grab active:cursor-grabbing px-1 py-1.5" style={{ color: "var(--color-text-muted)" }}>
                   <GripVertical className="h-3 w-3" />
                 </span>
+                {sectionColor && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: sectionColor }} />}
                 {canCollapse ? (
                   <button
                     type="button"
@@ -1970,6 +1952,7 @@ export function UILabPage() {
                   >
                     {collapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
                     <span className="text-xs font-semibold uppercase tracking-wider">{label}</span>
+                    {sectionHasOverride && <Pencil className="h-2.5 w-2.5 shrink-0" style={{ color: "var(--color-accent)" }} />}
                   </button>
                 ) : (
                   <span className="flex-1 py-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }} title={SECTION_TIPS[sectionId]}>
@@ -2004,6 +1987,67 @@ export function UILabPage() {
           if (sectionId === "styleFusion") return wrapSection(renderStyleFusionSection());
           if (sectionId === "saveOptions") return wrapSection(renderSaveSection());
           return null;
+        })}
+
+        {customSections.sections.map((cs) => {
+          const csCollapsed = customSections.isCollapsed(cs.id);
+          const csEnabled = customSections.isEnabled(cs.id);
+          const csColor = cs.color || getSectionColor(TOOL_ID, `custom:${cs.id}`);
+          return (
+            <div
+              key={`custom:${cs.id}`}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setPromptCtxMenu({ x: e.clientX, y: e.clientY, section: `custom:${cs.id}` as SectionId });
+              }}
+              className="section-card-hover"
+              style={{
+                border: csColor ? `1px solid ${csColor}` : "1px solid var(--color-border)",
+                borderRadius: "var(--radius-lg)",
+                background: "var(--color-card)",
+                opacity: csEnabled ? 1 : 0.4,
+                transition: "opacity 0.15s ease",
+              }}
+            >
+              <div className="flex items-center px-1 shrink-0" style={{ borderBottom: csCollapsed ? "none" : "1px solid var(--color-border)" }}>
+                <span className="cursor-grab active:cursor-grabbing px-1 py-1.5" style={{ color: "var(--color-text-muted)" }}>
+                  <GripVertical className="h-3 w-3" />
+                </span>
+                {csColor && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: csColor }} />}
+                <button
+                  type="button"
+                  onClick={() => customSections.toggleCollapsed(cs.id)}
+                  className="flex-1 flex items-center gap-1.5 py-1.5 text-left cursor-pointer"
+                  style={{ background: "transparent", border: "none", color: "var(--color-text-secondary)" }}
+                >
+                  {csCollapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
+                  <span className="text-xs font-semibold uppercase tracking-wider">{cs.name}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => customSections.toggleEnabled(cs.id)}
+                  className="px-1.5 py-0.5 text-[9px] rounded font-semibold cursor-pointer shrink-0 select-none"
+                  style={{
+                    background: csEnabled ? "var(--color-accent)" : "var(--color-input-bg)",
+                    color: csEnabled ? "var(--color-foreground)" : "var(--color-text-muted)",
+                    border: "1px solid var(--color-border)",
+                  }}
+                >
+                  {csEnabled ? "ON" : "OFF"}
+                </button>
+              </div>
+              {!csCollapsed && (
+                <div className="px-3 pt-1 pb-3 space-y-2 overflow-hidden">
+                  <CustomSectionRenderer
+                    section={cs}
+                    values={customSections.values[cs.id] ?? {}}
+                    onChange={(blockId, val) => customSections.setValue(cs.id, blockId, val)}
+                    disabled={busy.any}
+                  />
+                </div>
+              )}
+            </div>
+          );
         })}
 
         <button
@@ -2057,6 +2101,8 @@ export function UILabPage() {
                   onImageEdited={handleMainstageImageEdited}
                   refImages={editorRefImagesB64}
                   styleContext={styleLibraryFolder || ""}
+                  isFavorited={mainstageSrc ? isFavorited(mainstageSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
+                  onToggleFavorite={mainstageSrc ? () => { const b64 = mainstageSrc.replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "uilab", label: "main", source: "viewer" }); } : undefined}
                 />
               </div>
               {mainstageHistory.length > 0 && (
@@ -2090,6 +2136,8 @@ export function UILabPage() {
               showStyleLibrary
               styleLibraryFolders={slFolders.map((f) => ({ name: f.name }))}
               onRefreshStyleFolders={loadSlFolders}
+              isFavorited={(b64) => isFavorited(b64)}
+              onToggleFavorite={(id, b64, w, h) => { if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "uilab", label: `grid-${id}`, prompt: "", source: "grid", width: w, height: h }); }}
             />
           )}
           {activeTab === "artboard" && <ArtboardCanvas />}
@@ -2102,6 +2150,8 @@ export function UILabPage() {
               imageIndex={0}
               onClearImage={() => setRefImages((prev) => { const n = { ...prev }; delete n[activeTab]; return n; })}
               locked={false}
+              isFavorited={refImages[activeTab] ? isFavorited(refImages[activeTab].replace(/^data:image\/\w+;base64,/, "")) : false}
+              onToggleFavorite={refImages[activeTab] ? () => { const b64 = refImages[activeTab].replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "uilab", label: "main", source: "viewer" }); } : undefined}
             />
           )}
         </div>
@@ -2140,6 +2190,90 @@ export function UILabPage() {
 
       {/* XML Modal */}
       {xmlOpen && <XmlModal xml={xmlContent} title="UI Lab XML" onClose={() => setXmlOpen(false)} />}
+
+      {promptCtxMenu && (() => {
+        const isCustom = promptCtxMenu.section.startsWith("custom:");
+        const isEditable = !isCustom && PROMPT_EDITABLE_SECTIONS.has(promptCtxMenu.section);
+        const colorKey = isCustom ? promptCtxMenu.section : promptCtxMenu.section;
+        const currentColor = getSectionColor(TOOL_ID, colorKey);
+        return (
+          <div className="fixed inset-0 z-[55]" onClick={() => setPromptCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setPromptCtxMenu(null); }}>
+            <div
+              className="absolute py-1 rounded-md shadow-lg"
+              style={{
+                left: promptCtxMenu.x, top: promptCtxMenu.y,
+                background: "var(--color-card)", border: "1px solid var(--color-border)",
+                minWidth: 200, zIndex: 56,
+              }}
+            >
+              {isEditable && (
+                <>
+                  <button
+                    className="w-full text-left px-3 py-1.5 text-xs cursor-pointer"
+                    style={{ background: "transparent", border: "none", color: "var(--color-text-primary)" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-hover)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                    onClick={() => { setPromptEditSection(promptCtxMenu.section); setPromptCtxMenu(null); }}
+                  >
+                    <Pencil className="h-3 w-3 inline mr-2" style={{ verticalAlign: "-2px" }} />
+                    Edit Prompt
+                  </button>
+                  {promptOverrides.hasOverride(TOOL_ID, promptCtxMenu.section) && (
+                    <button
+                      className="w-full text-left px-3 py-1.5 text-xs cursor-pointer"
+                      style={{ background: "transparent", border: "none", color: "var(--color-text-primary)" }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-hover)")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                      onClick={() => { promptOverrides.clearOverride(TOOL_ID, promptCtxMenu.section); setPromptCtxMenu(null); addToast("Prompt reset to default", "info"); }}
+                    >
+                      Reset Prompt to Default
+                    </button>
+                  )}
+                  <div className="my-1" style={{ borderTop: "1px solid var(--color-border)" }} />
+                </>
+              )}
+              <div className="px-3 py-1">
+                <div className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--color-text-muted)" }}>
+                  Section Color
+                </div>
+                <div className="flex items-center gap-1 flex-wrap">
+                  {["#808080", "#e05050", "#e09040", "#d0c040", "#50b060", "#40a0d0", "#6070e0", "#a060d0", "#d060a0"].map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => { setSectionColor(TOOL_ID, colorKey, c); setPromptCtxMenu(null); }}
+                      className="w-4 h-4 rounded-full cursor-pointer shrink-0"
+                      style={{ background: c, border: currentColor === c ? "2px solid white" : "1px solid var(--color-border)" }}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    value={currentColor || "#808080"}
+                    onChange={(e) => { setSectionColor(TOOL_ID, colorKey, e.target.value); }}
+                    className="w-4 h-4 rounded cursor-pointer border-0 p-0"
+                    title="Custom color"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  {currentColor && (
+                    <button
+                      type="button"
+                      onClick={() => { setSectionColor(TOOL_ID, colorKey, undefined); setPromptCtxMenu(null); }}
+                      className="text-[9px] px-1.5 py-0.5 rounded cursor-pointer"
+                      style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-muted)" }}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {promptEditSection && (
+        <EditPromptModal open sectionLabel={SECTION_LABELS[promptEditSection]} defaultText={getDefaultSectionPrompt(promptEditSection)} currentText={promptOverrides.getOverride(TOOL_ID, promptEditSection) ?? getDefaultSectionPrompt(promptEditSection)} hasOverride={promptOverrides.hasOverride(TOOL_ID, promptEditSection)} onSave={(text) => { promptOverrides.setOverride(TOOL_ID, promptEditSection, text); setPromptEditSection(null); addToast("Prompt saved", "success"); }} onReset={() => { promptOverrides.clearOverride(TOOL_ID, promptEditSection); addToast("Prompt reset to default", "info"); }} onClose={() => setPromptEditSection(null)} />
+      )}
     </div>
   );
 }

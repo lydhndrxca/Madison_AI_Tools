@@ -7,16 +7,24 @@ import type { GridGalleryResult } from "@/components/shared/GridGallery";
 import { EditHistory } from "@/components/shared/EditHistory";
 import { GroupedTabBar } from "@/components/shared/TabBar";
 import { ArtboardCanvas } from "@/components/shared/ArtboardCanvas";
+import { StyleFusionPanel, buildFusionBrief, EMPTY_FUSION } from "@/components/shared/StyleFusionPanel";
+import type { StyleFusionState } from "@/components/shared/StyleFusionPanel";
 import type { TabDef } from "@/components/shared/TabBar";
 import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
 import { useSessionRegister, useSessionContext } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
+import { useFavorites } from "@/hooks/FavoritesContext";
 import { createHistoryEntry, pushHistory, clearHistory as clearHist, createImageRecord } from "@/lib/imageHistory";
 import type { HistoryEntry, ImageRecord, HistorySettings } from "@/lib/imageHistory";
 import { XmlModal } from "@/components/shared/XmlModal";
-import { GripVertical, ChevronDown, ChevronRight, Save, Lock, Unlock } from "lucide-react";
+import { GripVertical, ChevronDown, ChevronRight, Save, Lock, Unlock, Pencil } from "lucide-react";
 import { useShortcuts } from "@/hooks/useShortcuts";
+import { usePromptOverrides } from "@/hooks/PromptOverridesContext";
+import { EditPromptModal } from "@/components/shared/EditPromptModal";
+import { useCustomSections } from "@/hooks/CustomSectionsContext";
+import { useCustomSectionState } from "@/hooks/useCustomSectionState";
+import { CustomSectionRenderer } from "@/components/shared/CustomSectionRenderer";
 
 // ---------------------------------------------------------------------------
 // Tab model
@@ -483,47 +491,12 @@ const SECTION_TIPS: Record<SectionId, string> = {
 };
 const NON_COLLAPSIBLE: Set<SectionId> = new Set(["generate"]);
 const TOGGLEABLE_SECTIONS: Set<SectionId> = new Set(["identity", "attributes", "bible", "costume", "styleFusion", "envPlacement", "preservation"]);
+const PROMPT_EDITABLE_SECTIONS: Set<SectionId> = new Set(["attributes", "bible", "costume", "styleFusion", "envPlacement", "preservation"]);
 
 const TAKE_OPTIONS = [
   "overall vibe", "silhouette", "material & texture", "color palette",
   "detail work & hardware", "cultural reference", "attitude & energy",
 ];
-
-interface FusionSlot {
-  label: string;
-  takeFrom: string;
-}
-
-interface StyleFusionState {
-  slots: [FusionSlot, FusionSlot];
-  blend: number;
-}
-
-const EMPTY_FUSION: StyleFusionState = {
-  slots: [
-    { label: "", takeFrom: "overall vibe" },
-    { label: "", takeFrom: "overall vibe" },
-  ],
-  blend: 50,
-};
-
-function buildFusionBrief(fusion: StyleFusionState): string {
-  const [s1, s2] = fusion.slots;
-  const has1 = !!s1.label.trim();
-  const has2 = !!s2.label.trim();
-  if (!has1 && !has2) return "";
-  const w1 = 100 - fusion.blend;
-  const w2 = fusion.blend;
-  if (has1 && has2) {
-    return [
-      `Fashion blend: "${s1.label}" (${w1}%) + "${s2.label}" (${w2}%)`,
-      `  From "${s1.label}": ${s1.takeFrom}`,
-      `  From "${s2.label}": ${s2.takeFrom}`,
-    ].join("\n");
-  }
-  const slot = has1 ? s1 : s2;
-  return `Fashion style: "${slot.label}" — ${slot.takeFrom}`;
-}
 
 interface LayoutState {
   order: SectionId[];
@@ -614,6 +587,15 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
   const [models, setModels] = useState<ModelInfo[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { addToast } = useToastContext();
+  const { addFavorite, removeFavorite, isFavorited, getFavoriteId } = useFavorites();
+  const promptOverrides = usePromptOverrides();
+  const { getSectionColor, setSectionColor } = useCustomSections();
+  const customSections = useCustomSectionState("character");
+
+  // Prompt editing — right-click context menu + modal
+  const TOOL_ID = "character";
+  const [promptEditSection, setPromptEditSection] = useState<SectionId | null>(null);
+  const [promptCtxMenu, setPromptCtxMenu] = useState<{ x: number; y: number; section: SectionId } | null>(null);
 
   // Layout ordering + collapse state
   const [layout, setLayout] = useState<LayoutState>(() => loadDefaultLayout(layoutStorageKey));
@@ -716,9 +698,60 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     const state: LayoutState = { order: layout.order, collapsed };
     localStorage.setItem(layoutStorageKey, JSON.stringify(state));
     addToast("Layout saved as default", "success");
-  }, [layout.order, isSectionCollapsed, addToast]);
+  }, [layout.order, isSectionCollapsed, addToast, layoutStorageKey]);
 
   const refCounter = useRef(0);
+
+  // Listen for project-clear event from ProjectTabsWrapper
+  const clearAllState = useCallback(() => {
+    setTabs(BUILTIN_TABS);
+    setActiveTab("main");
+    setGenText({});
+    setGallery({});
+    setImageIdx({});
+    setImageRecords({});
+    setActiveHistoryId(null);
+    setDescription("");
+    setEditPrompt("");
+    setAge("");
+    setRace("");
+    setGender("");
+    setBuild("");
+    setAttributes(Object.fromEntries(ATTRIBUTE_FIELDS.map((f) => [f, { dropdown: f === "Pose" ? "A pose" : "", custom: "" }])));
+    setBible({ ...EMPTY_BIBLE });
+    setCostume({ ...EMPTY_COSTUME });
+    setPreservation({ ...EMPTY_PRESERVATION, preserves: DEFAULT_PRESERVES.map((p) => ({ ...p })), negatives: DEFAULT_NEGATIVES.map((n) => ({ ...n })) });
+    setStyleFusion({ ...EMPTY_FUSION, slots: [{ ...EMPTY_FUSION.slots[0] }, { ...EMPTY_FUSION.slots[1] }] });
+    setEnvPlacement({ ...EMPTY_ENV });
+    setStyleLibraryFolder("");
+    setGenCount(1);
+    setGenerationMode("single");
+    setGridResults([]);
+    setGridEditBusy({});
+    setViewGenCount(1);
+    setUrMode("upscale");
+    setUrScale("x2");
+    setUrContext("");
+    setUrModelId("");
+    setUrImages([]);
+    setExtractTargets({ identity: true, attributes: true, bible: false, costume: false, environment: false });
+    setExtractMode("inspiration");
+    setSectionEnabled({ identity: true, attributes: true });
+    setLockedSections({ identity: false, attributes: false, bible: false, costume: false, styleFusion: false, envPlacement: false, preservation: false });
+    setSectionsOpen({ attributes: true, bible: false, costume: false });
+    addToast("Project cleared", "info");
+  }, [addToast]);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.storageKey === "madison-charlab-projects" && detail?.instanceId === instanceId) {
+        clearAllState();
+      }
+    };
+    window.addEventListener("project-clear", handler);
+    return () => window.removeEventListener("project-clear", handler);
+  }, [instanceId, clearAllState]);
 
   useEffect(() => {
     apiFetch<{ models: ModelInfo[]; current: string }>("/system/models").then((r) => {
@@ -764,10 +797,8 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     addHistoryEntry(tab, 0, label, src);
   }, [addHistoryEntry]);
 
-  // Global Ctrl+V paste handler — uses Electron native clipboard for external images
-  useClipboardPaste(
-    useCallback((dataUrl: string) => setTabImage(activeTab, dataUrl, "Pasted image"), [activeTab, setTabImage]),
-  );
+  const clipboardPasteCb = useCallback((dataUrl: string) => setTabImage(activeTab, dataUrl, "Pasted image"), [activeTab, setTabImage]);
+  useClipboardPaste(activeTab === "artboard" ? undefined : clipboardPasteCb);
 
   const appendToGallery = useCallback((tab: string, src: string, label = "Generation") => {
     setGallery((prev) => {
@@ -903,16 +934,6 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     if (extractTargets.environment) applyEnvFromResponse(resp.environment as Record<string, unknown> | null);
   }, [extractTargets, lockedSections.identity, applyAttributesFromResponse, applyBibleFromResponse, applyCostumeFromResponse, applyEnvFromResponse]);
 
-  // --- Generation helpers ---
-
-  const getExtraContext = useCallback(() => {
-    const fusionCtx = isSectionEnabled("styleFusion") ? buildFusionBrief(styleFusion) : "";
-    const folder = styleLibraryFolders.find((f) => f.name === styleLibraryFolder);
-    const styleGuide = folder?.guidance_text || "";
-    const envCtx = isSectionEnabled("envPlacement") ? buildEnvBrief(envPlacement) : "";
-    return { fusionCtx, styleGuide, envCtx };
-  }, [isSectionEnabled, styleFusion, envPlacement, styleLibraryFolder, styleLibraryFolders]);
-
   // --- Build attribute brief for generation prompt ---
 
   const buildAttrBrief = useCallback((): string => {
@@ -925,12 +946,51 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     return lines.length ? `\n\n--- Character Attributes ---\n${lines.join("\n")}` : "";
   }, [attributes, isSectionEnabled]);
 
+  // --- Prompt override helpers ---
+
+  const getDefaultSectionPrompt = useCallback((sectionId: SectionId): string => {
+    switch (sectionId) {
+      case "attributes": {
+        const lines: string[] = [];
+        for (const [k, v] of Object.entries(attributes)) {
+          const val = v.custom || v.dropdown;
+          if (val) lines.push(`${k}: ${val}`);
+        }
+        return lines.length ? `--- Character Attributes ---\n${lines.join("\n")}` : "";
+      }
+      case "bible": return bibleToCostumeContext(bible);
+      case "costume": return costumeToContext(costume);
+      case "styleFusion": return buildFusionBrief(styleFusion);
+      case "envPlacement": return buildEnvBrief(envPlacement);
+      case "preservation": return preservationToConstraints(preservation);
+      default: return "";
+    }
+  }, [attributes, bible, costume, styleFusion, envPlacement, preservation]);
+
+  const resolveSection = useCallback((sectionId: SectionId): string => {
+    if (!isSectionEnabled(sectionId)) return "";
+    const override = promptOverrides.getOverride(TOOL_ID, sectionId);
+    if (override !== null) return override;
+    return getDefaultSectionPrompt(sectionId);
+  }, [isSectionEnabled, promptOverrides, getDefaultSectionPrompt]);
+
+  // --- Generation helpers ---
+
+  const getExtraContext = useCallback(() => {
+    const fusionCtx = resolveSection("styleFusion");
+    const folder = styleLibraryFolders.find((f) => f.name === styleLibraryFolder);
+    const styleGuide = folder?.guidance_text || "";
+    const envCtx = resolveSection("envPlacement");
+    return { fusionCtx, styleGuide, envCtx };
+  }, [resolveSection, styleLibraryFolder, styleLibraryFolders]);
+
   // --- Prompt preview builder (mirrors backend _build_character_prompt + style_rules) ---
 
   const buildPromptPreview = useCallback((): string => {
     const identityOn = isSectionEnabled("identity");
     const baseDesc = identityOn ? description : "";
-    const attrBrief = buildAttrBrief();
+    const attrText = resolveSection("attributes");
+    const attrBrief = attrText ? `\n\n${attrText}` : "";
     const desc = (baseDesc + attrBrief).trim();
     if (!desc) return "(No description — enter a character description first)";
 
@@ -942,10 +1002,10 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     if (identityOn && build) idParts.push(`Build: ${build}`);
     let charPrompt = idParts.length ? `${idParts.join(", ")}\n\n${desc}` : desc;
 
-    const bibleCtx = isSectionEnabled("bible") ? bibleToCostumeContext(bible) : "";
-    const costumeCtx = isSectionEnabled("costume") ? costumeToContext(costume) : "";
+    const bibleCtx = resolveSection("bible");
+    const costumeCtx = resolveSection("costume");
     const extra = getExtraContext();
-    const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
+    const lockCtx = resolveSection("preservation");
 
     if (bibleCtx) charPrompt += `\n\n--- Character Bible ---\n${bibleCtx}`;
 
@@ -999,17 +1059,20 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
   const handleGenerate = useCallback(async () => {
     const identityOn = isSectionEnabled("identity");
     const baseDesc = identityOn ? description : "";
-    const attrBrief = buildAttrBrief();
+    const attrText = resolveSection("attributes");
+    const attrBrief = attrText ? `\n\n${attrText}` : "";
     const desc = (baseDesc + attrBrief).trim();
     const extra = getExtraContext();
     if (!desc) return;
     setLastSentPrompt(buildPromptPreview());
     busy.start("generate");
     const total = genCount;
-    const bibleCtx = isSectionEnabled("bible") ? bibleToCostumeContext(bible) : "";
-    const costumeCtx = isSectionEnabled("costume") ? costumeToContext(costume) : "";
-    const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
+    const bibleCtx = resolveSection("bible");
+    const costumeCtx = resolveSection("costume");
+    const lockCtx = resolveSection("preservation");
     const mainRef = extractMode === "recreate" ? getMainImageB64() : null;
+    const customCtx = customSections.getPromptContributions() || undefined;
+    const customImgs = customSections.getImageAttachments().map((img) => img.replace(/^data:image\/\w+;base64,/, "")).filter(Boolean);
     setGenText((p) => ({ ...p, generate: total > 1 ? `Generating ${total} images...` : "Generating character..." }));
     const promises = Array.from({ length: total }, (_, i) =>
       apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
@@ -1022,10 +1085,15 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
             view_type: "main", mode: "quality",
             model_id: modelId || undefined,
             bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
-            fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+            fusion_context: extra.fusionCtx || undefined,
+            fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
             lock_constraints: lockCtx || undefined,
             reference_image_b64: mainRef || undefined,
             recreate_mode: extractMode === "recreate",
+            custom_sections_context: customCtx,
+            custom_section_images: customImgs.length ? customImgs : undefined,
           }),
         },
       ).then((resp) => ({ ok: true as const, resp, idx: i }))
@@ -1042,7 +1110,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     }
     addToast(total > 1 ? `Generated ${total} images` : "Character generated", "success");
     busy.end("generate");
-  }, [description, age, race, gender, build, genCount, modelId, bible, costume, preservation, attributes, extractMode, isSectionEnabled, getExtraContext, buildAttrBrief, buildPromptPreview, getMainImageB64, setTabImage, appendToGallery, addToast, busy]);
+  }, [description, age, race, gender, build, genCount, modelId, bible, costume, preservation, attributes, extractMode, isSectionEnabled, getExtraContext, buildAttrBrief, buildPromptPreview, getMainImageB64, setTabImage, appendToGallery, addToast, busy, styleFusion]);
 
   const handleApplyEdit = useCallback(async () => {
     if (!editPrompt.trim()) return;
@@ -1051,10 +1119,11 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     busy.start("apply");
     setGenText((p) => ({ ...p, apply: "Applying edits..." }));
     const identityOn = isSectionEnabled("identity");
-    const attrBrief = buildAttrBrief();
-    const bibleCtx = isSectionEnabled("bible") ? bibleToCostumeContext(bible) : "";
-    const costumeCtx = isSectionEnabled("costume") ? costumeToContext(costume) : "";
-    const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
+    const attrText = resolveSection("attributes");
+    const attrBrief = attrText ? `\n\n${attrText}` : "";
+    const bibleCtx = resolveSection("bible");
+    const costumeCtx = resolveSection("costume");
+    const lockCtx = resolveSection("preservation");
     const extra = getExtraContext();
     try {
       const resp = await apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
@@ -1068,7 +1137,10 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
             ref_a_b64: getImageB64("refA"), ref_b_b64: getImageB64("refB"), ref_c_b64: getImageB64("refC"),
             mode: "quality", model_id: modelId || undefined,
             bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
-            fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+            fusion_context: extra.fusionCtx || undefined,
+            fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
             lock_constraints: lockCtx || undefined,
           }),
         },
@@ -1078,7 +1150,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
       } else if (resp.error) addToast(resp.error, "error");
     } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
     busy.end("apply");
-  }, [editPrompt, description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, getImageB64, modelId, setTabImage, addToast, busy]);
+  }, [editPrompt, description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, getImageB64, modelId, setTabImage, addToast, busy, styleFusion]);
 
   const handleExtractAttributes = useCallback(async () => {
     const imgB64 = getMainImageB64();
@@ -1201,7 +1273,10 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
               gender: randResp.gender, build: randResp.build, mode: "quality",
               model_id: modelId || undefined,
               bible_context: bibleCtx, costume_context: costumeCtx,
-              fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+              fusion_context: extra.fusionCtx || undefined,
+              fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+              fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+              style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
               lock_constraints: lockCtx || undefined,
             }),
           },
@@ -1211,19 +1286,20 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
       } else if (randResp.error) addToast(randResp.error, "error");
     } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
     busy.end("quickgen");
-  }, [buildContextBody, addToast, modelId, preservation, isSectionEnabled, getExtraContext, setTabImage, busy, applyFullResponse]);
+  }, [buildContextBody, addToast, modelId, preservation, isSectionEnabled, getExtraContext, setTabImage, busy, applyFullResponse, styleFusion]);
 
   const handleGenerateAllViews = useCallback(async () => {
     const mainB64 = getMainImageB64();
     const identityOn = isSectionEnabled("identity");
     const baseDesc = identityOn ? description : "";
-    const attrBrief = buildAttrBrief();
+    const attrText = resolveSection("attributes");
+    const attrBrief = attrText ? `\n\n${attrText}` : "";
     const desc = (baseDesc + attrBrief).trim();
     if (!mainB64 || !desc) return;
     busy.start("allviews");
-    const bibleCtx = isSectionEnabled("bible") ? bibleToCostumeContext(bible) : "";
-    const costumeCtx = isSectionEnabled("costume") ? costumeToContext(costume) : "";
-    const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
+    const bibleCtx = resolveSection("bible");
+    const costumeCtx = resolveSection("costume");
+    const lockCtx = resolveSection("preservation");
     const extra = getExtraContext();
     const views = ["3/4", "front", "back", "side"];
     setGenText((p) => ({ ...p, allviews: "Generating all views..." }));
@@ -1236,7 +1312,10 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
           view_type: VIEW_TYPE_MAP[view] || view, reference_image_b64: mainB64,
           mode: "quality", model_id: modelId || undefined,
           bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
-          fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+          fusion_context: extra.fusionCtx || undefined,
+          fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+          fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+          style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
           lock_constraints: lockCtx || undefined,
         }),
       }).then((resp) => ({ ok: true as const, resp, view }))
@@ -1247,20 +1326,21 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
       if (r.ok && r.resp?.image_b64) setTabImage(r.view, `data:image/png;base64,${r.resp.image_b64}`, `${r.view} view`);
     }
     busy.end("allviews");
-  }, [description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, modelId, setTabImage, busy]);
+  }, [description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, modelId, setTabImage, busy, styleFusion]);
 
   const handleGenerateSelectedView = useCallback(async () => {
     const mainB64 = getMainImageB64();
     const identityOn = isSectionEnabled("identity");
     const baseDesc = identityOn ? description : "";
-    const attrBrief = buildAttrBrief();
+    const attrText = resolveSection("attributes");
+    const attrBrief = attrText ? `\n\n${attrText}` : "";
     const desc = (baseDesc + attrBrief).trim();
     if (!mainB64 || !desc || !activeTabDef) return;
     const viewType = VIEW_TYPE_MAP[activeTab] || activeTab;
     busy.start("selview");
-    const bibleCtx = isSectionEnabled("bible") ? bibleToCostumeContext(bible) : "";
-    const costumeCtx = isSectionEnabled("costume") ? costumeToContext(costume) : "";
-    const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
+    const bibleCtx = resolveSection("bible");
+    const costumeCtx = resolveSection("costume");
+    const lockCtx = resolveSection("preservation");
     const extra = getExtraContext();
     const total = viewGenCount;
     const promptOverride = activeTabDef.prompt ? ` Specifically: ${activeTabDef.prompt}` : "";
@@ -1275,7 +1355,10 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
           view_type: viewType, reference_image_b64: mainB64,
           mode: "quality", model_id: modelId || undefined,
           bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
-          fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+          fusion_context: extra.fusionCtx || undefined,
+          fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+          fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+          style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
           lock_constraints: lockCtx || undefined,
         }),
       }).then((resp) => ({ ok: true as const, resp, idx: i }))
@@ -1290,7 +1373,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
       }
     }
     busy.end("selview");
-  }, [description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, modelId, activeTab, activeTabDef, viewGenCount, setTabImage, appendToGallery, busy]);
+  }, [description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, modelId, activeTab, activeTabDef, viewGenCount, setTabImage, appendToGallery, busy, styleFusion]);
 
   // --- Editor context for inpainting tools (ref images + style) ---
 
@@ -1305,15 +1388,15 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
 
   const editorStyleContext = useMemo(() => {
     const parts: string[] = [];
-    const costumeCtx = isSectionEnabled("costume") ? costumeToContext(costume) : "";
+    const costumeCtx = resolveSection("costume");
     const extra = getExtraContext();
     if (costumeCtx) parts.push(`Costume: ${costumeCtx}`);
     if (extra.fusionCtx) parts.push(`Style Fusion: ${extra.fusionCtx}`);
     if (extra.styleGuide) parts.push(`Style Library: ${extra.styleGuide}`);
-    const bibleCtx = isSectionEnabled("bible") ? bibleToCostumeContext(bible) : "";
+    const bibleCtx = resolveSection("bible");
     if (bibleCtx) parts.push(`Character Bible: ${bibleCtx}`);
     return parts.join("\n\n");
-  }, [costume, bible, isSectionEnabled, getExtraContext]);
+  }, [resolveSection, getExtraContext]);
 
   // --- AI Upscale & Restore handler ---
   const handleUpscaleRestoreGenerate = useCallback(async () => {
@@ -1359,14 +1442,15 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
   const handleGridGenerate = useCallback(async () => {
     const identityOn = isSectionEnabled("identity");
     const baseDesc = identityOn ? description : "";
-    const attrBrief = buildAttrBrief();
+    const attrText = resolveSection("attributes");
+    const attrBrief = attrText ? `\n\n${attrText}` : "";
     const desc = (baseDesc + attrBrief).trim();
     const extra = getExtraContext();
     if (!desc) return;
     busy.start("generate");
-    const bibleCtx = isSectionEnabled("bible") ? bibleToCostumeContext(bible) : "";
-    const costumeCtx = isSectionEnabled("costume") ? costumeToContext(costume) : "";
-    const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
+    const bibleCtx = resolveSection("bible");
+    const costumeCtx = resolveSection("costume");
+    const lockCtx = resolveSection("preservation");
     const mainRef = extractMode === "recreate" ? getMainImageB64() : null;
     setGenText((p) => ({ ...p, generate: "Generating 16 images..." }));
     const promises = Array.from({ length: 16 }, (_, i) =>
@@ -1380,7 +1464,10 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
             view_type: "main", mode: "quality",
             model_id: modelId || undefined,
             bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
-            fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+            fusion_context: extra.fusionCtx || undefined,
+            fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
             lock_constraints: lockCtx || undefined,
             reference_image_b64: mainRef || undefined,
             recreate_mode: extractMode === "recreate",
@@ -1405,7 +1492,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     setGridResults((prev) => [...prev, ...newResults]);
     addToast(`Generated ${newResults.length} images`, "success");
     busy.end("generate");
-  }, [description, age, race, gender, build, modelId, bible, costume, preservation, attributes, extractMode, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, addToast, busy]);
+  }, [description, age, race, gender, build, modelId, bible, costume, preservation, attributes, extractMode, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, addToast, busy, styleFusion]);
 
   const handleGridDelete = useCallback((id: string) => {
     setGridResults((prev) => prev.filter((r) => r.id !== id));
@@ -1770,6 +1857,9 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
           const canToggle = TOGGLEABLE_SECTIONS.has(sectionId);
           const enabled = isSectionEnabled(sectionId);
           const label = SECTION_LABELS[sectionId];
+          const isPromptEditable = PROMPT_EDITABLE_SECTIONS.has(sectionId);
+          const sectionHasOverride = isPromptEditable && promptOverrides.hasOverride(TOOL_ID, sectionId);
+          const sectionColor = getSectionColor(TOOL_ID, sectionId);
 
           const wrapSection = (children: React.ReactNode) => (
             <div
@@ -1781,11 +1871,19 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
               onDragEnd={handleDragEnd}
               onDragLeave={() => { if (dragOverId === sectionId) setDragOverId(null); }}
               onMouseDown={(e) => { if (e.button === 1 && canToggle) { e.preventDefault(); toggleSectionEnabled(sectionId); } }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setPromptCtxMenu({ x: e.clientX, y: e.clientY, section: sectionId });
+              }}
               className="section-card-hover"
               style={{
                 border: dragOverId === sectionId && dragItemRef.current !== sectionId
                   ? "1px solid var(--color-accent, #6a6aff)"
-                  : "1px solid var(--color-border)",
+                  : sectionColor
+                    ? `1px solid ${sectionColor}`
+                    : sectionHasOverride
+                      ? "1px solid var(--color-accent)"
+                      : "1px solid var(--color-border)",
                 borderRadius: "var(--radius-lg)",
                 background: "var(--color-card)",
                 opacity: enabled ? 1 : 0.4,
@@ -1799,6 +1897,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                 <span className="cursor-grab active:cursor-grabbing px-1 py-1.5" style={{ color: "var(--color-text-muted)" }}>
                   <GripVertical className="h-3 w-3" />
                 </span>
+                {sectionColor && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: sectionColor }} />}
                 {canCollapse ? (
                   <button
                     onClick={() => toggleSectionCollapse(sectionId)}
@@ -1808,6 +1907,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                   >
                     {collapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
                     <span className="text-xs font-semibold uppercase tracking-wider">{label}</span>
+                    {sectionHasOverride && <Pencil className="h-2.5 w-2.5 shrink-0" style={{ color: "var(--color-accent)" }} />}
                   </button>
                 ) : (
                   <span className="flex-1 py-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }} title={SECTION_TIPS[sectionId]}>
@@ -2038,60 +2138,12 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
           );
 
           if (sectionId === "styleFusion") return wrapSection(
-            <div className="space-y-3">
-              {/* Reference 1 */}
-              <div className="rounded p-2 space-y-1.5" style={{ border: "1px solid var(--color-border)", background: "rgba(106,27,154,0.06)" }}>
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Reference 1</span>
-                  <span className="text-[10px] tabular-nums" style={{ color: "var(--color-text-muted)" }}>{100 - styleFusion.blend}%</span>
-                </div>
-                <input className="w-full px-2 py-1 text-xs" style={inputStyle} disabled={textBusy}
-                  placeholder='Name a style, e.g. "military chic", "gothic royalty"'
-                  value={styleFusion.slots[0].label}
-                  onChange={(e) => setStyleFusion((p) => ({ ...p, slots: [{ ...p.slots[0], label: e.target.value }, p.slots[1]] }))} />
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] shrink-0" style={{ color: "var(--color-text-muted)" }}>Take</span>
-                  <select className="flex-1 px-1.5 py-0.5 text-[10px] rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
-                    value={styleFusion.slots[0].takeFrom}
-                    title="Choose which aspect of this style to borrow — colors, silhouette, textures, etc."
-                    onChange={(e) => setStyleFusion((p) => ({ ...p, slots: [{ ...p.slots[0], takeFrom: e.target.value }, p.slots[1]] }))}>
-                    {TAKE_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              {/* Blend slider */}
-              <div className="rounded p-2 space-y-1" style={{ border: "1px solid var(--color-border)" }}>
-                <div className="flex justify-between text-[10px]" style={{ color: "var(--color-text-secondary)" }}>
-                  <span>{styleFusion.slots[0].label || "Ref 1"} <span className="tabular-nums">{100 - styleFusion.blend}%</span></span>
-                  <span><span className="tabular-nums">{styleFusion.blend}%</span> {styleFusion.slots[1].label || "Ref 2"}</span>
-                </div>
-                <input type="range" min={0} max={100} value={styleFusion.blend} className="w-full h-3"
-                  onChange={(e) => setStyleFusion((p) => ({ ...p, blend: Number(e.target.value) }))} />
-                <p className="text-[9px] text-center" style={{ color: "var(--color-text-muted)" }}>Drag the slider to mix more of one style into the other</p>
-              </div>
-
-              {/* Reference 2 */}
-              <div className="rounded p-2 space-y-1.5" style={{ border: "1px solid var(--color-border)", background: "rgba(106,27,154,0.06)" }}>
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Reference 2</span>
-                  <span className="text-[10px] tabular-nums" style={{ color: "var(--color-text-muted)" }}>{styleFusion.blend}%</span>
-                </div>
-                <input className="w-full px-2 py-1 text-xs" style={inputStyle} disabled={textBusy}
-                  placeholder='Name a second style, e.g. "frontier survivalist"'
-                  value={styleFusion.slots[1].label}
-                  onChange={(e) => setStyleFusion((p) => ({ ...p, slots: [p.slots[0], { ...p.slots[1], label: e.target.value }] }))} />
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] shrink-0" style={{ color: "var(--color-text-muted)" }}>Take</span>
-                  <select className="flex-1 px-1.5 py-0.5 text-[10px] rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
-                    value={styleFusion.slots[1].takeFrom}
-                    title="Choose which aspect of this style to borrow — colors, silhouette, textures, etc."
-                    onChange={(e) => setStyleFusion((p) => ({ ...p, slots: [p.slots[0], { ...p.slots[1], takeFrom: e.target.value }] }))}>
-                    {TAKE_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                </div>
-              </div>
-            </div>
+            <StyleFusionPanel
+              fusion={styleFusion}
+              onChange={setStyleFusion}
+              takeOptions={TAKE_OPTIONS}
+              disabled={textBusy}
+            />
           );
 
           if (sectionId === "envPlacement") return wrapSection(
@@ -2591,41 +2643,102 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
               <div className="grid grid-cols-2 gap-1.5 pt-1" style={{ borderTop: "1px solid var(--color-border)" }}>
                 <Button size="sm" className="w-full" title="Composite all views into a single reference sheet" onClick={async () => {
                   const imgs: {label: string; image_b64: string}[] = [];
-                  for (const tab of ["main","front","back","side","threequarter"] as const) {
-                    const b64 = getImageB64?.(tab);
+                  for (const tab of ["main","3/4","front","back","side"] as const) {
+                    const b64 = getImageB64(tab);
                     if (b64) imgs.push({ label: tab, image_b64: `data:image/png;base64,${b64}` });
                   }
-                  if (imgs.length === 0) return;
+                  if (imgs.length === 0) { addToast("No view images to export", "info"); return; }
                   try {
                     const res = await (await import("@/hooks/useApi")).apiFetch<{image_b64: string}>("/export/consistency-sheet", {
                       method: "POST", body: JSON.stringify({ images: imgs, layout: imgs.length <= 2 ? "1x4" : "2x2", title: "", include_labels: true })
                     });
                     const a = document.createElement("a"); a.href = `data:image/png;base64,${res.image_b64}`; a.download = `ref_sheet_${Date.now()}.png`; a.click();
-                  } catch {}
+                  } catch (e) { addToast("Failed to generate ref sheet", "error"); }
                 }}>Ref Sheet</Button>
                 <Button size="sm" className="w-full" title="Export a complete handoff package as ZIP" onClick={async () => {
                   const imgs: {label: string; image_b64: string}[] = [];
-                  for (const tab of ["main","front","back","side","threequarter"] as const) {
-                    const b64 = getImageB64?.(tab);
+                  for (const tab of ["main","3/4","front","back","side"] as const) {
+                    const b64 = getImageB64(tab);
                     if (b64) imgs.push({ label: tab, image_b64: `data:image/png;base64,${b64}` });
                   }
-                  if (imgs.length === 0) return;
+                  if (imgs.length === 0) { addToast("No view images to export", "info"); return; }
                   try {
                     const res = await fetch(`${window.location.protocol === "file:" ? "http://127.0.0.1:8420" : ""}/api/export/package`, {
                       method: "POST", headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ images: imgs, xml_data: "", prompt_text: buildPromptPreview?.() || "", settings: {}, palette: [], include_ref_sheet: true, tool_name: "character", character_name: "character" })
                     });
+                    if (!res.ok) throw new Error("Export failed");
                     const blob = await res.blob();
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement("a"); a.href = url; a.download = `character_export_${Date.now()}.zip`; a.click();
                     URL.revokeObjectURL(url);
-                  } catch {}
+                  } catch (e) { addToast("Failed to export package", "error"); }
                 }}>Export ZIP</Button>
               </div>
             </div>
           );
 
           return null;
+        })}
+
+        {/* Custom sections from Prompt Builder */}
+        {customSections.sections.map((cs) => {
+          const csCollapsed = customSections.isCollapsed(cs.id);
+          const csEnabled = customSections.isEnabled(cs.id);
+          const csColor = cs.color || getSectionColor(TOOL_ID, `custom:${cs.id}`);
+          return (
+            <div
+              key={`custom:${cs.id}`}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setPromptCtxMenu({ x: e.clientX, y: e.clientY, section: `custom:${cs.id}` as SectionId });
+              }}
+              className="section-card-hover"
+              style={{
+                border: csColor ? `1px solid ${csColor}` : "1px solid var(--color-border)",
+                borderRadius: "var(--radius-lg)",
+                background: "var(--color-card)",
+                opacity: csEnabled ? 1 : 0.4,
+                transition: "opacity 0.15s ease",
+              }}
+            >
+              <div className="flex items-center px-1 shrink-0" style={{ borderBottom: csCollapsed ? "none" : "1px solid var(--color-border)" }}>
+                <span className="cursor-grab active:cursor-grabbing px-1 py-1.5" style={{ color: "var(--color-text-muted)" }}>
+                  <GripVertical className="h-3 w-3" />
+                </span>
+                {csColor && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: csColor }} />}
+                <button
+                  onClick={() => customSections.toggleCollapsed(cs.id)}
+                  className="flex-1 flex items-center gap-1.5 py-1.5 text-left cursor-pointer"
+                  style={{ background: "transparent", border: "none", color: "var(--color-text-secondary)" }}
+                >
+                  {csCollapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
+                  <span className="text-xs font-semibold uppercase tracking-wider">{cs.name}</span>
+                </button>
+                <button
+                  onClick={() => customSections.toggleEnabled(cs.id)}
+                  className="px-1.5 py-0.5 text-[9px] rounded font-semibold cursor-pointer shrink-0 select-none"
+                  style={{
+                    background: csEnabled ? "var(--color-accent)" : "var(--color-input-bg)",
+                    color: csEnabled ? "var(--color-foreground)" : "var(--color-text-muted)",
+                    border: "1px solid var(--color-border)",
+                  }}
+                >
+                  {csEnabled ? "ON" : "OFF"}
+                </button>
+              </div>
+              {!csCollapsed && (
+                <div className="px-3 pt-1 pb-3 space-y-2 overflow-hidden">
+                  <CustomSectionRenderer
+                    section={cs}
+                    values={customSections.values[cs.id] ?? {}}
+                    onChange={(blockId, val) => customSections.setValue(cs.id, blockId, val)}
+                    disabled={busy.any}
+                  />
+                </div>
+              )}
+            </div>
+          );
         })}
 
         <button
@@ -2728,6 +2841,11 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
             onCopy={handleGridCopy}
             onEditSubmit={handleGridEdit}
             editBusy={gridEditBusy}
+            isFavorited={(b64) => isFavorited(b64)}
+            onToggleFavorite={(id, b64, w, h) => {
+              if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); }
+              else addFavorite({ image_b64: b64, tool: "character", label: `grid-${id}`, prompt: "", source: "grid", width: w, height: h });
+            }}
           />
         ) : (
           <ImageViewer
@@ -2747,10 +2865,116 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
             onNextImage={handleNextImage}
             refImages={editorRefImages}
             styleContext={editorStyleContext}
+            isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
+            onToggleFavorite={currentSrc ? () => {
+              const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, "");
+              if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); }
+              else addFavorite({ image_b64: b64, tool: "character", label: activeTab || "main", source: "viewer" });
+            } : undefined}
           />
         )}
       </div>
       {showXml && <XmlModal xml={buildCharacterXml()} title="Character XML" onClose={() => setShowXml(false)} />}
+
+      {/* Section context menu (prompt edit + color) */}
+      {promptCtxMenu && (() => {
+        const isCustom = promptCtxMenu.section.startsWith("custom:");
+        const isEditable = !isCustom && PROMPT_EDITABLE_SECTIONS.has(promptCtxMenu.section);
+        const colorKey = isCustom ? promptCtxMenu.section : promptCtxMenu.section;
+        const currentColor = getSectionColor(TOOL_ID, colorKey);
+        return (
+          <div className="fixed inset-0 z-[55]" onClick={() => setPromptCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setPromptCtxMenu(null); }}>
+            <div
+              className="absolute py-1 rounded-md shadow-lg"
+              style={{
+                left: promptCtxMenu.x, top: promptCtxMenu.y,
+                background: "var(--color-card)", border: "1px solid var(--color-border)",
+                minWidth: 200, zIndex: 56,
+              }}
+            >
+              {isEditable && (
+                <>
+                  <button
+                    className="w-full text-left px-3 py-1.5 text-xs cursor-pointer"
+                    style={{ background: "transparent", border: "none", color: "var(--color-text-primary)" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-hover)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                    onClick={() => { setPromptEditSection(promptCtxMenu.section); setPromptCtxMenu(null); }}
+                  >
+                    <Pencil className="h-3 w-3 inline mr-2" style={{ verticalAlign: "-2px" }} />
+                    Edit Prompt
+                  </button>
+                  {promptOverrides.hasOverride(TOOL_ID, promptCtxMenu.section) && (
+                    <button
+                      className="w-full text-left px-3 py-1.5 text-xs cursor-pointer"
+                      style={{ background: "transparent", border: "none", color: "var(--color-text-primary)" }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-hover)")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                      onClick={() => { promptOverrides.clearOverride(TOOL_ID, promptCtxMenu.section); setPromptCtxMenu(null); addToast("Prompt reset to default", "info"); }}
+                    >
+                      Reset Prompt to Default
+                    </button>
+                  )}
+                  <div className="my-1" style={{ borderTop: "1px solid var(--color-border)" }} />
+                </>
+              )}
+              <div className="px-3 py-1">
+                <div className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--color-text-muted)" }}>
+                  Section Color
+                </div>
+                <div className="flex items-center gap-1 flex-wrap">
+                  {["#808080", "#e05050", "#e09040", "#d0c040", "#50b060", "#40a0d0", "#6070e0", "#a060d0", "#d060a0"].map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => { setSectionColor(TOOL_ID, colorKey, c); setPromptCtxMenu(null); }}
+                      className="w-4 h-4 rounded-full cursor-pointer shrink-0"
+                      style={{ background: c, border: currentColor === c ? "2px solid white" : "1px solid var(--color-border)" }}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    value={currentColor || "#808080"}
+                    onChange={(e) => { setSectionColor(TOOL_ID, colorKey, e.target.value); }}
+                    className="w-4 h-4 rounded cursor-pointer border-0 p-0"
+                    title="Custom color"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  {currentColor && (
+                    <button
+                      onClick={() => { setSectionColor(TOOL_ID, colorKey, undefined); setPromptCtxMenu(null); }}
+                      className="text-[9px] px-1.5 py-0.5 rounded cursor-pointer"
+                      style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-muted)" }}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Edit prompt modal */}
+      {promptEditSection && (
+        <EditPromptModal
+          open
+          sectionLabel={SECTION_LABELS[promptEditSection]}
+          defaultText={getDefaultSectionPrompt(promptEditSection)}
+          currentText={promptOverrides.getOverride(TOOL_ID, promptEditSection) ?? getDefaultSectionPrompt(promptEditSection)}
+          hasOverride={promptOverrides.hasOverride(TOOL_ID, promptEditSection)}
+          onSave={(text) => {
+            promptOverrides.setOverride(TOOL_ID, promptEditSection, text);
+            setPromptEditSection(null);
+            addToast("Prompt saved", "success");
+          }}
+          onReset={() => {
+            promptOverrides.clearOverride(TOOL_ID, promptEditSection);
+            addToast("Prompt reset to default", "info");
+          }}
+          onClose={() => setPromptEditSection(null)}
+        />
+      )}
     </div>
   );
 }

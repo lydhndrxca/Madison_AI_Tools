@@ -287,10 +287,14 @@ class PropGenerateRequest(BaseModel):
     model_id: Optional[str] = None
     style_context: Optional[str] = None
     fusion_context: Optional[str] = None
+    fusion_image_1_b64: Optional[str] = None
+    fusion_image_2_b64: Optional[str] = None
     style_guidance: Optional[str] = None
     lock_constraints: Optional[str] = None
     recreate_mode: bool = False
     name: str = ""
+    custom_sections_context: Optional[str] = None
+    custom_section_images: Optional[list[str]] = None
 
 
 class PropResponse(BaseModel):
@@ -385,6 +389,9 @@ def _do_generate(req: PropGenerateRequest) -> PropResponse:
 
     prompt = _build_prop_view_prompt(req.view_type, prop_description, style_override)
 
+    if req.custom_sections_context:
+        prompt += f"\n\n--- Custom Directions ---\n{req.custom_sections_context}"
+
     if req.lock_constraints:
         prompt += (
             f"\n\n--- PRESERVATION CONSTRAINTS (CRITICAL — HIGHEST PRIORITY) ---\n"
@@ -398,6 +405,12 @@ def _do_generate(req: PropGenerateRequest) -> PropResponse:
         for b64 in req.ref_images:
             if b64:
                 contents.append(core.b64_to_image(b64))
+    for b64 in [req.fusion_image_1_b64, req.fusion_image_2_b64]:
+        if b64:
+            contents.append(core.b64_to_image(b64))
+    for b64 in (req.custom_section_images or []):
+        if b64:
+            contents.append(core.b64_to_image(b64))
 
     if req.edit_prompt and req.reference_image_b64:
         contents.append(f"{prompt}\n\nApply these changes: {req.edit_prompt}")

@@ -66,14 +66,15 @@ export async function readClipboardImage(): Promise<string | null> {
 }
 
 /**
- * Hook: listens for Ctrl+V image paste via Electron IPC push from the main
- * process.  Calls `onImage(dataUrl)` when an image is pasted.
- * Skips delivery when an INPUT or TEXTAREA is focused.
+ * Hook: listens for image paste via Electron IPC push from the main process
+ * AND native browser paste events.  Calls `onImage(dataUrl)` when an image
+ * is pasted.  Skips delivery when an INPUT or TEXTAREA is focused.
  */
 export function useClipboardPaste(onImage: ((dataUrl: string) => void) | undefined) {
   const callbackRef = useRef(onImage);
   callbackRef.current = onImage;
 
+  // Electron IPC path
   useEffect(() => {
     if (!window.electronAPI?.onPasteImage) return;
 
@@ -89,5 +90,34 @@ export function useClipboardPaste(onImage: ((dataUrl: string) => void) | undefin
     });
 
     return unsub;
+  }, []);
+
+  // Native browser paste event (covers non-Electron and cross-tab clipboard)
+  useEffect(() => {
+    const handler = (e: ClipboardEvent) => {
+      if (!callbackRef.current) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
+      if (!e.clipboardData) return;
+
+      for (const item of Array.from(e.clipboardData.items)) {
+        if (item.type.startsWith("image/")) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (!file) continue;
+          const reader = new FileReader();
+          reader.onload = () => {
+            if (callbackRef.current && typeof reader.result === "string") {
+              callbackRef.current(reader.result);
+            }
+          };
+          reader.readAsDataURL(file);
+          return;
+        }
+      }
+    };
+
+    window.addEventListener("paste", handler);
+    return () => window.removeEventListener("paste", handler);
   }, []);
 }

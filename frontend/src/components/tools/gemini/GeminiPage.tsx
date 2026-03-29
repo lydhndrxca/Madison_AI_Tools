@@ -6,6 +6,7 @@ import { EditHistory } from "@/components/shared/EditHistory";
 import { GroupedTabBar, type TabDef } from "@/components/shared/TabBar";
 import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
+import { useFavorites } from "@/hooks/FavoritesContext";
 import { useSessionRegister } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
 
@@ -55,6 +56,7 @@ export function GeminiPage() {
   const [editHistory, setEditHistory] = useState<EditEntry[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { addToast } = useToastContext();
+  const { addFavorite, removeFavorite, isFavorited, getFavoriteId } = useFavorites();
 
   const [modelId, setModelId] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -374,6 +376,8 @@ export function GeminiPage() {
           imageIndex={currentIdx}
           onPrevImage={handlePrevImage}
           onNextImage={handleNextImage}
+          isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
+          onToggleFavorite={currentSrc ? () => { const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "gemini", label: "main", source: "viewer" }); } : undefined}
         />
 
         {/* Progress / Status Bar */}

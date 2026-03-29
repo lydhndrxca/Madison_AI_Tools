@@ -6,7 +6,8 @@ import { ConsolePanel } from "@/components/shared/ConsolePanel";
 import { AudioSettingsModal } from "@/components/shared/AudioSettingsModal";
 import { useWebSocket } from "@/hooks/useApi";
 import { useSessionContext } from "@/hooks/SessionContext";
-import { useVoiceToText } from "@/hooks/useVoiceToText";
+import { useVoiceToText, nativeSpeechSupported } from "@/hooks/useVoiceToText";
+import type { VoiceEngine } from "@/hooks/useVoiceToText";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import type { PageId } from "@/app";
 
@@ -144,6 +145,7 @@ function TemplateDropdown() {
 
 const PAGE_LABELS: Record<PageId, string> = {
   "style-library": "Style Library",
+  "prompt-builder": "Prompt Builder",
   "generated-images": "Generated Images",
   "favorites": "Favorites",
   "prompt-library": "Prompt Library",
@@ -166,7 +168,24 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
   const [audioSettingsOpen, setAudioSettingsOpen] = useState(false);
   const { triggerSave, triggerOpen } = useSessionContext();
   const voice = useVoiceToText();
+  const [voiceCtxMenu, setVoiceCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const [voiceRestartPending, setVoiceRestartPending] = useState(false);
   const { registerAction, unregisterAction } = useShortcuts();
+
+  const switchVoiceEngine = useCallback((engine: VoiceEngine) => {
+    if (voice.settings.engine === engine) { setVoiceCtxMenu(null); return; }
+    const wasActive = voice.active;
+    if (wasActive) voice.toggle();
+    voice.updateSettings({ engine });
+    setVoiceCtxMenu(null);
+    if (wasActive) setVoiceRestartPending(true);
+  }, [voice]);
+
+  useEffect(() => {
+    if (!voiceRestartPending || voice.active) return;
+    const timer = setTimeout(() => { voice.toggle(); setVoiceRestartPending(false); }, 150);
+    return () => clearTimeout(timer);
+  }, [voiceRestartPending, voice]);
 
   const onWsMessage = useCallback(
     (msg: { type: string; data: Record<string, unknown> }) => {
@@ -252,17 +271,18 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
           <button
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => voice.toggle()}
+            onContextMenu={(e) => { e.preventDefault(); setVoiceCtxMenu({ x: e.clientX, y: e.clientY }); }}
             className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded cursor-pointer font-medium${voice.active ? " voice-recording-indicator" : ""}`}
             style={{
               background: voice.active ? "rgba(224, 80, 80, 0.15)" : "transparent",
               border: voice.active ? "1px solid rgba(224, 80, 80, 0.4)" : "1px solid transparent",
               color: voice.active ? "#e05050" : "var(--color-text-secondary)",
             }}
-            title={voice.active ? "Voice recording is active — click to stop" : "Start voice-to-text — click into a text field and speak to dictate"}
+            title={`${voice.active ? "Voice recording is active — click to stop" : "Start voice-to-text — click into a text field and speak to dictate"}\nEngine: ${voice.settings.engine === "native" ? "Windows / Native" : "Gemini (AI)"}\nRight-click to switch engine`}
           >
             {voice.active && <span className="voice-recording-dot" />}
             {!voice.active && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>}
-            {voice.active ? "Voice Recording Active" : "Voice to Text"}
+            {voice.active ? "Voice Recording Active" : `Voice to Text${voice.settings.engine === "native" ? " (Native)" : ""}`}
           </button>
         </div>
         <main
@@ -284,6 +304,44 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <ConsolePanel open={consoleOpen} onClose={() => setConsoleOpen(false)} />
       <AudioSettingsModal open={audioSettingsOpen} onClose={() => setAudioSettingsOpen(false)} />
+
+      {/* Voice engine right-click context menu */}
+      {voiceCtxMenu && (
+        <div className="fixed inset-0 z-[55]" onClick={() => setVoiceCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setVoiceCtxMenu(null); }}>
+          <div
+            className="absolute py-1 rounded-md shadow-lg"
+            style={{ left: voiceCtxMenu.x, top: voiceCtxMenu.y, background: "var(--color-card)", border: "1px solid var(--color-border)", minWidth: 200, zIndex: 56 }}
+          >
+            <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>
+              Voice Engine
+            </div>
+            {(["gemini", "native"] as VoiceEngine[]).map((eng) => {
+              const isSelected = voice.settings.engine === eng;
+              const isDisabled = eng === "native" && !nativeSpeechSupported;
+              const label = eng === "gemini" ? "Gemini (AI)" : "Windows / Native";
+              return (
+                <button
+                  key={eng}
+                  disabled={isDisabled}
+                  className="w-full text-left px-3 py-1.5 text-xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  style={{
+                    background: isSelected ? "var(--color-hover)" : "transparent",
+                    border: "none",
+                    color: isSelected ? "var(--color-accent)" : "var(--color-text-primary)",
+                    fontWeight: isSelected ? 600 : 400,
+                  }}
+                  onMouseEnter={(e) => { if (!isDisabled) e.currentTarget.style.background = "var(--color-hover)"; }}
+                  onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
+                  onClick={() => switchVoiceEngine(eng)}
+                >
+                  {isSelected ? "\u2713 " : "  "}{label}
+                  {isDisabled && " (unavailable)"}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

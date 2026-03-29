@@ -2,6 +2,10 @@ import { useState, useCallback } from "react";
 import { Star, Trash2, Download, X, Filter } from "lucide-react";
 import { useFavorites, type FavoriteItem } from "@/hooks/FavoritesContext";
 
+function safeFilename(name: string): string {
+  return name.replace(/[<>:"/\\|?*]/g, "_").replace(/\s+/g, "_").slice(0, 60) || "unnamed";
+}
+
 const TOOL_LABELS: Record<string, string> = {
   character: "CharacterLab",
   prop: "PropLab",
@@ -28,6 +32,7 @@ export function FavoritesPage() {
 
   const handleCopy = useCallback(async (item: FavoriteItem) => {
     try {
+      if (!navigator.clipboard?.write) return;
       const res = await fetch(`data:image/png;base64,${item.image_b64}`);
       const blob = await res.blob();
       await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
@@ -37,7 +42,7 @@ export function FavoritesPage() {
   const handleExport = useCallback((item: FavoriteItem) => {
     const a = document.createElement("a");
     a.href = `data:image/png;base64,${item.image_b64}`;
-    a.download = `favorite_${item.label}_${item.id.slice(0, 8)}.png`;
+    a.download = `favorite_${safeFilename(item.label)}_${item.id.slice(0, 8)}.png`;
     a.click();
   }, []);
 
@@ -46,7 +51,7 @@ export function FavoritesPage() {
       setTimeout(() => {
         const a = document.createElement("a");
         a.href = `data:image/png;base64,${item.image_b64}`;
-        a.download = `favorite_${item.label}_${item.id.slice(0, 8)}.png`;
+        a.download = `favorite_${safeFilename(item.label)}_${item.id.slice(0, 8)}.png`;
         a.click();
       }, i * 200);
     });
@@ -92,7 +97,7 @@ export function FavoritesPage() {
               <Download className="h-3 w-3" /> Export All
             </button>
             <button
-              onClick={() => { if (window.confirm("Remove all favorites?")) clearFavorites(); }}
+              onClick={() => { if (window.confirm("Remove all favorites?")) { clearFavorites(); setExpandedItem(null); } }}
               className="flex items-center gap-1 px-2.5 py-1 text-[11px] rounded cursor-pointer font-medium"
               style={{ background: "rgba(90,42,42,0.3)", color: "#f06060", border: "1px solid rgba(138,74,74,0.5)" }}
               title="Clear all favorites"

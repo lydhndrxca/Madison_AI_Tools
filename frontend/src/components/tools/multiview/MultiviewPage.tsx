@@ -5,6 +5,7 @@ import { EditHistory } from "@/components/shared/EditHistory";
 import { TabBar } from "@/components/shared/TabBar";
 import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
+import { useFavorites } from "@/hooks/FavoritesContext";
 import { useSessionRegister } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
 
@@ -53,6 +54,7 @@ export function MultiviewPage() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { addToast } = useToastContext();
+  const { addFavorite, removeFavorite, isFavorited, getFavoriteId } = useFavorites();
 
   useEffect(() => {
     apiFetch<{ models: ModelInfo[]; current: string }>("/system/models").then((r) => {
@@ -285,6 +287,12 @@ export function MultiviewPage() {
           imageIndex={currentIdx}
           onPrevImage={handlePrevImage}
           onNextImage={handleNextImage}
+          isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
+          onToggleFavorite={currentSrc ? () => {
+            const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, "");
+            if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); }
+            else addFavorite({ image_b64: b64, tool: "multiview", label: activeTab || "main", source: "viewer" });
+          } : undefined}
         />
       </div>
     </div>

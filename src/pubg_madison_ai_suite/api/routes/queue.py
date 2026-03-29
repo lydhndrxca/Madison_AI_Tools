@@ -104,7 +104,7 @@ async def _worker():
     global _queue
     if _queue is None:
         return
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     while True:
         jid = await _queue.get()
         job = _get_job(jid)
@@ -138,7 +138,7 @@ def _ensure_worker():
     if _queue is None:
         _queue = asyncio.Queue()
     if _worker_task is None or _worker_task.done():
-        _worker_task = asyncio.get_event_loop().create_task(_worker())
+        _worker_task = asyncio.get_running_loop().create_task(_worker())
 
 
 @router.post("/enqueue")

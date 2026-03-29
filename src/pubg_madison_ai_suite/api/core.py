@@ -608,8 +608,10 @@ def _append_history_entry(meta: dict, image: Image.Image, image_path: Path) -> N
         thumb.thumbnail((128, 128))
         thumb_b64 = image_to_b64(thumb, "PNG")
 
+        import uuid as _uuid
+        raw_id = meta.get("image_file", "").replace(".png", "")
         entry = {
-            "id": meta.get("image_file", "").replace(".png", ""),
+            "id": raw_id if raw_id else _uuid.uuid4().hex[:12],
             "timestamp": meta.get("timestamp", datetime.now().isoformat()),
             "tool": meta.get("tool", ""),
             "view": meta.get("view", ""),

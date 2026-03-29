@@ -4,6 +4,9 @@ import { apiFetch } from "@/hooks/useApi";
 import { X, RotateCcw } from "lucide-react";
 import { useShortcuts, CATEGORY_LABELS, eventToComboString } from "@/hooks/useShortcuts";
 import type { ShortcutDef } from "@/hooks/useShortcuts";
+import { useVoiceToText, nativeSpeechSupported } from "@/hooks/useVoiceToText";
+import type { VoiceEngine } from "@/hooks/useVoiceToText";
+import { usePromptOverrides } from "@/hooks/PromptOverridesContext";
 
 interface SettingsPanelProps {
   open: boolean;
@@ -102,6 +105,9 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [hasKey, setHasKey] = useState(false);
   const [keyMasked, setKeyMasked] = useState("");
   const [saving, setSaving] = useState(false);
+
+  const { settings: voiceSettings, updateSettings: updateVoiceSettings } = useVoiceToText();
+  const { clearAll: clearAllPromptOverrides, overrideCount } = usePromptOverrides();
 
   const { shortcuts, updateShortcut, resetShortcut, resetAll, findConflict } = useShortcuts();
   const [rebindingId, setRebindingId] = useState<string | null>(null);
@@ -219,6 +225,64 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 Save
               </Button>
             </div>
+          </div>
+
+          {/* Voice-to-Text Engine */}
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
+              Voice-to-Text Engine
+            </h3>
+            <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+              Gemini uses AI transcription via your API key. Windows / Native uses your OS built-in speech
+              recognition{!nativeSpeechSupported && " (not available in this browser)"}.
+            </p>
+            <div className="flex gap-2">
+              {(["gemini", "native"] as VoiceEngine[]).map((eng) => {
+                const selected = voiceSettings.engine === eng;
+                const disabled = eng === "native" && !nativeSpeechSupported;
+                return (
+                  <button
+                    key={eng}
+                    disabled={disabled}
+                    onClick={() => updateVoiceSettings({ engine: eng })}
+                    className="flex-1 py-1.5 px-3 text-xs font-medium rounded-md transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{
+                      background: selected ? "var(--color-accent)" : "var(--color-input-bg)",
+                      border: `1px solid ${selected ? "var(--color-accent)" : "var(--color-border)"}`,
+                      color: selected ? "var(--color-foreground)" : "var(--color-text-secondary)",
+                    }}
+                  >
+                    {eng === "gemini" ? "Gemini (AI)" : "Windows / Native"}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Prompt Overrides */}
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
+              Menu Prompt Overrides
+            </h3>
+            <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+              Right-click any prompt-producing sidebar section (e.g. Style Fusion, Preservation Lock) to customize
+              the text it sends to the AI. {overrideCount > 0
+                ? `You have ${overrideCount} custom override${overrideCount > 1 ? "s" : ""}.`
+                : "No overrides set."}
+            </p>
+            {overrideCount > 0 && (
+              <button
+                onClick={() => { if (confirm("Reset all edited menu prompts to defaults?")) clearAllPromptOverrides(); }}
+                className="px-3 py-1 text-[11px] rounded-md cursor-pointer"
+                style={{
+                  background: "var(--color-input-bg)",
+                  border: "1px solid var(--color-border)",
+                  color: "var(--color-text-secondary)",
+                }}
+              >
+                Reset All Edited Menu Prompts
+              </button>
+            )}
           </div>
 
           {/* Keyboard Shortcuts */}

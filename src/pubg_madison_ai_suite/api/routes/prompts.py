@@ -30,7 +30,10 @@ def _now_iso() -> str:
 
 
 def _path_for(tid: str) -> Path:
-    return _LIB_DIR / f"{tid}.json"
+    p = (_LIB_DIR / f"{tid}.json").resolve()
+    if not str(p).startswith(str(_LIB_DIR.resolve())):
+        raise HTTPException(400, "Invalid template id")
+    return p
 
 
 def _load(tid: str) -> dict:

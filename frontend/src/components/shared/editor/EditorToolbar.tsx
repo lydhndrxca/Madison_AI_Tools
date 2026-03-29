@@ -1,10 +1,11 @@
 import { useState } from "react";
 import {
-  Paintbrush, Eraser, Square, Lasso, ScanSearch, Wand2,
+  MousePointer2, Paintbrush, Eraser, Square, Lasso, ScanSearch, Wand2,
   Expand, ImageMinus, Palette, Trash2,
 } from "lucide-react";
 
 export type EditorTool =
+  | "select"
   | "brush"
   | "eraser"
   | "marquee"
@@ -48,6 +49,7 @@ interface EditorToolbarProps {
 }
 
 const TOOLS: { id: EditorTool; label: string; shortcut: string; Icon: React.ComponentType<{ className?: string }>; tip: string }[] = [
+  { id: "select", label: "Select", shortcut: "V", Icon: MousePointer2, tip: "Normal pointer — pan and zoom the image without painting." },
   { id: "brush", label: "Brush", shortcut: "B", Icon: Paintbrush, tip: "Paint over the area you want to change. Use [ ] keys to resize." },
   { id: "eraser", label: "Eraser", shortcut: "E", Icon: Eraser, tip: "Erase parts of your painted selection. Use [ ] keys to resize." },
   { id: "marquee", label: "Marquee", shortcut: "M", Icon: Square, tip: "Draw a rectangle to select an area for editing." },
@@ -107,25 +109,28 @@ export function EditorToolbar({
   };
 
   const showBrushSize = activeTool === "brush" || activeTool === "eraser";
+  const showOptionsRow = activeTool !== "select";
 
   return (
     <div className="shrink-0" style={{ borderBottom: "1px solid var(--color-border)", background: "var(--color-card)" }}>
       {/* Tool buttons row */}
       <div className="flex items-center gap-1 px-2 py-1 flex-wrap">
-        {TOOLS.map((t) => {
+        {TOOLS.map((t, i) => {
           const Icon = t.Icon;
           return (
-            <button
-              key={t.id}
-              onClick={() => onToolChange(t.id)}
-              disabled={locked}
-              className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded cursor-pointer transition-colors disabled:opacity-40 disabled:pointer-events-none"
-              style={toolBtnStyle(activeTool === t.id)}
-              title={`${t.tip}${t.shortcut ? ` (Shortcut: ${t.shortcut})` : ""}`}
-            >
-              <Icon className="h-3 w-3 shrink-0" />
-              {t.label}
-            </button>
+            <span key={t.id} className="contents">
+              <button
+                onClick={() => onToolChange(t.id)}
+                disabled={locked}
+                className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded cursor-pointer transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                style={toolBtnStyle(activeTool === t.id)}
+                title={`${t.tip}${t.shortcut ? ` (Shortcut: ${t.shortcut})` : ""}`}
+              >
+                <Icon className="h-3 w-3 shrink-0" />
+                {t.label}
+              </button>
+              {t.id === "select" && <div className="w-px h-4 mx-0.5" style={{ background: "var(--color-border)" }} />}
+            </span>
           );
         })}
         <div className="w-px h-4 mx-1" style={{ background: "var(--color-border)" }} />
@@ -138,8 +143,8 @@ export function EditorToolbar({
         ><Trash2 className="h-3 w-3 shrink-0" />Clear Mask</button>
       </div>
 
-      {/* Options row */}
-      <div className="flex items-center gap-2 px-2 py-1 flex-wrap" style={{ borderTop: "1px solid var(--color-border)" }}>
+      {/* Options row — hidden when in pointer/select mode */}
+      {showOptionsRow && <div className="flex items-center gap-2 px-2 py-1 flex-wrap" style={{ borderTop: "1px solid var(--color-border)" }}>
         {showBrushSize && (
           <div className="flex items-center gap-1.5">
             <span className="text-[10px]" style={{ color: "var(--color-text-secondary)" }}>Size</span>
@@ -216,7 +221,7 @@ export function EditorToolbar({
             <ActionBtn busy={busy} disabled={locked} onClick={() => onStyleTransfer(stylePreset, styleCustom)} busyText="Applying...">Apply Style</ActionBtn>
           </div>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

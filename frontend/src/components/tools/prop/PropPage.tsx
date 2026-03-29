@@ -7,15 +7,23 @@ import { ArtboardCanvas } from "@/components/shared/ArtboardCanvas";
 import type { TabDef } from "@/components/shared/TabBar";
 import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
+import { useFavorites } from "@/hooks/FavoritesContext";
 import { useSessionRegister } from "@/hooks/SessionContext";
-import { useClipboardPaste } from "@/hooks/useClipboardPaste";
+import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
 import { createHistoryEntry, pushHistory, createImageRecord } from "@/lib/imageHistory";
 import type { HistoryEntry, ImageRecord, HistorySettings } from "@/lib/imageHistory";
 import { XmlModal } from "@/components/shared/XmlModal";
-import { GripVertical, ChevronDown, ChevronRight, Lock, Unlock, Save } from "lucide-react";
+import { GripVertical, ChevronDown, ChevronRight, Lock, Unlock, Save, Pencil } from "lucide-react";
 import { useShortcuts } from "@/hooks/useShortcuts";
+import { usePromptOverrides } from "@/hooks/PromptOverridesContext";
+import { EditPromptModal } from "@/components/shared/EditPromptModal";
+import { useCustomSections } from "@/hooks/CustomSectionsContext";
+import { useCustomSectionState } from "@/hooks/useCustomSectionState";
+import { CustomSectionRenderer } from "@/components/shared/CustomSectionRenderer";
 import { GridGallery } from "@/components/shared/GridGallery";
 import type { GridGalleryResult } from "@/components/shared/GridGallery";
+import { StyleFusionPanel, buildFusionBrief, EMPTY_FUSION } from "@/components/shared/StyleFusionPanel";
+import type { StyleFusionState } from "@/components/shared/StyleFusionPanel";
 
 // ---------------------------------------------------------------------------
 // Tab model
@@ -117,29 +125,6 @@ const TAKE_OPTIONS = [
   "detail work & hardware", "cultural reference", "attitude & energy",
 ];
 
-interface FusionSlot { label: string; takeFrom: string }
-interface StyleFusionState { slots: [FusionSlot, FusionSlot]; blend: number }
-
-const EMPTY_FUSION: StyleFusionState = {
-  slots: [{ label: "", takeFrom: "overall vibe" }, { label: "", takeFrom: "overall vibe" }],
-  blend: 50,
-};
-
-function buildFusionBrief(fusion: StyleFusionState): string {
-  const [s1, s2] = fusion.slots;
-  const has1 = !!s1.label.trim();
-  const has2 = !!s2.label.trim();
-  if (!has1 && !has2) return "";
-  const w1 = 100 - fusion.blend;
-  const w2 = fusion.blend;
-  if (has1 && has2) {
-    return [`Style blend: "${s1.label}" (${w1}%) + "${s2.label}" (${w2}%)`,
-      `  From "${s1.label}": ${s1.takeFrom}`, `  From "${s2.label}": ${s2.takeFrom}`].join("\n");
-  }
-  const slot = has1 ? s1 : s2;
-  return `Style: "${slot.label}" — ${slot.takeFrom}`;
-}
-
 function preservationToConstraints(pres: PreservationLockState): string {
   if (!pres.enabled) return "";
   const lines: string[] = [];
@@ -184,16 +169,19 @@ const SECTION_TIPS: Record<SectionId, string> = {
 
 const NON_COLLAPSIBLE: Set<SectionId> = new Set(["generate"]);
 const TOGGLEABLE_SECTIONS: Set<SectionId> = new Set(["identity", "propDescription", "attributes", "styleFusion", "preservation"]);
+const PROMPT_EDITABLE_SECTIONS: Set<SectionId> = new Set(["styleFusion", "preservation"]);
 
 interface ModelInfo { id: string; label: string; resolution: string; time_estimate: string; multimodal: boolean }
 
 interface LayoutState { order: SectionId[]; collapsed: Partial<Record<SectionId, boolean>> }
 
-const LAYOUT_STORAGE_KEY = "madison-prop-layout";
+function layoutStorageKeyFor(instanceId: number) {
+  return `madison-prop-layout${instanceId ? `-${instanceId}` : ""}`;
+}
 
-function loadDefaultLayout(): LayoutState {
+function loadDefaultLayout(key?: string): LayoutState {
   try {
-    const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
+    const raw = localStorage.getItem(key || "madison-prop-layout");
     if (raw) {
       const parsed = JSON.parse(raw) as LayoutState;
       const allIds = new Set<SectionId>(DEFAULT_SECTION_ORDER);
@@ -220,7 +208,14 @@ const inputStyle = { background: "var(--color-input-bg)", border: "1px solid var
 // Component
 // ---------------------------------------------------------------------------
 
-export function PropPage() {
+interface PropPageProps {
+  instanceId?: number;
+  active?: boolean;
+}
+
+export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
+  const layoutStorageKey = layoutStorageKeyFor(instanceId);
+  const sessionKey = `prop${instanceId ? `-${instanceId}` : ""}`;
   const [tabs, setTabs] = useState<TabDef[]>(BUILTIN_TABS);
   const [activeTab, setActiveTab] = useState("main");
   const busy = useBusySet();
@@ -272,9 +267,16 @@ export function PropPage() {
   const [modelId, setModelId] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
   const { addToast } = useToastContext();
+  const { addFavorite, removeFavorite, isFavorited, getFavoriteId } = useFavorites();
+  const promptOverrides = usePromptOverrides();
+  const { getSectionColor, setSectionColor } = useCustomSections();
+  const customSections = useCustomSectionState("prop");
+  const TOOL_ID = "prop";
+  const [promptEditSection, setPromptEditSection] = useState<SectionId | null>(null);
+  const [promptCtxMenu, setPromptCtxMenu] = useState<{ x: number; y: number; section: SectionId } | null>(null);
 
   // Layout
-  const [layout, setLayout] = useState<LayoutState>(loadDefaultLayout);
+  const [layout, setLayout] = useState<LayoutState>(() => loadDefaultLayout(layoutStorageKey));
   const [dragOverId, setDragOverId] = useState<SectionId | null>(null);
   const dragItemRef = useRef<SectionId | null>(null);
 
@@ -335,9 +337,9 @@ export function PropPage() {
   const handleSetDefaultLayout = useCallback(() => {
     const collapsed: Partial<Record<SectionId, boolean>> = {};
     for (const id of layout.order) { if (NON_COLLAPSIBLE.has(id)) continue; collapsed[id] = isSectionCollapsed(id); }
-    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify({ order: layout.order, collapsed }));
+    localStorage.setItem(layoutStorageKey, JSON.stringify({ order: layout.order, collapsed }));
     addToast("Layout saved as default", "success");
-  }, [layout.order, isSectionCollapsed, addToast]);
+  }, [layout.order, isSectionCollapsed, addToast, layoutStorageKey]);
 
   const [xmlOpen, setXmlOpen] = useState(false);
 
@@ -384,9 +386,16 @@ export function PropPage() {
     addHistoryEntry(tab, 0, label, src);
   }, [addHistoryEntry]);
 
-  useClipboardPaste(
-    useCallback((dataUrl: string) => setTabImage(activeTab, dataUrl, "Pasted image"), [activeTab, setTabImage]),
-  );
+  const clipboardPasteCb = useCallback((dataUrl: string) => setTabImage(activeTab, dataUrl, "Pasted image"), [activeTab, setTabImage]);
+  useClipboardPaste(activeTab === "artboard" ? undefined : clipboardPasteCb);
+
+  const handlePasteImage = useCallback(async () => {
+    try {
+      const dataUrl = await readClipboardImage();
+      if (dataUrl) { setTabImage(activeTab, dataUrl, "Pasted image"); }
+      else { addToast("No image found in clipboard", "info"); }
+    } catch { addToast("Paste failed", "error"); }
+  }, [activeTab, setTabImage, addToast]);
 
   const appendToGallery = useCallback((tab: string, src: string, label = "Generation") => {
     setGallery((prev) => {
@@ -426,6 +435,22 @@ export function PropPage() {
     setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, prompt: newPrompt } : t));
   }, []);
 
+  // --- Prompt override helpers ---
+  const getDefaultSectionPrompt = useCallback((sectionId: SectionId): string => {
+    switch (sectionId) {
+      case "styleFusion": return buildFusionBrief(styleFusion);
+      case "preservation": return preservationToConstraints(preservation);
+      default: return "";
+    }
+  }, [styleFusion, preservation]);
+
+  const resolveSection = useCallback((sectionId: SectionId): string => {
+    if (!isSectionEnabled(sectionId)) return "";
+    const override = promptOverrides.getOverride(TOOL_ID, sectionId);
+    if (override !== null) return override;
+    return getDefaultSectionPrompt(sectionId);
+  }, [isSectionEnabled, promptOverrides, getDefaultSectionPrompt]);
+
   // --- Build request body ---
   const buildRequestBody = useCallback((viewType: string) => {
     const refImgs: string[] = [];
@@ -436,8 +461,8 @@ export function PropPage() {
       }
     }
 
-    const fusionCtx = isSectionEnabled("styleFusion") ? buildFusionBrief(styleFusion) : "";
-    const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
+    const fusionCtx = resolveSection("styleFusion");
+    const lockCtx = resolveSection("preservation");
 
     let styleGuidance = "";
     if (styleLibraryFolder) {
@@ -459,11 +484,15 @@ export function PropPage() {
       model_id: modelId || undefined,
       style_context: undefined,
       fusion_context: fusionCtx || undefined,
+      fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+      fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
       style_guidance: styleGuidance || undefined,
       lock_constraints: lockCtx || undefined,
       recreate_mode: extractMode === "recreate" && !!getMainImageB64(),
+      custom_sections_context: customSections.getPromptContributions() || undefined,
+      custom_section_images: customSections.getImageAttachments().map((img) => img.replace(/^data:image\/\w+;base64,/, "")).filter(Boolean) || undefined,
     };
-  }, [tabs, getImageB64, getMainImageB64, description, propName, propType, setting, condition, scale, attributes, styleFusion, preservation, modelId, extractMode, isSectionEnabled, styleLibraryFolder, styleLibraryFolders]);
+  }, [tabs, getImageB64, getMainImageB64, description, propName, propType, setting, condition, scale, attributes, styleFusion, preservation, modelId, extractMode, isSectionEnabled, styleLibraryFolder, styleLibraryFolders, customSections.getPromptContributions, customSections.getImageAttachments]);
 
   // --- Generate ---
   const handleGenerate = useCallback(async (viewType?: string) => {
@@ -765,6 +794,18 @@ export function PropPage() {
     addToast("Prop session cleared", "info");
   }, [addToast]);
 
+  // Listen for project-clear event from ProjectTabsWrapper
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.storageKey === "madison-proplab-projects" && detail?.instanceId === instanceId) {
+        handleReset();
+      }
+    };
+    window.addEventListener("project-clear", handler);
+    return () => window.removeEventListener("project-clear", handler);
+  }, [instanceId, handleReset]);
+
   // History navigation
   const handleHistorySelect = useCallback((entry: HistoryEntry | null) => {
     if (!entry) { setActiveHistoryId(null); return; }
@@ -809,7 +850,7 @@ export function PropPage() {
 
   // Session management
   useSessionRegister(
-    "prop",
+    sessionKey,
     () => ({
       description, propName, propType, setting, condition, scale, attributes,
       lockedAttrs, lockedSections, styleFusion, preservation, sectionEnabled,
@@ -1073,79 +1114,12 @@ export function PropPage() {
 
   // --- Style Fusion section ---
   const renderStyleFusionSection = () => (
-    <div className="space-y-3">
-      <div className="rounded p-2 space-y-1.5" style={{ border: "1px solid var(--color-border)", background: "rgba(106,27,154,0.06)" }}>
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Reference 1</span>
-          <span className="text-[10px] tabular-nums" style={{ color: "var(--color-text-muted)" }}>{100 - styleFusion.blend}%</span>
-        </div>
-        <input
-          className="w-full px-2 py-1 text-xs"
-          style={inputStyle}
-          disabled={textBusy}
-          placeholder='Name a style, e.g. "industrial steampunk", "art deco elegance"'
-          value={styleFusion.slots[0].label}
-          onChange={(e) => setStyleFusion((p) => ({ ...p, slots: [{ ...p.slots[0], label: e.target.value }, p.slots[1]] }))}
-        />
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] shrink-0" style={{ color: "var(--color-text-muted)" }}>Take</span>
-          <select
-            className="flex-1 px-1.5 py-0.5 text-[10px] rounded-[var(--radius-sm)]"
-            style={inputStyle}
-            disabled={textBusy}
-            value={styleFusion.slots[0].takeFrom}
-            title="Choose which aspect of this style to borrow — colors, silhouette, textures, etc."
-            onChange={(e) => setStyleFusion((p) => ({ ...p, slots: [{ ...p.slots[0], takeFrom: e.target.value }, p.slots[1]] }))}
-          >
-            {TAKE_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </div>
-      </div>
-
-      <div className="rounded p-2 space-y-1" style={{ border: "1px solid var(--color-border)" }}>
-        <div className="flex justify-between text-[10px]" style={{ color: "var(--color-text-secondary)" }}>
-          <span>{styleFusion.slots[0].label || "Ref 1"} <span className="tabular-nums">{100 - styleFusion.blend}%</span></span>
-          <span><span className="tabular-nums">{styleFusion.blend}%</span> {styleFusion.slots[1].label || "Ref 2"}</span>
-        </div>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          value={styleFusion.blend}
-          className="w-full h-3"
-          onChange={(e) => setStyleFusion((p) => ({ ...p, blend: Number(e.target.value) }))}
-        />
-        <p className="text-[9px] text-center" style={{ color: "var(--color-text-muted)" }}>Drag the slider to mix more of one style into the other</p>
-      </div>
-
-      <div className="rounded p-2 space-y-1.5" style={{ border: "1px solid var(--color-border)", background: "rgba(106,27,154,0.06)" }}>
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Reference 2</span>
-          <span className="text-[10px] tabular-nums" style={{ color: "var(--color-text-muted)" }}>{styleFusion.blend}%</span>
-        </div>
-        <input
-          className="w-full px-2 py-1 text-xs"
-          style={inputStyle}
-          disabled={textBusy}
-          placeholder='Name a second style, e.g. "frontier survivalist"'
-          value={styleFusion.slots[1].label}
-          onChange={(e) => setStyleFusion((p) => ({ ...p, slots: [p.slots[0], { ...p.slots[1], label: e.target.value }] }))}
-        />
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] shrink-0" style={{ color: "var(--color-text-muted)" }}>Take</span>
-          <select
-            className="flex-1 px-1.5 py-0.5 text-[10px] rounded-[var(--radius-sm)]"
-            style={inputStyle}
-            disabled={textBusy}
-            value={styleFusion.slots[1].takeFrom}
-            title="Choose which aspect of this style to borrow — colors, silhouette, textures, etc."
-            onChange={(e) => setStyleFusion((p) => ({ ...p, slots: [p.slots[0], { ...p.slots[1], takeFrom: e.target.value }] }))}
-          >
-            {TAKE_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </div>
-      </div>
-    </div>
+    <StyleFusionPanel
+      fusion={styleFusion}
+      onChange={setStyleFusion}
+      takeOptions={TAKE_OPTIONS}
+      disabled={textBusy}
+    />
   );
 
   // --- Preservation section ---
@@ -1465,35 +1439,36 @@ export function PropPage() {
       <div className="grid grid-cols-2 gap-1.5 pt-1" style={{ borderTop: "1px solid var(--color-border)" }}>
         <Button size="sm" className="w-full" title="Composite all views into a single reference sheet" onClick={async () => {
           const imgs: {label: string; image_b64: string}[] = [];
-          for (const tab of ["main","front","back","side","threequarter","top"] as const) {
+          for (const tab of ["main","3/4","front","back","side","top"] as const) {
             const b64 = getImageB64(tab);
             if (b64) imgs.push({ label: tab, image_b64: `data:image/png;base64,${b64}` });
           }
-          if (imgs.length === 0) return;
+          if (imgs.length === 0) { addToast("No view images to export", "info"); return; }
           try {
             const res = await (await import("@/hooks/useApi")).apiFetch<{image_b64: string}>("/export/consistency-sheet", {
               method: "POST", body: JSON.stringify({ images: imgs, layout: imgs.length <= 2 ? "1x4" : "2x2", title: "", include_labels: true })
             });
             const a = document.createElement("a"); a.href = `data:image/png;base64,${res.image_b64}`; a.download = `prop_ref_sheet_${Date.now()}.png`; a.click();
-          } catch {}
+          } catch (e) { addToast("Failed to generate ref sheet", "error"); }
         }}>Ref Sheet</Button>
         <Button size="sm" className="w-full" title="Export a complete handoff package as ZIP" onClick={async () => {
           const imgs: {label: string; image_b64: string}[] = [];
-          for (const tab of ["main","front","back","side","threequarter","top"] as const) {
+          for (const tab of ["main","3/4","front","back","side","top"] as const) {
             const b64 = getImageB64(tab);
             if (b64) imgs.push({ label: tab, image_b64: `data:image/png;base64,${b64}` });
           }
-          if (imgs.length === 0) return;
+          if (imgs.length === 0) { addToast("No view images to export", "info"); return; }
           try {
             const res = await fetch(`${window.location.protocol === "file:" ? "http://127.0.0.1:8420" : ""}/api/export/package`, {
               method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ images: imgs, xml_data: "", prompt_text: "", settings: {}, palette: [], include_ref_sheet: true, tool_name: "prop", character_name: "prop" })
             });
+            if (!res.ok) throw new Error("Export failed");
             const blob = await res.blob();
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a"); a.href = url; a.download = `prop_export_${Date.now()}.zip`; a.click();
             URL.revokeObjectURL(url);
-          } catch {}
+          } catch (e) { addToast("Failed to export package", "error"); }
         }}>Export ZIP</Button>
       </div>
     </div>
@@ -1516,6 +1491,9 @@ export function PropPage() {
           const canToggle = TOGGLEABLE_SECTIONS.has(sectionId);
           const enabled = isSectionEnabled(sectionId);
           const label = SECTION_LABELS[sectionId];
+          const isPromptEditable = PROMPT_EDITABLE_SECTIONS.has(sectionId);
+          const sectionHasOverride = isPromptEditable && promptOverrides.hasOverride(TOOL_ID, sectionId);
+          const sectionColor = getSectionColor(TOOL_ID, sectionId);
 
           const wrapSection = (children: ReactNode) => (
             <div
@@ -1527,11 +1505,19 @@ export function PropPage() {
               onDragEnd={handleDragEnd}
               onDragLeave={() => { if (dragOverId === sectionId) setDragOverId(null); }}
               onMouseDown={(e) => { if (e.button === 1 && canToggle) { e.preventDefault(); toggleSectionEnabled(sectionId); } }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setPromptCtxMenu({ x: e.clientX, y: e.clientY, section: sectionId });
+              }}
               className="section-card-hover"
               style={{
                 border: dragOverId === sectionId && dragItemRef.current !== sectionId
                   ? "1px solid var(--color-accent, #6a6aff)"
-                  : "1px solid var(--color-border)",
+                  : sectionColor
+                    ? `1px solid ${sectionColor}`
+                    : sectionHasOverride
+                      ? "1px solid var(--color-accent)"
+                      : "1px solid var(--color-border)",
                 borderRadius: "var(--radius-lg)",
                 background: "var(--color-card)",
                 opacity: enabled ? 1 : 0.4,
@@ -1545,6 +1531,7 @@ export function PropPage() {
                 <span className="cursor-grab active:cursor-grabbing px-1 py-1.5" style={{ color: "var(--color-text-muted)" }}>
                   <GripVertical className="h-3 w-3" />
                 </span>
+                {sectionColor && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: sectionColor }} />}
                 {canCollapse ? (
                   <button
                     type="button"
@@ -1555,6 +1542,7 @@ export function PropPage() {
                   >
                     {collapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
                     <span className="text-xs font-semibold uppercase tracking-wider">{label}</span>
+                    {sectionHasOverride && <Pencil className="h-2.5 w-2.5 shrink-0" style={{ color: "var(--color-accent)" }} />}
                   </button>
                 ) : (
                   <span className="flex-1 py-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }} title={SECTION_TIPS[sectionId]}>
@@ -1611,6 +1599,67 @@ export function PropPage() {
           return null;
         })}
 
+        {customSections.sections.map((cs) => {
+          const csCollapsed = customSections.isCollapsed(cs.id);
+          const csEnabled = customSections.isEnabled(cs.id);
+          const csColor = cs.color || getSectionColor(TOOL_ID, `custom:${cs.id}`);
+          return (
+            <div
+              key={`custom:${cs.id}`}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setPromptCtxMenu({ x: e.clientX, y: e.clientY, section: `custom:${cs.id}` as SectionId });
+              }}
+              className="section-card-hover"
+              style={{
+                border: csColor ? `1px solid ${csColor}` : "1px solid var(--color-border)",
+                borderRadius: "var(--radius-lg)",
+                background: "var(--color-card)",
+                opacity: csEnabled ? 1 : 0.4,
+                transition: "opacity 0.15s ease",
+              }}
+            >
+              <div className="flex items-center px-1 shrink-0" style={{ borderBottom: csCollapsed ? "none" : "1px solid var(--color-border)" }}>
+                <span className="cursor-grab active:cursor-grabbing px-1 py-1.5" style={{ color: "var(--color-text-muted)" }}>
+                  <GripVertical className="h-3 w-3" />
+                </span>
+                {csColor && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: csColor }} />}
+                <button
+                  type="button"
+                  onClick={() => customSections.toggleCollapsed(cs.id)}
+                  className="flex-1 flex items-center gap-1.5 py-1.5 text-left cursor-pointer"
+                  style={{ background: "transparent", border: "none", color: "var(--color-text-secondary)" }}
+                >
+                  {csCollapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
+                  <span className="text-xs font-semibold uppercase tracking-wider">{cs.name}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => customSections.toggleEnabled(cs.id)}
+                  className="px-1.5 py-0.5 text-[9px] rounded font-semibold cursor-pointer shrink-0 select-none"
+                  style={{
+                    background: csEnabled ? "var(--color-accent)" : "var(--color-input-bg)",
+                    color: csEnabled ? "var(--color-foreground)" : "var(--color-text-muted)",
+                    border: "1px solid var(--color-border)",
+                  }}
+                >
+                  {csEnabled ? "ON" : "OFF"}
+                </button>
+              </div>
+              {!csCollapsed && (
+                <div className="px-3 pt-1 pb-3 space-y-2 overflow-hidden">
+                  <CustomSectionRenderer
+                    section={cs}
+                    values={customSections.values[cs.id] ?? {}}
+                    onChange={(blockId, val) => customSections.setValue(cs.id, blockId, val)}
+                    disabled={busy.any}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
+
         <button
           type="button"
           onClick={handleSetDefaultLayout}
@@ -1662,6 +1711,8 @@ export function PropPage() {
                 onCopy={handleGridCopy}
                 onEditSubmit={handleGridEdit}
                 editBusy={gridEditBusy}
+                isFavorited={(b64) => isFavorited(b64)}
+                onToggleFavorite={(id, b64, w, h) => { if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "prop", label: `grid-${id}`, prompt: "", source: "grid", width: w, height: h }); }}
               />
             </div>
           ) : (
@@ -1673,10 +1724,13 @@ export function PropPage() {
                   imageIndex={currentIdx}
                   onPrevImage={() => setImageIdx((p) => ({ ...p, [activeTab]: Math.max(0, (p[activeTab] ?? 0) - 1) }))}
                   onNextImage={() => setImageIdx((p) => ({ ...p, [activeTab]: Math.min((gallery[activeTab]?.length ?? 1) - 1, (p[activeTab] ?? 0) + 1) }))}
+                  onPasteImage={handlePasteImage}
                   onClearImage={handleClearImage}
                   onClearAllImages={handleClearAllGenerated}
                   onImageEdited={(newSrc: string, label: string) => appendToGallery(activeTab, newSrc, label)}
                   locked={busy.any}
+                  isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
+                  onToggleFavorite={currentSrc ? () => { const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "prop", label: activeTab || "main", source: "viewer" }); } : undefined}
                 />
               </div>
               <div className="w-[200px] shrink-0 overflow-y-auto" style={{ borderLeft: "1px solid var(--color-border)" }}>
@@ -1698,6 +1752,92 @@ export function PropPage() {
 
       {/* XML Modal */}
       {xmlOpen && <XmlModal xml={xmlContent} title="Prop XML" onClose={() => setXmlOpen(false)} />}
+
+      {/* Section context menu (prompt edit + color) */}
+      {promptCtxMenu && (() => {
+        const isCustom = promptCtxMenu.section.startsWith("custom:");
+        const isEditable = !isCustom && PROMPT_EDITABLE_SECTIONS.has(promptCtxMenu.section);
+        const colorKey = isCustom ? promptCtxMenu.section : promptCtxMenu.section;
+        const currentColor = getSectionColor(TOOL_ID, colorKey);
+        return (
+          <div className="fixed inset-0 z-[55]" onClick={() => setPromptCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setPromptCtxMenu(null); }}>
+            <div
+              className="absolute py-1 rounded-md shadow-lg"
+              style={{
+                left: promptCtxMenu.x, top: promptCtxMenu.y,
+                background: "var(--color-card)", border: "1px solid var(--color-border)",
+                minWidth: 200, zIndex: 56,
+              }}
+            >
+              {isEditable && (
+                <>
+                  <button
+                    className="w-full text-left px-3 py-1.5 text-xs cursor-pointer"
+                    style={{ background: "transparent", border: "none", color: "var(--color-text-primary)" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-hover)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                    onClick={() => { setPromptEditSection(promptCtxMenu.section); setPromptCtxMenu(null); }}
+                  >
+                    <Pencil className="h-3 w-3 inline mr-2" style={{ verticalAlign: "-2px" }} />
+                    Edit Prompt
+                  </button>
+                  {promptOverrides.hasOverride(TOOL_ID, promptCtxMenu.section) && (
+                    <button
+                      className="w-full text-left px-3 py-1.5 text-xs cursor-pointer"
+                      style={{ background: "transparent", border: "none", color: "var(--color-text-primary)" }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-hover)")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                      onClick={() => { promptOverrides.clearOverride(TOOL_ID, promptCtxMenu.section); setPromptCtxMenu(null); addToast("Prompt reset to default", "info"); }}
+                    >
+                      Reset Prompt to Default
+                    </button>
+                  )}
+                  <div className="my-1" style={{ borderTop: "1px solid var(--color-border)" }} />
+                </>
+              )}
+              <div className="px-3 py-1">
+                <div className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--color-text-muted)" }}>
+                  Section Color
+                </div>
+                <div className="flex items-center gap-1 flex-wrap">
+                  {["#808080", "#e05050", "#e09040", "#d0c040", "#50b060", "#40a0d0", "#6070e0", "#a060d0", "#d060a0"].map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => { setSectionColor(TOOL_ID, colorKey, c); setPromptCtxMenu(null); }}
+                      className="w-4 h-4 rounded-full cursor-pointer shrink-0"
+                      style={{ background: c, border: currentColor === c ? "2px solid white" : "1px solid var(--color-border)" }}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    value={currentColor || "#808080"}
+                    onChange={(e) => { setSectionColor(TOOL_ID, colorKey, e.target.value); }}
+                    className="w-4 h-4 rounded cursor-pointer border-0 p-0"
+                    title="Custom color"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  {currentColor && (
+                    <button
+                      type="button"
+                      onClick={() => { setSectionColor(TOOL_ID, colorKey, undefined); setPromptCtxMenu(null); }}
+                      className="text-[9px] px-1.5 py-0.5 rounded cursor-pointer"
+                      style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-muted)" }}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Edit prompt modal */}
+      {promptEditSection && (
+        <EditPromptModal open sectionLabel={SECTION_LABELS[promptEditSection]} defaultText={getDefaultSectionPrompt(promptEditSection)} currentText={promptOverrides.getOverride(TOOL_ID, promptEditSection) ?? getDefaultSectionPrompt(promptEditSection)} hasOverride={promptOverrides.hasOverride(TOOL_ID, promptEditSection)} onSave={(text) => { promptOverrides.setOverride(TOOL_ID, promptEditSection, text); setPromptEditSection(null); addToast("Prompt saved", "success"); }} onReset={() => { promptOverrides.clearOverride(TOOL_ID, promptEditSection); addToast("Prompt reset to default", "info"); }} onClose={() => setPromptEditSection(null)} />
+      )}
     </div>
   );
 }

@@ -4,15 +4,23 @@ from __future__ import annotations
 import base64
 import io
 import json
+import re
 import zipfile
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel
 
 router = APIRouter()
+
+
+def _safe_filename(name: str) -> str:
+    """Sanitize a label for use inside a ZIP archive path."""
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name)
+    cleaned = cleaned.strip('. ')
+    return cleaned or "unnamed"
 
 
 class ImageItem(BaseModel):
@@ -44,7 +52,10 @@ def _b64_to_image(data: str) -> Image.Image:
     raw = data
     if raw.startswith("data:"):
         raw = raw.split(",", 1)[1]
-    return Image.open(io.BytesIO(base64.b64decode(raw))).convert("RGBA")
+    try:
+        return Image.open(io.BytesIO(base64.b64decode(raw))).convert("RGBA")
+    except Exception as exc:
+        raise HTTPException(400, f"Invalid image data: {exc}")
 
 
 def _image_to_b64(img: Image.Image) -> str:
@@ -150,7 +161,7 @@ def create_package(body: ExportPackageRequest):
             pil_images.append((item.label, img))
             img_buf = io.BytesIO()
             img.save(img_buf, "PNG")
-            zf.writestr(f"images/{item.label}.png", img_buf.getvalue())
+            zf.writestr(f"images/{_safe_filename(item.label)}.png", img_buf.getvalue())
 
         # Ref sheet
         if body.include_ref_sheet and pil_images:
@@ -191,7 +202,9 @@ def create_package(body: ExportPackageRequest):
         zf.writestr("README.txt", readme)
 
     buf.seek(0)
-    filename = f"{body.character_name}_{body.tool_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    safe_name = _safe_filename(body.character_name)
+    safe_tool = _safe_filename(body.tool_name)
+    filename = f"{safe_name}_{safe_tool}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
     return Response(
         content=buf.getvalue(),
         media_type="application/zip",

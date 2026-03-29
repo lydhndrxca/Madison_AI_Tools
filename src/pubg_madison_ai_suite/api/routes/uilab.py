@@ -469,7 +469,27 @@ class UIGenRequest(BaseModel):
     model_id: Optional[str] = None
     style_context: Optional[str] = None
     fusion_context: Optional[str] = None
+    fusion_image_1_b64: Optional[str] = None
+    fusion_image_2_b64: Optional[str] = None
     edit_prompt: Optional[str] = None
+    custom_sections_context: Optional[str] = None
+    custom_section_images: Optional[list[str]] = None
+
+
+class UIGenerateRequest(UIGenRequest):
+    pass
+
+
+class UIScrollbarGenerateRequest(UIGenRequest):
+    pass
+
+
+class UIFontGenerateRequest(UIGenRequest):
+    pass
+
+
+class UIGridGenerateRequest(UIGenRequest):
+    pass
 
 
 class UIGenSingleResponse(BaseModel):
@@ -504,10 +524,14 @@ def _do_generate_single(req: UIGenRequest) -> UIGenSingleResponse:
 
     # Edit mode: send the reference image + edit prompt directly
     if req.edit_prompt and req.reference_image_b64:
-        edit_contents: list = [
-            core.b64_to_image(req.reference_image_b64),
-            req.edit_prompt,
-        ]
+        edit_text = req.edit_prompt
+        if req.custom_sections_context:
+            edit_text = f"{edit_text}\n\n--- Custom Directions ---\n{req.custom_sections_context}"
+        edit_contents: list = [core.b64_to_image(req.reference_image_b64)]
+        for b64 in (req.custom_section_images or []):
+            if b64:
+                edit_contents.append(core.b64_to_image(b64))
+        edit_contents.append(edit_text)
         try:
             result = core.gemini_generate_image(
                 api_key, edit_contents, aspect_ratio="1:1", image_size="4K",
@@ -557,11 +581,20 @@ def _do_generate_single(req: UIGenRequest) -> UIGenSingleResponse:
         no_color=req.no_color,
     )
 
+    if req.custom_sections_context:
+        prompt += f"\n\n--- Custom Directions ---\n{req.custom_sections_context}"
+
     contents: list = []
     if req.ref_images:
         for b64 in req.ref_images:
             if b64:
                 contents.append(core.b64_to_image(b64))
+    for b64 in [req.fusion_image_1_b64, req.fusion_image_2_b64]:
+        if b64:
+            contents.append(core.b64_to_image(b64))
+    for b64 in (req.custom_section_images or []):
+        if b64:
+            contents.append(core.b64_to_image(b64))
     if req.reference_image_b64:
         contents.append(core.b64_to_image(req.reference_image_b64))
     contents.append(f"{prompt}\n\nGenerate this UI element.")
@@ -649,11 +682,20 @@ def _do_generate_scrollbar_component(req: UIGenRequest, component: str) -> UIGen
         no_color=req.no_color,
     )
 
+    if req.custom_sections_context:
+        prompt += f"\n\n--- Custom Directions ---\n{req.custom_sections_context}"
+
     contents: list = []
     if req.ref_images:
         for b64 in req.ref_images:
             if b64:
                 contents.append(core.b64_to_image(b64))
+    for b64 in [req.fusion_image_1_b64, req.fusion_image_2_b64]:
+        if b64:
+            contents.append(core.b64_to_image(b64))
+    for b64 in (req.custom_section_images or []):
+        if b64:
+            contents.append(core.b64_to_image(b64))
     if req.reference_image_b64:
         contents.append(core.b64_to_image(req.reference_image_b64))
     contents.append(f"{prompt}\n\nGenerate this scrollbar component.")
@@ -721,11 +763,20 @@ def _do_generate_char(req: UIGenRequest, char: str) -> UIGenSingleResponse:
         no_color=req.no_color,
     )
 
+    if req.custom_sections_context:
+        prompt += f"\n\n--- Custom Directions ---\n{req.custom_sections_context}"
+
     contents: list = []
     if req.ref_images:
         for b64 in req.ref_images:
             if b64:
                 contents.append(core.b64_to_image(b64))
+    for b64 in [req.fusion_image_1_b64, req.fusion_image_2_b64]:
+        if b64:
+            contents.append(core.b64_to_image(b64))
+    for b64 in (req.custom_section_images or []):
+        if b64:
+            contents.append(core.b64_to_image(b64))
     if req.reference_image_b64:
         contents.append(core.b64_to_image(req.reference_image_b64))
     contents.append(f"{prompt}\n\nGenerate this character glyph.")
@@ -788,11 +839,20 @@ def _do_generate_grid(req: UIGenRequest) -> UIGenGridResponse:
         no_color=req.no_color,
     )
 
+    if req.custom_sections_context:
+        prompt += f"\n\n--- Custom Directions ---\n{req.custom_sections_context}"
+
     contents: list = []
     if req.ref_images:
         for b64 in req.ref_images:
             if b64:
                 contents.append(core.b64_to_image(b64))
+    for b64 in [req.fusion_image_1_b64, req.fusion_image_2_b64]:
+        if b64:
+            contents.append(core.b64_to_image(b64))
+    for b64 in (req.custom_section_images or []):
+        if b64:
+            contents.append(core.b64_to_image(b64))
     if req.reference_image_b64:
         contents.append(core.b64_to_image(req.reference_image_b64))
     contents.append(f"{prompt}\n\nGenerate this 4x4 sprite sheet.")
@@ -843,28 +903,28 @@ def _do_generate_grid(req: UIGenRequest) -> UIGenGridResponse:
 # ---------------------------------------------------------------------------
 
 @router.post("/generate", response_model=UIGenSingleResponse)
-async def generate(req: UIGenRequest):
+async def generate(req: UIGenerateRequest):
     """Generate a single UI element."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(_pool, _do_generate_single, req)
 
 
 @router.post("/generate-scrollbar", response_model=UIGenSingleResponse)
-async def generate_scrollbar(req: UIGenRequest, component: str = "track"):
+async def generate_scrollbar(req: UIScrollbarGenerateRequest, component: str = "track"):
     """Generate a single scrollbar component."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(_pool, _do_generate_scrollbar_component, req, component)
 
 
 @router.post("/generate-char", response_model=UIGenSingleResponse)
-async def generate_char(req: UIGenRequest, char: str = "A"):
+async def generate_char(req: UIFontGenerateRequest, char: str = "A"):
     """Generate a single font/number character."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(_pool, _do_generate_char, req, char)
 
 
 @router.post("/generate-grid", response_model=UIGenGridResponse)
-async def generate_grid(req: UIGenRequest):
+async def generate_grid(req: UIGridGenerateRequest):
     """Generate a 4x4 grid of UI elements."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(_pool, _do_generate_grid, req)

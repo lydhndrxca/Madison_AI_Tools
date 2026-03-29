@@ -5,16 +5,16 @@ import base64
 import io
 
 import numpy as np
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from PIL import Image
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 router = APIRouter()
 
 
 class ExtractRequest(BaseModel):
     image_b64: str
-    num_colors: int = 6
+    num_colors: int = Field(default=6, ge=1, le=20)
 
 
 class ColorSwatch(BaseModel):
@@ -53,8 +53,11 @@ def extract_palette(body: ExtractRequest) -> list[dict]:
     raw = body.image_b64
     if raw.startswith("data:"):
         raw = raw.split(",", 1)[1]
-    img_data = base64.b64decode(raw)
-    img = Image.open(io.BytesIO(img_data)).convert("RGB")
+    try:
+        img_data = base64.b64decode(raw)
+        img = Image.open(io.BytesIO(img_data)).convert("RGB")
+    except Exception as exc:
+        raise HTTPException(400, f"Invalid image data: {exc}")
 
     # Downsample for speed
     img.thumbnail((100, 100))

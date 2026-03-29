@@ -204,24 +204,26 @@ async def transcribe(body: TranscribeRequest):
         context_hint = ""
         if body.context.strip():
             context_hint = (
-                f'\nThe speaker was previously saying: "{body.context.strip()}"\n'
-                "Use this to resolve ambiguous words and maintain coherent flow.\n"
+                f"\nFor spelling/context clues only (do NOT repeat this), "
+                f"the speaker was recently saying: \"{body.context.strip()}\"\n"
             )
 
         prompt = (
             f"You are a professional speech-to-text transcriber for {lang_name}.\n"
             f"{context_hint}"
-            "Transcribe the following audio clip into clean, accurate written text.\n\n"
+            "Transcribe ONLY what you actually hear in the audio clip below.\n\n"
             "Rules:\n"
             "- Produce ONLY the transcribed text. No timestamps, no speaker labels, no commentary.\n"
+            "- ONLY transcribe words that are actually spoken in the audio. Never guess, invent, or repeat previous context.\n"
             "- Clean up filler words (uh, um, like, you know) — remove them unless they carry meaning.\n"
             "- Remove false starts and repeated stutters (e.g. 'don't don't do' → 'don't do').\n"
             "- Fix obvious mishearings using surrounding context (e.g. 'are true' likely means 'our tool').\n"
             "- Preserve the speaker's intended meaning exactly — do not rephrase or summarize.\n"
             "- Use proper capitalization, punctuation, and natural sentence structure.\n"
             "- Proper nouns and technical terms should be spelled correctly when inferable from context.\n"
-            "- If the audio is completely silent or fully unintelligible, return an empty string.\n"
-            "- Do NOT add any preamble like 'Here is the transcription:' — output ONLY the text."
+            "- If the audio is completely silent or fully unintelligible, return ONLY an empty string.\n"
+            "- Do NOT add any preamble like 'Here is the transcription:' — output ONLY the text.\n"
+            "- CRITICAL: Never output text from the context hint above. Only transcribe what is in the audio."
         )
         result = core.rest_generate_text_multimodal(
             api_key, "gemini-2.0-flash", [audio_part, prompt], timeout=30,
@@ -259,3 +261,45 @@ async def send_to_ps(body: SendToPsRequest):
         results.append({"label": label, **result})
     all_ok = all(r.get("ok") for r in results)
     return {"ok": all_ok, "results": results}
+
+
+# ---------------------------------------------------------------------------
+# AI Review (Prompt Builder gut-check)
+# ---------------------------------------------------------------------------
+
+class AiReviewRequest(BaseModel):
+    section_name: str = ""
+    block_count: int = 0
+    block_types: list[str] = []
+    prompt_output: str = ""
+    tools: list[str] = []
+
+
+@router.post("/ai-review")
+async def ai_review(body: AiReviewRequest):
+    api_key = core.get_api_key()
+    if not api_key:
+        return {"text": "No API key configured — cannot perform AI review."}
+
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-2.0-flash")
+
+        prompt = (
+            "You are reviewing a user-created prompt section for an AI concept art tool.\n"
+            f"Section name: {body.section_name}\n"
+            f"Target tools: {', '.join(body.tools)}\n"
+            f"Block count: {body.block_count}, types: {', '.join(body.block_types)}\n\n"
+            f"The prompt text this section produces:\n---\n{body.prompt_output}\n---\n\n"
+            "Give a brief, friendly gut-check (3-5 sentences):\n"
+            "- Is the prompt clear and likely to produce good results?\n"
+            "- Any suggestions for improvement?\n"
+            "- Any potential issues (conflicting instructions, vague terms)?\n"
+            "Keep it concise and constructive."
+        )
+
+        resp = model.generate_content(prompt)
+        return {"text": resp.text}
+    except Exception as exc:
+        return {"text": f"AI review failed: {exc}"}

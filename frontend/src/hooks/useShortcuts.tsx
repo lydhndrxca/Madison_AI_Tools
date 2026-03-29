@@ -102,6 +102,7 @@ const DEFAULT_SHORTCUTS: ShortcutDef[] = [
   { id: "uiShowXml", label: "Show XML", category: "uilab", defaultKeys: "Ctrl+Shift+X", currentKeys: "Ctrl+Shift+X" },
 
   // Image Viewer tools
+  { id: "toolSelect", label: "Select (Pointer)", category: "imageViewer", defaultKeys: "V", currentKeys: "V", singleKey: true },
   { id: "toolBrush", label: "Brush Tool", category: "imageViewer", defaultKeys: "B", currentKeys: "B", singleKey: true },
   { id: "toolEraser", label: "Eraser Tool", category: "imageViewer", defaultKeys: "E", currentKeys: "E", singleKey: true },
   { id: "toolMarquee", label: "Marquee Select", category: "imageViewer", defaultKeys: "M", currentKeys: "M", singleKey: true },

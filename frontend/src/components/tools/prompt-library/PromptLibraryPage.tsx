@@ -205,8 +205,8 @@ export function PromptLibraryPage() {
                     {t.text}
                   </p>
                   <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                    {t.tags.map((tag) => (
-                      <span key={tag} className="text-[9px] px-1.5 py-0.5 rounded inline-flex items-center gap-0.5" style={{ background: "rgba(255,255,255,0.06)", color: "var(--color-text-muted)" }}>
+                    {t.tags.map((tag, tagIdx) => (
+                      <span key={`${tag}-${tagIdx}`} className="text-[9px] px-1.5 py-0.5 rounded inline-flex items-center gap-0.5" style={{ background: "rgba(255,255,255,0.06)", color: "var(--color-text-muted)" }}>
                         <Tag className="h-2 w-2" />{tag}
                       </span>
                     ))}

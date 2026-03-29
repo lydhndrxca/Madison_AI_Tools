@@ -10,7 +10,6 @@ interface ImageEntry {
   filename: string;
   width: number;
   height: number;
-  thumbnail: string;
   model: string;
   view: string;
   generation_type: string;
@@ -374,9 +373,12 @@ export function GeneratedImagesPage() {
                     </div>
 
                     <div className="relative" style={{ aspectRatio: "1", background: "#2a2a2a" }}>
-                      {img.thumbnail && (
-                        <img src={`data:image/png;base64,${img.thumbnail}`} alt={img.filename} className="w-full h-full object-contain" />
-                      )}
+                      <img
+                        src={`${window.location.protocol === "file:" ? "http://127.0.0.1:8420" : ""}/api/gallery/thumb?tool=${encodeURIComponent(selectedTool)}&date=${encodeURIComponent(selectedDate)}&filename=${encodeURIComponent(img.filename)}`}
+                        alt={img.filename}
+                        className="w-full h-full object-contain"
+                        loading="lazy"
+                      />
                       <div className="absolute inset-0 opacity-0 group-hover:opacity-100 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.35)", transition: "opacity 150ms" }}>
                         <span className="text-[10px] font-medium px-2 py-1 rounded" style={{ background: "rgba(0,0,0,0.7)", color: "var(--color-foreground)" }}>View</span>
                       </div>

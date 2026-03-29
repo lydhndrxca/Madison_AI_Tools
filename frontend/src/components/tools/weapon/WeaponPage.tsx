@@ -6,6 +6,7 @@ import { TabBar } from "@/components/shared/TabBar";
 import { PanelGroup, Panel, PanelResizeHandle } from "react-resizable-panels";
 import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
+import { useFavorites } from "@/hooks/FavoritesContext";
 import { useSessionRegister, useSessionContext } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
 import { XmlModal } from "@/components/shared/XmlModal";
@@ -64,6 +65,7 @@ export function WeaponPage() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { addToast } = useToastContext();
+  const { addFavorite, removeFavorite, isFavorited, getFavoriteId } = useFavorites();
 
   useEffect(() => {
     apiFetch<{ models: ModelInfo[]; current: string }>("/system/models").then((r) => {
@@ -431,6 +433,8 @@ export function WeaponPage() {
               imageIndex={currentIdx}
               onPrevImage={handlePrevImage}
               onNextImage={handleNextImage}
+              isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
+              onToggleFavorite={currentSrc ? () => { const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "weapon", label: activeTab || "main", source: "viewer" }); } : undefined}
             />
             <div className="flex items-center gap-1 px-2 py-1 shrink-0 overflow-x-auto" style={{ borderTop: "1px solid var(--color-border)" }}>
               {["side", "threequarter", "front", "back", "top", "bottom"].map((view) => {

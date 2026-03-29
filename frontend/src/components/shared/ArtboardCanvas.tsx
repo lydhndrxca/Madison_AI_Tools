@@ -124,6 +124,42 @@ export function ArtboardCanvas() {
   }, [setViewport]);
 
   // ---------------------------------------------------------------------------
+  // Fit viewport to show all items
+  // ---------------------------------------------------------------------------
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+
+  const fitToExtents = useCallback(() => {
+    const cur = itemsRef.current;
+    if (cur.length === 0) { setViewport({ zoom: 1, panX: 0, panY: 0 }); return; }
+    const el = containerRef.current; if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const it of cur) {
+      minX = Math.min(minX, it.x);
+      minY = Math.min(minY, it.y);
+      maxX = Math.max(maxX, it.x + (it.w || 100));
+      maxY = Math.max(maxY, it.y + (it.h || 100));
+    }
+    const bw = maxX - minX;
+    const bh = maxY - minY;
+    if (bw <= 0 || bh <= 0) return;
+
+    const PAD = 60;
+    const scaleX = (r.width - PAD * 2) / bw;
+    const scaleY = (r.height - PAD * 2) / bh;
+    const nz = Math.min(scaleX, scaleY, 2);
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    setViewport({ zoom: nz, panX: -cx * nz, panY: -cy * nz });
+  }, [setViewport]);
+
+  // Auto-fit when component mounts (tab opened)
+  useEffect(() => { requestAnimationFrame(() => fitToExtents()); }, [fitToExtents]);
+
+  // ---------------------------------------------------------------------------
   // Coordinate helpers
   // ---------------------------------------------------------------------------
   const screenToWorld = useCallback((cX: number, cY: number) => {
@@ -388,12 +424,12 @@ export function ArtboardCanvas() {
       else if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) { e.preventDefault(); redo(); }
       else if ((e.ctrlKey || e.metaKey) && e.key === "a") { e.preventDefault(); selectAll(); }
       else if ((e.ctrlKey || e.metaKey) && e.key === "c") { e.preventDefault(); doCopy(); }
-      else if ((e.ctrlKey || e.metaKey) && e.key === "v") { e.preventDefault(); doPaste(); }
       else if (e.key === "Escape") { clearSelection(); setEditingText(null); }
+      else if (e.key === "Home") { e.preventDefault(); fitToExtents(); }
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [selection, removeItems, undo, redo, selectAll, clearSelection, doCopy, doPaste]);
+  }, [selection, removeItems, undo, redo, selectAll, clearSelection, doCopy, fitToExtents]);
 
   // Native paste event for direct image paste from clipboard
   useEffect(() => {
@@ -403,15 +439,18 @@ export function ArtboardCanvas() {
       for (const it of Array.from(e.clipboardData.items)) {
         if (it.type.startsWith("image/")) {
           e.preventDefault(); const f = it.getAsFile(); if (!f) continue;
+          let tx = 0, ty = 0;
+          const el = containerRef.current;
+          if (el) { const rect = el.getBoundingClientRect(); const c = screenToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2); tx = c.wx; ty = c.wy; }
           const r = new FileReader();
-          r.onload = () => ingestImage(String(r.result), 0, 0);
+          r.onload = () => ingestImage(String(r.result), tx, ty);
           r.readAsDataURL(f); return;
         }
       }
     };
     window.addEventListener("paste", h);
     return () => window.removeEventListener("paste", h);
-  }, [ingestImage]);
+  }, [ingestImage, screenToWorld]);
 
   // ---------------------------------------------------------------------------
   // Derived render state
@@ -565,9 +604,17 @@ export function ArtboardCanvas() {
         {marqueeRect && marqueeRect.width > 2 && marqueeRect.height > 2 && <div style={{ position: "fixed", left: marqueeRect.left, top: marqueeRect.top, width: marqueeRect.width, height: marqueeRect.height, background: "rgba(80,160,255,0.12)", border: "1px solid rgba(80,160,255,0.5)", pointerEvents: "none", zIndex: 9990 }} />}
 
         {/* Info bar */}
-        <div className="absolute bottom-2 left-3 flex items-center gap-2 px-2.5 py-1 rounded-md pointer-events-none" style={{ background: "rgba(0,0,0,0.5)", zIndex: 10 }}>
+        <div className="absolute bottom-2 left-3 flex items-center gap-2 px-2.5 py-1 rounded-md" style={{ background: "rgba(0,0,0,0.5)", zIndex: 10 }}>
           <span className="text-[10px] font-mono" style={{ color: "rgba(255,255,255,0.5)" }}>{Math.round(zoom * 100)}%</span>
           <span className="text-[10px] font-mono" style={{ color: "rgba(255,255,255,0.35)" }}>{items.length} item{items.length !== 1 ? "s" : ""}{selection.size > 0 ? ` \u00b7 ${selection.size} selected` : ""}</span>
+          {items.length > 0 && (
+            <button
+              onClick={fitToExtents}
+              className="text-[10px] font-mono px-1.5 py-0.5 rounded cursor-pointer"
+              style={{ color: "rgba(255,255,255,0.5)", background: "rgba(255,255,255,0.08)", border: "none" }}
+              title="Fit all items in view (Home)"
+            >Fit</button>
+          )}
         </div>
       </div>
 

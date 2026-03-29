@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Loader2, X, Trash2, Clock, CheckCircle, AlertCircle, XCircle, ListOrdered } from "lucide-react";
 import { apiFetch, useWebSocket } from "@/hooks/useApi";
 
@@ -36,7 +36,6 @@ interface QueuePanelProps {
 
 export function QueuePanel({ open, onClose }: QueuePanelProps) {
   const [jobs, setJobs] = useState<QueueJob[]>([]);
-  const panelRef = useRef<HTMLDivElement>(null);
 
   const handleWsMessage = useCallback((msg: { type: string; data: Record<string, unknown> }) => {
     if (msg.type === "queue_progress") {
@@ -50,7 +49,7 @@ export function QueuePanel({ open, onClose }: QueuePanelProps) {
   const load = useCallback(async () => {
     try {
       const list = await apiFetch<QueueJob[]>("/queue/jobs");
-      setJobs(list);
+      if (Array.isArray(list)) setJobs(list);
     } catch { /* */ }
   }, []);
 
@@ -77,7 +76,6 @@ export function QueuePanel({ open, onClose }: QueuePanelProps) {
 
   return (
     <div
-      ref={panelRef}
       className="fixed right-4 bottom-4 z-[9990] w-80 max-h-96 rounded-lg overflow-hidden flex flex-col shadow-2xl"
       style={{ background: "var(--color-card)", border: "1px solid var(--color-border)" }}
     >

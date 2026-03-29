@@ -37,11 +37,18 @@ function PromptLibraryPopup({ tool, currentText = "", onInject, onClose }: Promp
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
+    const handleClickOutside = (e: MouseEvent) => {
       if (popupRef.current && !popupRef.current.contains(e.target as Node)) onClose();
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
   }, [onClose]);
 
   const handleSave = useCallback(async () => {
@@ -124,8 +131,8 @@ function PromptLibraryPopup({ tool, currentText = "", onInject, onClose }: Promp
                   <p className="text-[10px] mt-0.5 line-clamp-2" style={{ color: "var(--color-text-muted)" }}>{t.text}</p>
                   {t.tags.length > 0 && (
                     <div className="flex gap-1 mt-1 flex-wrap">
-                      {t.tags.map((tag) => (
-                        <span key={tag} className="text-[8px] px-1 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.06)", color: "var(--color-text-muted)" }}>
+                      {t.tags.map((tag, tagIdx) => (
+                        <span key={`${tag}-${tagIdx}`} className="text-[8px] px-1 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.06)", color: "var(--color-text-muted)" }}>
                           <Tag className="h-2 w-2 inline mr-0.5" />{tag}
                         </span>
                       ))}
