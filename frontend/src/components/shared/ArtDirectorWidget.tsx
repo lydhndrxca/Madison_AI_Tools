@@ -1,7 +1,7 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
   Bot, X, Settings, Send, Trash2, ChevronDown, ChevronUp,
-  Zap, Brain, Power, Save, Mic,
+  Zap, Brain, Power, Save, ImagePlus, Paperclip, Check, Sparkles,
 } from "lucide-react";
 import { useArtDirector, type ChatMessage } from "@/hooks/ArtDirectorContext";
 
@@ -19,27 +19,137 @@ function TypingDots() {
   );
 }
 
-function MessageBubble({ msg }: { msg: ChatMessage }) {
+interface FeedbackChunk {
+  label: string;
+  body: string;
+  fullText: string;
+}
+
+function parseFeedbackChunks(text: string): FeedbackChunk[] {
+  const chunks: FeedbackChunk[] = [];
+  const regex = /\*\*([^*]+)\*\*:\s*/g;
+  let match: RegExpExecArray | null;
+  const positions: { label: string; start: number; bodyStart: number }[] = [];
+
+  while ((match = regex.exec(text)) !== null) {
+    positions.push({ label: match[1].trim(), start: match.index, bodyStart: match.index + match[0].length });
+  }
+
+  for (let i = 0; i < positions.length; i++) {
+    const end = i + 1 < positions.length ? positions[i + 1].start : text.length;
+    const body = text.slice(positions[i].bodyStart, end).trim();
+    const fullText = text.slice(positions[i].start, end).trim();
+    if (body.length > 0) {
+      chunks.push({ label: positions[i].label, body, fullText });
+    }
+  }
+  return chunks;
+}
+
+function MessageBubble({ msg, onApply }: { msg: ChatMessage; onApply: ((suggestion: string) => void) | null }) {
   const isUser = msg.role === "user";
+  const [appliedChunks, setAppliedChunks] = useState<Set<number>>(new Set());
+
+  const chunks = useMemo(() => {
+    if (isUser || !msg.text) return [];
+    return parseFeedbackChunks(msg.text);
+  }, [isUser, msg.text]);
+
+  const hasChunks = chunks.length > 0;
+
+  const handleApply = useCallback((idx: number, chunk: FeedbackChunk) => {
+    if (!onApply) return;
+    onApply(`${chunk.label}: ${chunk.body}`);
+    setAppliedChunks((prev) => new Set(prev).add(idx));
+  }, [onApply]);
+
+  const handleApplyAll = useCallback(() => {
+    if (!onApply || chunks.length === 0) return;
+    const allText = chunks.map((c) => `${c.label}: ${c.body}`).join("\n");
+    onApply(allText);
+    setAppliedChunks(new Set(chunks.map((_, i) => i)));
+  }, [onApply, chunks]);
+
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-2`}>
       <div className="max-w-[85%]">
         {!isUser && (
           <div className="flex items-center gap-1 mb-0.5">
-            <Bot className="h-3 w-3" style={{ color: "var(--color-accent)" }} />
+            <Bot className="h-3 w-3" style={{ color: "var(--color-text-muted)" }} />
             <span className="text-[9px] font-medium" style={{ color: "var(--color-text-muted)" }}>Director</span>
           </div>
         )}
-        <div
-          className="px-2.5 py-1.5 rounded-lg text-[11px] leading-relaxed whitespace-pre-wrap"
-          style={{
-            background: isUser ? "rgba(var(--color-accent-rgb, 59,130,246), 0.15)" : "rgba(255,255,255,0.05)",
-            color: "var(--color-text-primary)",
-            border: `1px solid ${isUser ? "rgba(var(--color-accent-rgb, 59,130,246), 0.25)" : "rgba(255,255,255,0.08)"}`,
-          }}
-        >
-          {msg.text}
-        </div>
+
+        {/* User attached images */}
+        {isUser && msg.attachedImages && msg.attachedImages.length > 0 && (
+          <div className="flex gap-1 mb-1 justify-end flex-wrap">
+            {msg.attachedImages.map((img, i) => (
+              <img key={i} src={img} alt="" className="h-12 w-12 rounded object-cover" style={{ border: "1px solid var(--color-border)" }} />
+            ))}
+          </div>
+        )}
+
+        {hasChunks ? (
+          <div className="space-y-1.5">
+            {chunks.map((chunk, idx) => (
+              <div
+                key={idx}
+                className="px-2.5 py-1.5 rounded-lg text-[11px] leading-relaxed"
+                style={{
+                  background: appliedChunks.has(idx) ? "rgba(34,197,94,0.08)" : "rgba(255,255,255,0.05)",
+                  border: `1px solid ${appliedChunks.has(idx) ? "rgba(34,197,94,0.2)" : "rgba(255,255,255,0.08)"}`,
+                }}
+              >
+                <div className="flex items-start gap-1.5">
+                  <div className="flex-1 min-w-0">
+                    <span className="font-semibold" style={{ color: "var(--color-text-primary)" }}>{chunk.label}: </span>
+                    <span style={{ color: "var(--color-text-secondary)" }}>{chunk.body}</span>
+                  </div>
+                  {onApply && (
+                    <button
+                      onClick={() => handleApply(idx, chunk)}
+                      disabled={appliedChunks.has(idx)}
+                      className="shrink-0 p-1 rounded cursor-pointer disabled:cursor-default transition-colors mt-0.5"
+                      style={{
+                        color: appliedChunks.has(idx) ? "#22c55e" : "var(--color-text-muted)",
+                        background: appliedChunks.has(idx) ? "rgba(34,197,94,0.1)" : "transparent",
+                      }}
+                      title={appliedChunks.has(idx) ? "Applied" : "Apply this suggestion"}
+                    >
+                      {appliedChunks.has(idx) ? <Check className="h-3 w-3" /> : <Sparkles className="h-3 w-3" />}
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+            {onApply && chunks.length > 1 && appliedChunks.size < chunks.length && (
+              <button
+                onClick={handleApplyAll}
+                className="w-full px-2 py-1 text-[10px] rounded cursor-pointer font-medium flex items-center justify-center gap-1"
+                style={{
+                  background: "rgba(255,255,255,0.06)",
+                  color: "var(--color-text-secondary)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                }}
+                title="Apply all suggestions to the edit prompt"
+              >
+                <Sparkles className="h-3 w-3" /> Apply All to Edit Prompt
+              </button>
+            )}
+          </div>
+        ) : (
+          <div
+            className="px-2.5 py-1.5 rounded-lg text-[11px] leading-relaxed whitespace-pre-wrap"
+            style={{
+              background: isUser ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.05)",
+              color: "var(--color-text-primary)",
+              border: `1px solid ${isUser ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.08)"}`,
+            }}
+          >
+            {msg.text}
+          </div>
+        )}
+
         <div className="text-[8px] mt-0.5 px-1" style={{ color: "var(--color-text-muted)" }}>
           {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
         </div>
@@ -52,15 +162,27 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
   const {
     config, updateConfig,
     messages, sendMessage, clearChat, isTyping, cancelTyping,
-    saveTranscript,
+    saveTranscript, onApplyFeedback,
   } = useArtDirector();
 
   const [expanded, setExpanded] = useState(false);
   const [input, setInput] = useState("");
   const [quickCtx, setQuickCtx] = useState("");
   const [showQuickCtx, setShowQuickCtx] = useState(false);
+  const [pendingImages, setPendingImages] = useState<string[]>([]);
+  const [lastSeenCount, setLastSeenCount] = useState(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const modelMessages = messages.filter((m) => m.role === "model" && m.text);
+  const unreadCount = expanded ? 0 : Math.max(0, modelMessages.length - lastSeenCount);
+
+  useEffect(() => {
+    if (expanded) {
+      setLastSeenCount(modelMessages.length);
+    }
+  }, [expanded, modelMessages.length]);
 
   useEffect(() => {
     if (expanded) chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -74,10 +196,11 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
     const text = quickCtx.trim()
       ? `[Context: ${quickCtx.trim()}]\n\n${input.trim()}`
       : input.trim();
-    if (!text) return;
-    sendMessage(text);
+    if (!text && pendingImages.length === 0) return;
+    sendMessage(text || "(see attached images)", pendingImages.length > 0 ? pendingImages : undefined);
     setInput("");
-  }, [input, quickCtx, sendMessage]);
+    setPendingImages([]);
+  }, [input, quickCtx, pendingImages, sendMessage]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -85,6 +208,42 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
       handleSend();
     }
   }, [handleSend]);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith("image/")) {
+        e.preventDefault();
+        const file = items[i].getAsFile();
+        if (!file) continue;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const b64 = reader.result as string;
+          setPendingImages((prev) => [...prev, b64]);
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+  }, []);
+
+  const handleFileAdd = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    Array.from(files).forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const b64 = reader.result as string;
+        setPendingImages((prev) => [...prev, b64]);
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = "";
+  }, []);
+
+  const removePendingImage = useCallback((idx: number) => {
+    setPendingImages((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
 
   const handleSaveTranscript = useCallback(async () => {
     const id = await saveTranscript("general");
@@ -96,20 +255,29 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
       <div
         className="absolute bottom-3 left-3 z-30 flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer select-none transition-all hover:scale-[1.03]"
         style={{
-          background: config.enabled ? "rgba(var(--color-accent-rgb, 59,130,246), 0.15)" : "rgba(0,0,0,0.6)",
-          border: `1px solid ${config.enabled ? "rgba(var(--color-accent-rgb, 59,130,246), 0.3)" : "rgba(255,255,255,0.1)"}`,
+          background: config.enabled ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.6)",
+          border: `1px solid ${config.enabled ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.1)"}`,
           backdropFilter: "blur(8px)",
         }}
         onClick={() => setExpanded(true)}
         title="Open AI Art Director"
       >
-        <Bot
-          className="h-5 w-5"
-          style={{
-            color: config.enabled ? "var(--color-accent)" : "var(--color-text-muted)",
-            filter: config.enabled ? "drop-shadow(0 0 4px rgba(59,130,246,0.5))" : "none",
-          }}
-        />
+        <div className="relative">
+          <Bot
+            className="h-5 w-5"
+            style={{
+              color: config.enabled ? "var(--color-text-primary)" : "var(--color-text-muted)",
+            }}
+          />
+          {unreadCount > 0 && (
+            <span
+              className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center rounded-full text-[8px] font-bold leading-none px-0.5"
+              style={{ background: "#ef4444", color: "#fff" }}
+            >
+              {unreadCount > 9 ? "9+" : unreadCount}
+            </span>
+          )}
+        </div>
         <div>
           <div className="text-[11px] font-semibold" style={{ color: config.enabled ? "var(--color-foreground)" : "var(--color-text-secondary)" }}>
             Art Director
@@ -126,8 +294,8 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
     <div
       className="absolute bottom-3 left-3 z-30 flex flex-col rounded-lg overflow-hidden"
       style={{
-        width: 360,
-        height: 440,
+        width: 380,
+        height: 480,
         background: "var(--color-card)",
         border: "1px solid var(--color-border)",
         boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
@@ -135,7 +303,7 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
     >
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2 shrink-0" style={{ borderBottom: "1px solid var(--color-border)" }}>
-        <Bot className="h-4 w-4" style={{ color: "var(--color-accent)" }} />
+        <Bot className="h-4 w-4" style={{ color: "var(--color-text-muted)" }} />
         <span className="text-[12px] font-semibold flex-1" style={{ color: "var(--color-foreground)" }}>
           {config.persona.name || "Art Director"}
         </span>
@@ -145,9 +313,9 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
           onClick={() => updateConfig({ mode: config.mode === "fast" ? "deep" : "fast" })}
           className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] cursor-pointer"
           style={{
-            background: config.mode === "deep" ? "rgba(168,85,247,0.15)" : "rgba(250,204,21,0.15)",
-            color: config.mode === "deep" ? "#a855f7" : "#facc15",
-            border: `1px solid ${config.mode === "deep" ? "rgba(168,85,247,0.3)" : "rgba(250,204,21,0.3)"}`,
+            background: "rgba(255,255,255,0.08)",
+            color: "var(--color-text-secondary)",
+            border: "1px solid var(--color-border)",
           }}
           title={config.mode === "deep" ? "Deep thinking (Gemini 2.5 Pro)" : "Fast mode (Gemini 2.0 Flash)"}
         >
@@ -184,13 +352,13 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
             <Bot className="h-8 w-8" style={{ color: "var(--color-text-muted)", opacity: 0.3 }} />
             <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
               {config.enabled
-                ? "Send a message to start getting art direction."
+                ? "Send a message or paste an image to start."
                 : "Turn on the Art Director to start chatting."}
             </p>
           </div>
         )}
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} msg={msg} />
+          <MessageBubble key={msg.id} msg={msg} onApply={msg.role === "model" ? onApplyFeedback : null} />
         ))}
         {isTyping && messages.length > 0 && messages[messages.length - 1].text === "" && (
           <div className="flex justify-start mb-2">
@@ -201,6 +369,24 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
         )}
         <div ref={chatEndRef} />
       </div>
+
+      {/* Pending images preview */}
+      {pendingImages.length > 0 && (
+        <div className="flex gap-1.5 px-3 py-1.5 overflow-x-auto shrink-0" style={{ borderTop: "1px solid var(--color-border)" }}>
+          {pendingImages.map((img, i) => (
+            <div key={i} className="relative shrink-0 group">
+              <img src={img} alt="" className="h-10 w-10 rounded object-cover" style={{ border: "1px solid var(--color-border)" }} />
+              <button
+                onClick={() => removePendingImage(i)}
+                className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity"
+                style={{ background: "rgba(0,0,0,0.8)", color: "#f06060", fontSize: 8 }}
+              >
+                <X className="h-2 w-2" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Quick context */}
       {showQuickCtx && (
@@ -220,11 +406,21 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
         <button
           onClick={() => setShowQuickCtx(!showQuickCtx)}
           className="p-1 rounded cursor-pointer shrink-0"
-          style={{ color: showQuickCtx ? "var(--color-accent)" : "var(--color-text-muted)" }}
+          style={{ color: showQuickCtx ? "var(--color-text-primary)" : "var(--color-text-muted)" }}
           title="Toggle quick context"
         >
           {showQuickCtx ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
         </button>
+
+        <button
+          onClick={() => fileRef.current?.click()}
+          className="p-1 rounded cursor-pointer shrink-0"
+          style={{ color: "var(--color-text-muted)" }}
+          title="Attach image"
+        >
+          <Paperclip className="h-3.5 w-3.5" />
+        </button>
+        <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileAdd} />
 
         <input
           ref={inputRef}
@@ -235,6 +431,7 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
         />
 
         {isTyping ? (
@@ -244,9 +441,9 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
         ) : (
           <button
             onClick={handleSend}
-            disabled={!config.enabled || !input.trim()}
+            disabled={!config.enabled || (!input.trim() && pendingImages.length === 0)}
             className="p-1.5 rounded cursor-pointer shrink-0 disabled:opacity-30"
-            style={{ color: "var(--color-accent)" }}
+            style={{ color: "var(--color-text-primary)" }}
             title="Send"
           >
             <Send className="h-3.5 w-3.5" />

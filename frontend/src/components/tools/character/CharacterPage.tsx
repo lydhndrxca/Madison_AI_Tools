@@ -575,7 +575,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
 
   const [description, setDescription] = useState("");
   const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
-  const { setCurrentImage, setAttributesContext } = useArtDirector();
+  const { setCurrentImage, setAttributesContext, setOnApplyFeedback } = useArtDirector();
   const [editPrompt, setEditPrompt] = useState("");
   const [age, setAge] = useState("");
   const [race, setRace] = useState("");
@@ -2148,6 +2148,15 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
       setAttributesContext(description || "");
     }
   }, [active, description, setAttributesContext]);
+
+  useEffect(() => {
+    if (active) {
+      setOnApplyFeedback(() => (suggestion: string) => {
+        setEditPrompt((prev) => prev ? `${prev}\n${suggestion}` : suggestion);
+      });
+      return () => setOnApplyFeedback(null);
+    }
+  }, [active, setOnApplyFeedback]);
 
   // --- Session save/load ---
   useSessionRegister(

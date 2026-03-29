@@ -240,7 +240,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
   // Prop description
   const [description, setDescription] = useState("");
   const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
-  const { setCurrentImage, setAttributesContext } = useArtDirector();
+  const { setCurrentImage, setAttributesContext, setOnApplyFeedback } = useArtDirector();
   const [editPrompt, setEditPrompt] = useState("");
 
   // Prop attributes
@@ -1108,6 +1108,15 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
       setAttributesContext(description || "");
     }
   }, [active, description, setAttributesContext]);
+
+  useEffect(() => {
+    if (active) {
+      setOnApplyFeedback(() => (suggestion: string) => {
+        setEditPrompt((prev) => prev ? `${prev}\n${suggestion}` : suggestion);
+      });
+      return () => setOnApplyFeedback(null);
+    }
+  }, [active, setOnApplyFeedback]);
 
   // --- Randomize a single attribute ---
   const randomizeAttr = useCallback((key: string) => {

@@ -98,6 +98,17 @@ def _build_system_prompt(req: ChatRequest) -> str:
     }
     prompt += f"\n\n--- COMMUNICATION STYLE ---\n{verbosity_map.get(req.verbosity, verbosity_map['medium'])}"
 
+    prompt += (
+        "\n\n--- RESPONSE FORMAT ---\n"
+        "When giving art direction, organize your feedback into clearly labeled categories using "
+        "markdown bold headers like **Category Name**: followed by the suggestion. "
+        "For example:\n"
+        "**Color Palette**: Use warmer earth tones to ground the character.\n"
+        "**Silhouette**: The shoulder armor could be more asymmetric for visual interest.\n\n"
+        "Each bold-headed line is a discrete, actionable suggestion the artist can choose to apply. "
+        "Keep each suggestion focused on one concept."
+    )
+
     if req.attributes_context.strip():
         prompt += f"\n\n--- CURRENT CHARACTER/ASSET CONTEXT ---\n{req.attributes_context}"
 

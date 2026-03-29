@@ -33,15 +33,18 @@ export interface ChatMessage {
   role: "user" | "model";
   text: string;
   imageSnapshot?: string;
+  attachedImages?: string[];
   timestamp: number;
 }
+
+export type ApplyFeedbackFn = (suggestion: string) => void;
 
 interface ArtDirectorContextValue {
   config: ArtDirectorConfig;
   setConfig: (c: ArtDirectorConfig) => void;
   updateConfig: (partial: Partial<ArtDirectorConfig>) => void;
   messages: ChatMessage[];
-  sendMessage: (text: string) => Promise<void>;
+  sendMessage: (text: string, extraImages?: string[]) => Promise<void>;
   clearChat: () => void;
   isTyping: boolean;
   cancelTyping: () => void;
@@ -50,6 +53,8 @@ interface ArtDirectorContextValue {
   attributesContext: string;
   setAttributesContext: (ctx: string) => void;
   saveTranscript: (tool: string) => Promise<string | null>;
+  onApplyFeedback: ApplyFeedbackFn | null;
+  setOnApplyFeedback: (fn: ApplyFeedbackFn | null) => void;
 }
 
 const DEFAULT_PERSONA: PersonaConfig = {
@@ -110,6 +115,8 @@ const Ctx = createContext<ArtDirectorContextValue>({
   attributesContext: "",
   setAttributesContext: () => {},
   saveTranscript: async () => null,
+  onApplyFeedback: null,
+  setOnApplyFeedback: () => {},
 });
 
 export const useArtDirector = () => useContext(Ctx);
@@ -120,6 +127,7 @@ export function ArtDirectorProvider({ children }: { children: React.ReactNode })
   const [isTyping, setIsTyping] = useState(false);
   const [currentImage, setCurrentImage] = useState<string | null>(null);
   const [attributesContext, setAttributesContext] = useState("");
+  const [onApplyFeedback, setOnApplyFeedback] = useState<ApplyFeedbackFn | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const currentImageRef = useRef(currentImage);
   currentImageRef.current = currentImage;
@@ -148,7 +156,7 @@ export function ArtDirectorProvider({ children }: { children: React.ReactNode })
     setIsTyping(false);
   }, []);
 
-  const sendMessage = useCallback(async (text: string) => {
+  const sendMessage = useCallback(async (text: string, extraImages?: string[]) => {
     if (!text.trim()) return;
 
     const userMsg: ChatMessage = {
@@ -156,6 +164,7 @@ export function ArtDirectorProvider({ children }: { children: React.ReactNode })
       role: "user",
       text: text.trim(),
       imageSnapshot: currentImageRef.current || undefined,
+      attachedImages: extraImages?.length ? extraImages : undefined,
       timestamp: Date.now(),
     };
     setMessages((prev) => [...prev, userMsg]);
@@ -175,6 +184,10 @@ export function ArtDirectorProvider({ children }: { children: React.ReactNode })
 
     const imgB64 = currentImageRef.current?.replace(/^data:image\/[^;]+;base64,/, "") || undefined;
 
+    const inlineImages = (extraImages || []).map(
+      (img) => ({ b64: img.replace(/^data:image\/[^;]+;base64,/, ""), label: "user attachment" }),
+    );
+
     const history = messages.map((m) => ({
       role: m.role,
       text: m.text,
@@ -189,7 +202,10 @@ export function ArtDirectorProvider({ children }: { children: React.ReactNode })
           image_b64: imgB64,
           conversation_history: history,
           persona: config.persona,
-          context_images: config.contextImages.filter((ci) => ci.b64).map((ci) => ({ b64: ci.b64.replace(/^data:image\/[^;]+;base64,/, ""), label: ci.label })),
+          context_images: [
+            ...config.contextImages.filter((ci) => ci.b64).map((ci) => ({ b64: ci.b64.replace(/^data:image\/[^;]+;base64,/, ""), label: ci.label })),
+            ...inlineImages,
+          ],
           attributes_context: attributesContext,
           system_prompt: config.systemPrompt,
           verbosity: config.verbosity,
@@ -253,6 +269,7 @@ export function ArtDirectorProvider({ children }: { children: React.ReactNode })
         currentImage, setCurrentImage,
         attributesContext, setAttributesContext,
         saveTranscript,
+        onApplyFeedback, setOnApplyFeedback,
       }}
     >
       {children}

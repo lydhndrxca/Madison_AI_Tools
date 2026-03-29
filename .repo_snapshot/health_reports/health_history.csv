@@ -1,2 +1,0 @@
-report_id,audited_at,overall_health,primary_issue_type,total_loc,total_files,total_bytes,largest_file_bytes,largest_file_loc,doc_drift_count,cleanup_candidate_count,portability_status,entrypoint_status,secrets_status,duplication_status
-20260329_102917,2026-03-29T10:29:17,YELLOW,Hygiene,39562,129,1983761,170726,2900,3,5,Fail,Pass,Pass,Pass

@@ -193,7 +193,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
   const [elementType, setElementType] = useState("icon");
   const [prompt, setPrompt] = useState("");
   const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
-  const { setCurrentImage, setAttributesContext } = useArtDirector();
+  const { setCurrentImage, setAttributesContext, setOnApplyFeedback } = useArtDirector();
   const [genCount, setGenCount] = useState(1);
   const [modelId, setModelId] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -1039,6 +1039,15 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
       setAttributesContext(prompt || "");
     }
   }, [active, prompt, setAttributesContext]);
+
+  useEffect(() => {
+    if (active) {
+      setOnApplyFeedback(() => (suggestion: string) => {
+        setPrompt((prev) => prev ? `${prev}\n${suggestion}` : suggestion);
+      });
+      return () => setOnApplyFeedback(null);
+    }
+  }, [active, setOnApplyFeedback]);
 
   // ---------------------------------------------------------------------------
   // Render helpers

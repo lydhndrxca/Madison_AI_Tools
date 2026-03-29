@@ -23,7 +23,6 @@ dependencies = [
 packages = ["src/pubg_madison_ai_suite"]
 include = [
   "src/pubg_madison_ai_suite/assets/**",
-  "src/pubg_madison_ai_suite/tools/**",
   "src/pubg_madison_ai_suite/api/**",
 ]
 

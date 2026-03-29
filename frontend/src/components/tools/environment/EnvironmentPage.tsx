@@ -254,7 +254,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
   // Environment description
   const [description, setDescription] = useState("");
   const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
-  const { setCurrentImage, setAttributesContext } = useArtDirector();
+  const { setCurrentImage, setAttributesContext, setOnApplyFeedback } = useArtDirector();
   const [editPrompt, setEditPrompt] = useState("");
 
   // Environment attributes
@@ -1187,6 +1187,15 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
       setAttributesContext(description || "");
     }
   }, [active, description, setAttributesContext]);
+
+  useEffect(() => {
+    if (active) {
+      setOnApplyFeedback(() => (suggestion: string) => {
+        setEditPrompt((prev) => prev ? `${prev}\n${suggestion}` : suggestion);
+      });
+      return () => setOnApplyFeedback(null);
+    }
+  }, [active, setOnApplyFeedback]);
 
   // ---------------------------------------------------------------------------
   // Render helpers

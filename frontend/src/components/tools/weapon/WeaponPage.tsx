@@ -76,7 +76,7 @@ export function WeaponPage({ active = true }: WeaponPageProps) {
   const { addToast } = useToastContext();
   const { addFavorite, removeFavorite, isFavorited, getFavoriteId } = useFavorites();
   const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
-  const { setCurrentImage, setAttributesContext } = useArtDirector();
+  const { setCurrentImage, setAttributesContext, setOnApplyFeedback } = useArtDirector();
 
   useEffect(() => {
     apiFetch<{ models: ModelInfo[]; current: string }>("/system/models").then((r) => {
@@ -359,6 +359,15 @@ export function WeaponPage({ active = true }: WeaponPageProps) {
       setAttributesContext(editText || "");
     }
   }, [active, editText, setAttributesContext]);
+
+  useEffect(() => {
+    if (active) {
+      setOnApplyFeedback(() => (suggestion: string) => {
+        setEditText((prev) => prev ? `${prev}\n${suggestion}` : suggestion);
+      });
+      return () => setOnApplyFeedback(null);
+    }
+  }, [active, setOnApplyFeedback]);
 
   // --- Voice Director command listener ---
   const voiceCmdRef = useRef({

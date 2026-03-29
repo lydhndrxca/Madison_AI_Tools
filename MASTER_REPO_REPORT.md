@@ -3,9 +3,9 @@
 | Field | Value |
 |-------|-------|
 | Project root | `C:\Dev\Madison_AI_Tools` |
-| Generated at | 2026-03-29 10:29:17 |
+| Generated at | 2026-03-29 17:28:58 |
 | Includes | Snapshot + Health Audit + Comprehensive Repo Report + TASKS |
-| Health | **Yellow** (report_id: 20260329_102917) |
+| Health | **RED** (report_id: 20260329_172858) |
 
 ---
 
@@ -15,156 +15,173 @@
 
 | Field | Value |
 |-------|-------|
-| **Project** | PUBG Madison AI Suite |
-| **Root** | `C:\Dev\Madison_AI_Tools` |
-| **Scanned** | 2026-03-29 10:29:17 |
-| **Branch** | `main` |
-| **Last Commit** | `f8d6f7e` — feat: add Prompt Builder, custom sections, section colors… (2026-03-29) |
-| **Working Tree** | Clean |
+| Generated | 2026-03-29 17:28:58 |
+| Report ID | 20260329_172858 |
+| Repo root | `C:\Dev\Madison_AI_Tools` |
+| Branch | main |
+| HEAD | `44a7ff7` — feat: add art table improvements, Edit Prop/Environment panels, and deep search |
+| HEAD date | 2026-03-29 17:28:09 -0500 |
 
 ---
 
 ## Folder Tree (depth 4)
 
 ```
-C:\Dev\Madison_AI_Tools\
-├── ALL GENERATED IMAGES/         (runtime output, gitignored)
-│   ├── .history/
-│   ├── AI UILab/
+Madison_AI_Tools/
+├── ALL GENERATED IMAGES/
+│   ├── AI PropLab/
+│   │   └── 2026-03-29/
 │   ├── Character Generator/
-│   ├── Gemini/
-│   ├── Multiview/
-│   └── Weapon Generator/
-├── ARTBOARD_LIBRARY/             (user data, partially tracked)
+│   │   ├── 2026-03-27/
+│   │   ├── 2026-03-28/
+│   │   └── 2026-03-29/
+│   └── Default Gemini/
+│       └── 2026-03-29/
+├── ARTBOARD_LIBRARY/
+│   ├── Art Table/
 │   └── Shawn Props/
-├── config/                       (runtime config, gitignored keys)
-├── electron/                     (Electron shell)
-├── frontend/                     (React + TypeScript SPA)
-│   ├── dist/                     (build output, gitignored)
+├── config/
+├── electron/
+├── frontend/
+│   ├── public/
 │   └── src/
 │       ├── components/
-│       │   ├── shared/           (ImageViewer, ArtboardCanvas, etc.)
-│       │   ├── shell/            (AppShell, Sidebar, Settings)
-│       │   ├── tools/            (character, prop, env, uilab, etc.)
-│       │   └── ui/               (Button, Select, Card, etc.)
-│       ├── hooks/                (contexts, custom hooks)
-│       └── lib/                  (utilities)
-├── output/                       (runtime, gitignored)
-├── PROMPT_LIBRARY/               (user prompt templates)
-├── saves/                        (runtime, gitignored)
+│       │   ├── shared/
+│       │   │   └── editor/
+│       │   ├── shell/
+│       │   ├── tools/
+│       │   │   ├── character/
+│       │   │   ├── environment/
+│       │   │   ├── favorites/
+│       │   │   ├── gemini/
+│       │   │   ├── generated-images/
+│       │   │   ├── history/
+│       │   │   ├── multiview/
+│       │   │   ├── prompt-builder/
+│       │   │   ├── prompt-library/
+│       │   │   ├── prop/
+│       │   │   ├── style-library/
+│       │   │   ├── transcripts/
+│       │   │   ├── uilab/
+│       │   │   └── weapon/
+│       │   └── ui/
+│       ├── hooks/
+│       └── lib/
+├── reference_guns/
 ├── src/
 │   └── pubg_madison_ai_suite/
 │       ├── api/
-│       │   └── routes/           (FastAPI endpoints)
-│       ├── assets/               (icons, weapon reference PNGs)
-│       └── tools/                (legacy standalone generators)
+│       │   └── routes/
+│       ├── assets/
+│       │   └── Weapon_Generator/
+│       └── tools/
 │           ├── AI_Character_Generator_v1_4/
 │           ├── AI_Gun_Generator_v1_3/
 │           └── AI_Multitool_v1_1/
-├── STYLE_LIBRARY/                (user style references)
-└── USER_LIBRARY/                 (user custom lib)
+├── style_library/
+└── .repo_snapshot/
+    └── health_reports/
 ```
 
 ---
 
-### Governance Docs
+## Governance Documents
 
-| Document | Present |
-|----------|---------|
-| README.md | ❌ |
-| PROJECT.md | ❌ |
-| SPEC.md | ❌ |
-| ARCHITECTURE.md | ❌ |
-| DECISIONS.md | ❌ |
-| TASKS.md | ❌ |
-| AGENT_RULES.md | ❌ |
+| Document | Status |
+|----------|--------|
+| README.md | **MISSING** |
+| PROJECT.md | MISSING |
+| SPEC.md | MISSING |
+| ARCHITECTURE.md | MISSING |
+| DECISIONS.md | MISSING |
+| TASKS.md | EXISTS (788 bytes) |
+| AGENT_RULES.md | MISSING |
 
 ---
 
-### Dependency Manifests
+## Dependency Manifests
 
-| File | Purpose |
+| Manifest | Location | Notes |
+|----------|----------|-------|
+| `pyproject.toml` | repo root | Python 3.9+, hatchling build, 9 deps |
+| `requirements.txt` | repo root | 9 packages |
+| `package.json` | `frontend/` | React 19, Electron 35, Vite 6, Tailwind 4 |
+
+---
+
+## Entry Points
+
+| Entry | File | Command |
+|-------|------|---------|
+| Launcher | `run.bat` | `run.bat` — starts backend, frontend, Electron |
+| Backend | `src/pubg_madison_ai_suite/api/server.py` | `python -m uvicorn pubg_madison_ai_suite.api.server:app --port 8420` |
+| Frontend | `frontend/` | `npx vite --host 127.0.0.1` (port 5173) |
+| Electron | `electron/main.js` | `npx electron ../electron/main.js` |
+
+---
+
+## Lines of Code by Language
+
+| Extension | Files | Bytes | LOC |
+|-----------|------:|------:|----:|
+| .tsx | 63 | 1,189,220 | 23,217 |
+| .py | 29 | 938,908 | 18,898 |
+| .json | 163 | 111,219,461 | 10,159 |
+| .md | 7 | 100,666 | 1,406 |
+| .ts | 14 | 36,138 | 995 |
+| .css | 2 | 6,698 | 255 |
+| .js | 2 | 5,220 | 145 |
+| .toml | 1 | 804 | 30 |
+| .html | 1 | 408 | 12 |
+| .txt | 1 | 193 | 9 |
+| **TOTAL** | **283** | **113,497,716** | **55,126** |
+
+> Note: JSON bytes are dominated by `ARTBOARD_LIBRARY/Art Table/board.json` (62 MB) and `config/user_settings_backup.json` (40 MB) which contain serialized base64 image data.
+
+---
+
+## Subsystem Hints
+
+| Subsystem | Key Paths |
+|-----------|-----------|
+| UI (React/Electron) | `frontend/src/components/`, `electron/main.js` |
+| API (FastAPI) | `src/pubg_madison_ai_suite/api/` (19 route modules) |
+| AI Integration | `api/core.py` (Gemini API wrapper), `api/routes/director.py` |
+| Image Pipeline | `api/routes/editor.py`, `api/routes/gallery.py` |
+| Search | `api/routes/refsearch.py`, `frontend/src/components/shared/DeepSearchPanel.tsx` |
+| Persistence | `api/routes/artboard.py`, `api/routes/styles.py`, `api/routes/userlib.py` |
+| Legacy Tools | `src/pubg_madison_ai_suite/tools/` (3 standalone Python tools, dead) |
+
+---
+
+## Duplication Signals
+
+| Signal | Details |
+|--------|---------|
+| Legacy tools | 3 standalone generators under `tools/` (~12K LOC) superseded by `api/routes/` |
+| Page patterns | CharacterPage, PropPage, EnvironmentPage, UILabPage share identical patterns (~9K LOC each) |
+
+---
+
+## Config Hints
+
+| Type | Details |
 |------|---------|
-| `pyproject.toml` | Python package (hatchling), v3.0.0 |
-| `requirements.txt` | Python deps (google-generativeai, fastapi, pillow, rembg…) |
-| `frontend/package.json` | Node/React deps (react 19, vite, electron 35, tailwindcss 4) |
-| `frontend/package-lock.json` | Lockfile |
+| Env vars | `PYTHONPATH`, `PUBG_SUITE_SAVE_ROOT`, `PUBG_SUITE_ROOT` (set in `run.bat`) |
+| API key | `config/keys.json` (gitignored, not tracked) |
+| User settings | `config/user_settings_backup.json` (**tracked in git** — 40 MB) |
+| Ports | Backend: 8420, Frontend: 5173 |
 
 ---
 
-### Entry Points
+## Git Churn
 
-| Entry | Type | Description |
-|-------|------|-------------|
-| `run.bat` | Primary | Sets env vars, builds frontend if needed, launches Electron |
-| `electron/main.js` | Electron | Spawns FastAPI backend, loads frontend |
-| `src/pubg_madison_ai_suite/api/server.py` | Backend | FastAPI/Uvicorn on port 8420 |
-
----
-
-### Lines of Code by Language
-
-| Language | LOC |
-|----------|-----|
-| TypeScript/TSX | 20,770 |
-| Python | 18,058 |
-| JavaScript | 467 |
-| CSS | 255 |
-| HTML | 12 |
-| **Total** | **39,562** |
-
-Git-tracked files: 129 | On-disk files (excl. node_modules, .git): 515 | Total on-disk: ~998 MB
-
----
-
-### Subsystem Hints
-
-| Subsystem | Location | Technology |
-|-----------|----------|------------|
-| UI / Frontend | `frontend/src/` | React 19, TypeScript, Tailwind CSS 4 |
-| Desktop Shell | `electron/` | Electron 35 |
-| API / Backend | `src/pubg_madison_ai_suite/api/` | FastAPI, Uvicorn |
-| AI Generation | API routes + Gemini SDK | google-generativeai, google-genai |
-| Image Processing | Backend routes | Pillow, rembg |
-| Legacy Tools | `src/pubg_madison_ai_suite/tools/` | Standalone Python scripts (unused) |
-
----
-
-### Duplication Signals
-
-| Signal | Evidence |
-|--------|----------|
-| Legacy generators vs API routes | `tools/AI_Character_Generator_v1_4/character_generator.py` (333 KB) duplicates logic now in `api/routes/character.py` (40 KB). Same for prop and weapon. **No imports reference legacy tools.** |
-
----
-
-### Config Hints
-
-| Config | Location |
-|--------|----------|
-| `GEMINI_API_KEY` | env var, also stored in `config/keys.json` (gitignored) |
-| `GOOGLE_API_KEY` | env var fallback |
-| `PUBG_IMAGE_MODEL` | env var for model selection |
-| `MADISON_API_PORT` | set in `run.bat` (default 8420) |
-| `PUBG_SUITE_ROOT` | set in `run.bat` |
-| `PUBG_SUITE_SAVE_ROOT` | set in `run.bat` |
-
----
-
-### Git Churn (top 10 most-changed files)
-
-| Changes | File |
-|---------|------|
-| 6 | `frontend/src/components/tools/character/CharacterPage.tsx` |
-| 6 | `frontend/src/components/shell/Sidebar.tsx` |
-| 6 | `frontend/src/app.tsx` |
-| 6 | `frontend/src/components/shell/AppShell.tsx` |
-| 5 | `frontend/src/components/shared/ImageViewer.tsx` |
-| 5 | `src/pubg_madison_ai_suite/api/server.py` |
-| 5 | `src/pubg_madison_ai_suite/api/core.py` |
-| 5 | `frontend/src/components/shared/TabBar.tsx` |
-| 4 | `src/pubg_madison_ai_suite/api/routes/character.py` |
-| 4 | `frontend/src/app.css` |
+| Metric | Value |
+|--------|-------|
+| Total commits | 10 |
+| Latest | `44a7ff7` 2026-03-29 |
+| Branch | main |
+| Remote | `origin/main` (up to date) |
 
 ---
 
@@ -174,135 +191,133 @@ Git-tracked files: 129 | On-disk files (excl. node_modules, .git): 515 | Total o
 
 | Field | Value |
 |-------|-------|
-| **Report ID** | `20260329_102917` |
-| **Date** | 2026-03-29 10:29:17 |
-| **Overall Health** | **YELLOW** |
-| **Primary Issue Type** | Hygiene |
+| Report ID | `20260329_172858` |
+| Date | 2026-03-29 17:28:58 |
+| Overall Health | **RED** |
+| Primary Issue Type | Hygiene |
 
 ---
 
-### Scoring
+## Scoring
 
-#### RED Triggers — None Active
+### RED Triggers
 
-| Trigger | Status | Evidence |
-|---------|--------|----------|
-| Secrets in source code | ✅ Pass | Regex scan found false positive in `electron/main.js` (`disk-cache` matched `sk-` pattern). No actual API keys, tokens, or credentials in tracked code. |
-| Broken/missing run entrypoint | ✅ Pass | `run.bat` exists, sets env vars, builds frontend if needed, launches Electron. |
-| Parallel systems detected | ✅ Pass | Legacy `tools/` directory exists but is completely unreferenced by `api/` code. No conflicting active systems. Classified as dead code, not parallel. |
-| Output-only dirs tracked in git | ✅ Pass | `git ls-files` shows only `ARTBOARD_LIBRARY/Shawn Props/board.json` (8.3 MB user data file). This is a user workspace file, not build output. `ALL GENERATED IMAGES/`, `output/`, `saves/` are all properly gitignored. |
+1. **Output-only dirs tracked in git** — `ARTBOARD_LIBRARY/Art Table/board.json` (62 MB) and `config/user_settings_backup.json` (40 MB) are committed. These are user-generated runtime artifacts, not source code. Evidence: `git ls-files -- ARTBOARD_LIBRARY/ config/user_settings_backup.json` returns 3 files.
 
-#### YELLOW Triggers — 3 Active
+### YELLOW Triggers
 
-| Trigger | Status | Evidence |
-|---------|--------|----------|
-| Doc drift present | ⚠️ **YELLOW** | Zero governance documents exist (no README, ARCHITECTURE, PROJECT, SPEC, DECISIONS, TASKS, or AGENT_RULES). No documentation describes how to set up, run, or contribute. |
-| Any text file > 100 KB | ⚠️ **YELLOW** | 7 text files exceed 100 KB: `board.json` (8.3 MB), `character_generator.py` (333 KB), `package-lock.json` (263 KB), `CharacterPage.tsx` (167 KB), `prop_generator.py` (134 KB), `Weapon_Generator_V1_3.py` (127 KB), `UILabPage.tsx` (112 KB). |
-| Portability not satisfied | ⚠️ **YELLOW** | No README with setup/run instructions. `run.bat` is Windows-only. No cross-platform equivalent. Node and Python required but not documented. |
-| Misleading README claims | N/A | No README exists. |
-| Output dirs not in .gitignore | ✅ Pass | `ALL GENERATED IMAGES/`, `output/`, `saves/` are all in `.gitignore`. `ARTBOARD_LIBRARY/` and `STYLE_LIBRARY/` are intentionally tracked user workspace dirs. |
+1. **Doc drift** — No README.md exists. `pyproject.toml` describes the project but provides no setup/run instructions. The only runnable entry point is `run.bat` (Windows-only).
+2. **Text files > 100 KB** — `CharacterPage.tsx` (188 KB), `UILabPage.tsx` (115 KB), `EnvironmentPage.tsx` (106 KB), `PropPage.tsx` (101 KB).
+3. **Portability: Fail** — No `run.sh` or cross-platform launcher. `run.bat` is Windows CMD only. `pywin32` is a Windows-only dependency.
+4. **Sustained growth > 15%** — LOC grew from 39,562 → 55,126 (+39.3%) in one audit interval.
 
 ---
 
-### Top 3 Risks
+## Top 3 Risks
 
-1. **Zero documentation** — No README, no architecture doc, no setup guide. A new developer cannot onboard without tribal knowledge. This is the single biggest risk to the project's longevity and maintainability.
-
-2. **593 KB of dead legacy code** — Three standalone generator scripts (`character_generator.py`, `prop_generator.py`, `Weapon_Generator_V1_3.py`) totaling 593 KB are completely unreferenced. They inflate the repo, confuse contributors, and accumulate tech debt.
-
-3. **Oversized frontend components** — `CharacterPage.tsx` (167 KB, ~2,900 LOC), `UILabPage.tsx` (112 KB), `EnvironmentPage.tsx` (94 KB), and `PropPage.tsx` (90 KB) are extremely large single-file components. High cognitive load and merge conflict risk.
+1. **Repository bloat from tracked binary blobs** — 102 MB of serialized artboard/settings data makes cloning slow, diffs meaningless for those files, and will only grow. This is the most urgent issue.
+2. **Monolithic page components** — Four tool pages (Character, UI Lab, Prop, Environment) each exceed 100 KB / 1,900 LOC in single files. These are difficult to review, test, and maintain.
+3. **No README or onboarding docs** — A new contributor cannot set up the project without reading `run.bat` and guessing prerequisites.
 
 ---
 
-### Top 3 Recommended Actions
+## Top 3 Recommended Actions
 
-1. **Create README.md** with project description, prerequisites (Python ≥3.9, Node ≥18, Electron), setup steps (`pip install -r requirements.txt`, `cd frontend && npm install`), and run instructions (`run.bat` or manual steps).
-
-2. **Remove or archive legacy tools/** — Delete `tools/AI_Character_Generator_v1_4/`, `tools/AI_Gun_Generator_v1_3/`, `tools/AI_Multitool_v1_1/` (or move to a `_legacy/` branch). They are dead code with no references.
-
-3. **Add `ARTBOARD_LIBRARY/` to `.gitignore`** — The 8.3 MB `board.json` is user workspace data that shouldn't be version-controlled. Each user's artboard state is local.
+1. **Add `ARTBOARD_LIBRARY/` and `config/user_settings_backup.json` to `.gitignore`** and use `git rm --cached` to untrack them. This immediately removes 102 MB from the repo.
+2. **Create `README.md`** with prerequisites (Python 3.9+, Node 18+, Windows), install steps, and how to run.
+3. **Delete legacy tools** (`src/pubg_madison_ai_suite/tools/AI_Character_Generator_v1_4/`, `AI_Gun_Generator_v1_3/`, `AI_Multitool_v1_1/`) — 15 files, ~12K LOC of dead code superseded by the API routes.
 
 ---
 
-### Findings
+## Findings
 
-#### Governance
+### Governance
 
-No governance documents exist. The project relies entirely on commit messages and code comments for institutional knowledge. The `pyproject.toml` provides project name and version (`pubg-madison-ai-suite` v3.0.0) but no description of architecture or contribution workflow.
+| Document | Status |
+|----------|--------|
+| README.md | **MISSING** — no onboarding path |
+| PROJECT.md | MISSING |
+| SPEC.md | MISSING |
+| ARCHITECTURE.md | MISSING |
+| DECISIONS.md | MISSING |
+| TASKS.md | Present (contains Health Audit Cleanup items) |
+| AGENT_RULES.md | MISSING |
 
-#### Drift / Bloat
+### Drift / Bloat
 
-| Item | Size | Issue |
-|------|------|-------|
-| `tools/AI_Character_Generator_v1_4/` | 333 KB | Dead code — standalone character generator superseded by `api/routes/character.py` |
-| `tools/AI_Gun_Generator_v1_3/` | 127 KB | Dead code — standalone weapon generator superseded by `api/routes/weapon.py` |
-| `tools/AI_Multitool_v1_1/` | 134 KB | Dead code — standalone prop generator superseded by `api/routes/prop.py` |
-| `ARTBOARD_LIBRARY/Shawn Props/board.json` | 8.3 MB | User workspace data tracked in git |
-| `ALL GENERATED IMAGES/.history/` | On-disk | History JSONL file (270 KB), properly gitignored |
+- **Tracked output dirs**: `ARTBOARD_LIBRARY/` (2 board JSON files, 62 MB + smaller), `config/user_settings_backup.json` (40 MB). Neither belongs in version control.
+- **.repo_snapshot/** is also tracked — health audit artifacts are committed. Low risk since these are small text files, but ideally should be gitignored.
+- **Legacy tools directory**: `src/pubg_madison_ai_suite/tools/` contains 3 old standalone Python generators (15 files, ~12K LOC). These are not imported by any API route and are dead code.
 
-#### Doc Drift
+### Doc Drift
 
-| Area | Expected | Actual |
-|------|----------|--------|
-| How to run | README with instructions | Only `run.bat` exists — no text docs |
-| Architecture | ARCHITECTURE.md | None — must read code to understand Electron → FastAPI → Gemini flow |
-| API reference | API docs or docstrings | Route files have minimal docstrings |
+| # | Description | Evidence |
+|---|-------------|----------|
+| 1 | No README despite being a runnable project | `run.bat` exists, README.md does not |
+| 2 | `pyproject.toml` includes `tools/` in build but tools are unused | `[tool.hatch.build.targets.wheel]` lists `src/pubg_madison_ai_suite/tools/**` |
+| 3 | TASKS.md cleanup items from prior audit still open | All 6 items unchecked |
 
-#### Cleanup Candidates
+### Cleanup Candidates
 
-| # | Item | Action |
-|---|------|--------|
-| 1 | `tools/AI_Character_Generator_v1_4/` | Delete (dead code, 333 KB) |
-| 2 | `tools/AI_Gun_Generator_v1_3/` | Delete (dead code, 127 KB) |
-| 3 | `tools/AI_Multitool_v1_1/` | Delete (dead code, 134 KB) |
-| 4 | `ARTBOARD_LIBRARY/Shawn Props/board.json` | Add to `.gitignore`, remove from tracking |
-| 5 | `tools/AI_Character_Generator_v1_4/LORE_LIBRARY/` | Delete with parent |
+1. `src/pubg_madison_ai_suite/tools/AI_Character_Generator_v1_4/` — 1 file, 6,738 LOC
+2. `src/pubg_madison_ai_suite/tools/AI_Gun_Generator_v1_3/` — 12 files, 2,487+ LOC
+3. `src/pubg_madison_ai_suite/tools/AI_Multitool_v1_1/` — 2 files, 2,692+ LOC
+4. `ARTBOARD_LIBRARY/Art Table/board.json` — 62 MB tracked blob
+5. `config/user_settings_backup.json` — 40 MB tracked blob
+6. `.repo_snapshot/` files tracked in git — should be gitignored
 
-#### Growth & Trajectory
+### Growth & Trajectory
 
-| Metric | Value |
-|--------|-------|
-| Total code LOC | 39,562 |
-| Total code files | 103 |
-| Total code bytes | 1.9 MB |
-| Largest file | `CharacterPage.tsx` (167 KB, ~2,900 LOC) |
-| Git commits | 10 (rapid feature velocity) |
-| Avg LOC per commit | ~3,956 |
+| Metric | Prior (20260329_102917) | Current | Delta |
+|--------|------------------------|---------|-------|
+| Total LOC | 39,562 | 55,126 | +15,564 (+39.3%) |
+| Total text files | 129 | 283 | +154 |
+| Largest file LOC | 2,900 | 3,088 | CharacterPage.tsx |
 
-**Top files by size:**
+**Top files by LOC:**
 
-| File | Size | LOC (est.) |
-|------|------|------------|
-| `CharacterPage.tsx` | 167 KB | ~2,900 |
-| `UILabPage.tsx` | 112 KB | ~2,000 |
-| `EnvironmentPage.tsx` | 94 KB | ~1,600 |
-| `PropPage.tsx` | 90 KB | ~1,550 |
-| `ArtboardCanvas.tsx` | 49 KB | ~900 |
-| `character.py` (API) | 40 KB | ~830 |
-| `ImageViewer.tsx` | 40 KB | ~750 |
+| File | LOC | Bytes |
+|------|----:|------:|
+| CharacterPage.tsx | 3,088 | 188 KB |
+| character_generator.py (dead) | 6,738 | 341 KB |
+| prop_generator.py (dead) | 2,692 | 137 KB |
+| Weapon_Generator_V1_3.py (dead) | 2,487 | 130 KB |
+| UILabPage.tsx | 2,133 | 115 KB |
+| EnvironmentPage.tsx | 2,012 | 106 KB |
+| PropPage.tsx | 1,903 | 101 KB |
 
-#### Prompt & Template Surface
+### Prompt & Template Surface
 
-Large multi-line string literals are concentrated in backend API routes:
-- `character.py`: character prompt builder (~50 lines), style rules, preservation constraints
-- `environment.py`: environment prompt builder, biome rules
-- `prop.py`: prop prompt builder, material rules
-- `uilab.py`: UI generation prompts
-- `system.py`: transcription prompt, AI review prompt
+- No centralized prompt template system (`src/templates.py` does not exist).
+- Prompts are embedded inline in API route handlers (e.g., `character.py`, `prop.py`, `environment.py`, `uilab.py`).
+- Each route module contains system instruction strings in generate/edit/extract handlers.
+- Near-duplicate prompt patterns exist across the 4 lab route files (character, prop, environment, uilab) — similar style rules, format instructions, and constraints.
 
-No near-duplicate prompts detected above 0.85 similarity threshold. Each tool's prompt builder is domain-specific. No `src/templates.py` exists.
+### Secrets Status
+
+- `config/keys.json` is properly gitignored and NOT tracked.
+- Grep matches for API key patterns in `config/user_settings_backup.json` and `ARTBOARD_LIBRARY/Art Table/board.json` are **false positives** — these are base64-encoded image data strings, not actual API keys.
+- **No real secrets found in tracked source code.**
+
+### Duplication Status
+
+- No parallel systems (single API server, single UI framework, single build system).
+- Structural duplication exists in the 4 lab page components (very similar patterns) but this is acceptable copy-paste customization, not divergent systems.
 
 ---
 
-### Proposed Cleanup Plan
+## Proposed Cleanup Plan
 
-| Priority | Task | Impact |
-|----------|------|--------|
-| P0 | Create `README.md` with setup/run guide | Unblocks onboarding |
-| P1 | Delete `tools/` legacy directory | -593 KB dead code |
-| P1 | Add `ARTBOARD_LIBRARY/` to `.gitignore` | -8.3 MB from repo |
-| P2 | Create `ARCHITECTURE.md` documenting Electron → FastAPI → Gemini flow | Knowledge preservation |
-| P3 | Consider splitting `CharacterPage.tsx` (2,900 LOC) into sub-components | Maintainability |
+| Priority | Action | Effort | Impact |
+|----------|--------|--------|--------|
+| P0 | Untrack `ARTBOARD_LIBRARY/` and `config/user_settings_backup.json`, add to `.gitignore` | 5 min | Removes 102 MB from repo |
+| P0 | Create `README.md` | 30 min | Enables onboarding |
+| P1 | Delete 3 legacy tool dirs | 5 min | Removes ~12K LOC dead code |
+| P1 | Add `.repo_snapshot/` to `.gitignore` | 2 min | Stops tracking audit artifacts |
+| P2 | Create `ARCHITECTURE.md` | 1 hr | Documents Electron→FastAPI→Gemini flow |
+| P2 | Split CharacterPage.tsx into sub-components | 2-4 hrs | Reduces largest file from 3K LOC |
+| P3 | Centralize prompt templates | 2-4 hrs | Reduces near-duplicate prompts |
+| P3 | Add `run.sh` for cross-platform support | 30 min | Improves portability |
 
 ---
 
@@ -316,13 +331,18 @@ No near-duplicate prompts detected above 0.85 similarity threshold. Each tool's 
 - [ ] Delete dead legacy tools directory: `src/pubg_madison_ai_suite/tools/AI_Character_Generator_v1_4/`
 - [ ] Delete dead legacy tools directory: `src/pubg_madison_ai_suite/tools/AI_Gun_Generator_v1_3/`
 - [ ] Delete dead legacy tools directory: `src/pubg_madison_ai_suite/tools/AI_Multitool_v1_1/`
-- [ ] Add `ARTBOARD_LIBRARY/` to `.gitignore` and untrack `ARTBOARD_LIBRARY/Shawn Props/board.json`
+- [ ] Add `ARTBOARD_LIBRARY/` to `.gitignore` and untrack large board JSON files
+- [ ] Add `config/user_settings_backup.json` to `.gitignore` and untrack (40 MB blob)
+- [ ] Add `.repo_snapshot/` to `.gitignore` and untrack audit artifacts
 - [ ] Create `ARCHITECTURE.md` documenting Electron → FastAPI → Gemini data flow
-- [ ] Consider splitting `CharacterPage.tsx` (167 KB, ~2,900 LOC) into sub-components
+- [ ] Consider splitting `CharacterPage.tsx` (188 KB, ~3,088 LOC) into sub-components
+- [ ] Add `run.sh` for cross-platform support (currently Windows-only)
+- [ ] Centralize prompt templates to reduce near-duplicate inline prompts
 
 ## Done
 
 - [x] Health audit report generated (report_id: 20260329_102917)
+- [x] Health audit report generated (report_id: 20260329_172858)
 
 ---
 
@@ -330,511 +350,303 @@ No near-duplicate prompts detected above 0.85 similarity threshold. Each tool's 
 
 # Comprehensive Repo Report
 
----
-
-### 1. Metadata
+## 1. Metadata
 
 | Field | Value |
 |-------|-------|
-| Timestamp | 2026-03-29 10:29:17 |
-| Repo Root | `C:\Dev\Madison_AI_Tools` |
-| Branch | `main` |
-| Last Commit | `f8d6f7e` — "feat: add Prompt Builder, custom sections, section colors, and multi-feature improvements" |
-| Working Tree | Clean |
-| Scan Scope | All files excluding `node_modules/`, `.git/`, `__pycache__/`, `.venv/`, `dist/`, `build/` |
-| Report ID | `20260329_102917` |
+| Timestamp | 2026-03-29 17:28:58 |
+| Repo root | `C:\Dev\Madison_AI_Tools` |
+| Git branch | main |
+| HEAD | `44a7ff7` (2026-03-29 17:28:09 -0500) |
+| Scan scope | All files excluding `node_modules/`, `.git/`, `__pycache__/`, `.venv/`, `dist/`, `build/` |
+| Report ID | 20260329_172858 |
 
 ---
 
-### 2. Executive Summary
+## 2. Executive Summary
 
-1. **PUBG Madison AI Suite** is an internal concept-art generation tool built for PUBG/Krafton's art team. It wraps Google Gemini image generation models behind a polished desktop UI.
-   *Evidence: `pyproject.toml:6-8` — name: "pubg-madison-ai-suite", description: "PUBG Madison AI Suite"*
-
-2. The stack is **Electron 35 + React 19 (TypeScript) + Tailwind CSS 4** on the frontend, with a **FastAPI/Uvicorn** backend on `localhost:8420`.
-   *Evidence: `frontend/package.json:13-19` (react 19, electron 35, tailwindcss 4), `requirements.txt` (fastapi, uvicorn), `run.bat:20` (MADISON_API_PORT=8420)*
-
-3. **17 API route modules** handle distinct domains: character/prop/environment/weapon/UI generation, image editing, style management, artboards, galleries, prompt templates, history, queue, palette extraction, and export packaging.
-   *Evidence: `src/pubg_madison_ai_suite/api/server.py:23-50` — all 17 router imports and mounts*
-
-4. **7 specialized tool pages** (Character Lab, Prop Lab, Environment Lab, UI Lab, Weapon Lab, Gemini Generate, Multiview) plus 6 library/utility pages (Style Library, Prompt Builder, Generated Images, Favorites, Prompt Library, History).
-   *Evidence: `frontend/src/app.tsx:25` — PageId type union; lines 35-52 — page rendering*
-
-5. The codebase is **39,562 LOC** across 103 code files, split roughly 53% TypeScript/TSX (20,770 LOC) and 46% Python (18,058 LOC).
-
-6. **Zero governance documentation** — no README, ARCHITECTURE, SPEC, or TASKS files exist. This is the project's most significant hygiene gap.
-
-7. **593 KB of dead legacy code** in `src/pubg_madison_ai_suite/tools/` — three standalone Python scripts that predate the API refactoring and are unreferenced.
-   *Evidence: Grep for `from.*tools` in `api/` returns zero matches*
-
-8. The project uses **7 Google AI models** (Gemini 3 Pro, 3.1 Flash, 2.5 Flash, Imagen 4 Ultra, Imagen 4, Imagen 3 Fast, Veo 2) registered in `core.py:25-56`.
-
-9. **State management** uses React Context extensively — 7 context providers wrap the app: Toast, Shortcuts, VoiceToText, Artboard, Favorites, PromptOverrides, and CustomSections.
-   *Evidence: `frontend/src/app.tsx:60-74` — nested provider tree*
-
-10. Real-time progress updates flow via a **WebSocket** at `/ws/progress`.
-    *Evidence: `server.py:53-60` — WebSocket endpoint*
-
-11. An **8.3 MB artboard file** (`ARTBOARD_LIBRARY/Shawn Props/board.json`) is tracked in git — should be gitignored.
-    *Evidence: `git ls-files -- ARTBOARD_LIBRARY/` returns this file*
-
-12. The frontend build output (`frontend/dist/`) is properly gitignored and built on-demand by `run.bat`.
+1. **Madison AI Suite** is a desktop AI art-direction tool for game concept artists, built with Electron + React (frontend) and FastAPI + Gemini API (backend). Evidence: `pyproject.toml:8` — `"PUBG Madison AI Suite – Electron + React frontend with FastAPI backend"`.
+2. **19 API route modules** provide image generation, editing, upscaling, style transfer, attribute extraction, and more for characters, props, environments, UI elements, and weapons. Evidence: `server.py:34-52` registers all routers.
+3. **The codebase is 55,126 LOC** across 283 text files: 23,217 LOC TypeScript/React, 18,898 LOC Python. Evidence: LOC scan by extension.
+4. **Four monolithic page components** each exceed 1,900 LOC (CharacterPage: 3,088, UILabPage: 2,133, EnvironmentPage: 2,012, PropPage: 1,903). Evidence: file size scan.
+5. **102 MB of tracked binary blobs** (artboard + settings JSON) inflate the repository. Evidence: `git ls-files` shows `ARTBOARD_LIBRARY/` and `config/user_settings_backup.json`.
+6. **12K LOC of dead legacy tools** exist under `src/pubg_madison_ai_suite/tools/`. Evidence: 3 directories with standalone scripts not imported by any API module.
+7. **No README.md or onboarding documentation** exists. Evidence: file existence check.
+8. **Windows-only launcher** (`run.bat`). No cross-platform equivalent. Evidence: `run.sh` does not exist.
+9. **Recent rapid growth**: LOC increased 39.3% (39,562 → 55,126) in one session. Evidence: snapshot diff.
+10. **New features added in latest commit**: Deep Reference Search (SSE-based image search), Art Director (voice-driven edits), Edit Prop/Environment panels, artboard crop tool, viewport persistence. Evidence: commit `44a7ff7` message and diff.
 
 ---
 
-### 3. What This Repo Is
+## 3. What This Repo Is
 
-| Aspect | Detail | Evidence |
-|--------|--------|----------|
-| **Type** | Desktop application (internal tool) | `electron/main.js` — Electron shell; `run.bat` — desktop launcher |
-| **Domain** | AI-assisted concept art generation for game development | Tool pages: CharacterLab, PropLab, EnvironmentLab, WeaponLab, UILab |
-| **Languages** | TypeScript (53%), Python (46%), JavaScript (1%) | LOC analysis |
-| **Frontend** | React 19, TypeScript 5.8, Tailwind CSS 4, Vite 6.3 | `frontend/package.json` |
-| **Desktop** | Electron 35 | `frontend/package.json:29` |
-| **Backend** | FastAPI 0.115+, Uvicorn, Python 3.9+ | `pyproject.toml:9`, `requirements.txt` |
-| **AI Engine** | Google Gemini (generativeai + genai SDKs), Imagen models | `requirements.txt:1-2`, `core.py:25-98` |
-| **Image Processing** | Pillow, rembg (background removal) | `requirements.txt:3-4` |
-| **Runtime** | Windows-primary (run.bat, pywin32) | `run.bat`, `requirements.txt:6` |
+**Type**: Desktop application (Electron shell wrapping a React SPA with a Python FastAPI backend)
+
+**Languages & Frameworks**:
+- **Frontend**: TypeScript/React 19 + Tailwind CSS 4 + Vite 6 + Electron 35 — `frontend/package.json:13-19`
+- **Backend**: Python 3.9+ + FastAPI + Uvicorn — `pyproject.toml:9`, `requirements.txt`
+- **AI**: Google Gemini API (generative AI for images and text) — `requirements.txt:1-2` (`google-generativeai`, `google-genai`)
+- **Image Processing**: Pillow, rembg (background removal) — `requirements.txt:3-4`
+
+**Runtime**: Windows desktop app launched via `run.bat`, which starts:
+1. FastAPI backend on port 8420
+2. Vite dev server on port 5173
+3. Electron main process loading the Vite URL
 
 ---
 
-### 4. How to Run
+## 4. How to Run
 
-#### Prerequisites
+**Prerequisites** (inferred from dependencies):
+- Windows 10/11
+- Python 3.9+
+- Node.js 18+ (for `npx`, `vite`, `electron`)
+- A Gemini API key (stored in `config/keys.json`)
 
-- Python 3.9+ with pip
-- Node.js 18+ with npm
-- Windows 10/11 (primary target; `run.bat` is Windows-only)
-- Google Gemini API key
-
-#### Steps (extracted from `run.bat` and `electron/main.js`)
-
-```bash
-# 1. Install Python dependencies
+**Commands** (from `run.bat:1-56`):
+```
+# Install Python deps
 pip install -r requirements.txt
 
-# 2. Install Node dependencies
-cd frontend
-npm install
+# Install Node deps
+cd frontend && npm install && cd ..
 
-# 3. Build frontend (or let run.bat do it)
-npx vite build
-
-# 4. Run
-# Option A: via run.bat (sets env vars, launches Electron)
-cd ..
+# Launch everything
 run.bat
-
-# Option B: manual
-set PYTHONPATH=src
-set MADISON_API_PORT=8420
-# Start backend:
-python src/pubg_madison_ai_suite/api/server.py
-# In another terminal, start Electron:
-cd frontend
-npx electron ../electron/main.js
 ```
 
-**Evidence**: `run.bat:1-28` sets `PYTHONPATH`, `MADISON_API_PORT`, checks for `dist/index.html`, and launches Electron. `electron/main.js:36-49` spawns the Python backend. `server.py:63-67` starts Uvicorn.
+**Evidence**: `run.bat` sets `PYTHONPATH=%~dp0src`, starts uvicorn on port 8420, waits for health endpoint, starts vite on 5173, waits, then launches Electron.
 
-**API key**: Set via the Settings panel in the UI → stored in `config/keys.json` (gitignored). Alternatively, set `GEMINI_API_KEY` environment variable.
-
-**OS Assumption**: Windows. The `run.bat` is a batch file; `pywin32` is a Windows-only dependency. `electron/main.js:37` conditionally uses `python` vs `python3`.
+**OS Assumption**: Windows only — `run.bat` uses CMD syntax, `pywin32` is Windows-only. No `run.sh` exists.
 
 ---
 
-### 5. Feature Inventory
+## 5. Feature Inventory
 
-#### Generation Tools
+### Image Generation Tools
 
-| Feature | Frontend | Backend | Description |
-|---------|----------|---------|-------------|
-| **Character Lab** | `CharacterPage.tsx` (167 KB) | `routes/character.py` (40 KB) | Multi-view character generation with attributes, costumes, style fusion, custom sections |
-| **Prop Lab** | `PropPage.tsx` (90 KB) | `routes/prop.py` (34 KB) | Prop/item generation with similar sidebar controls |
-| **Environment Lab** | `EnvironmentPage.tsx` (94 KB) | `routes/environment.py` (38 KB) | Environment/scene generation |
-| **UI Lab** | `UILabPage.tsx` (112 KB) | `routes/uilab.py` (37 KB) | Game UI element generation (scrollbars, fonts, grids) |
-| **Weapon Lab** | `WeaponPage.tsx` | `routes/weapon.py` (10 KB) | Gun/weapon generation with reference images |
-| **Gemini Generate** | `GeminiPage.tsx` | `routes/gemini.py` (7 KB) | Free-form Gemini image generation |
-| **Multiview** | `MultiviewPage.tsx` | API reuse | Multi-angle view generation |
+| Feature | Frontend | Backend | Evidence |
+|---------|----------|---------|----------|
+| AI Character Lab | `CharacterPage.tsx` (3,088 LOC) | `routes/character.py` (745 LOC) | Generate, edit, extract attributes, randomize, multi-view |
+| AI Prop Lab | `PropPage.tsx` (1,903 LOC) | `routes/prop.py` (668 LOC) | Same pipeline for game props |
+| AI Environment Lab | `EnvironmentPage.tsx` (2,012 LOC) | `routes/environment.py` (757 LOC) | Environment concept art |
+| AI UI Lab | `UILabPage.tsx` (2,133 LOC) | `routes/uilab.py` (837 LOC) | UI element design |
+| AI Weapon Lab | `WeaponPage.tsx` (483 LOC) | `routes/weapon.py` (9,868 bytes) | Weapon concept art |
+| Default Gemini | `GeminiPage.tsx` (385 LOC) | `routes/gemini.py` (7,461 bytes) | General-purpose image gen |
+| Multiview | `MultiviewPage.tsx` | `routes/character.py` | Multi-angle generation |
 
-#### Library & Utility Pages
+### Editing & Processing
 
-| Feature | Module | Description |
-|---------|--------|-------------|
-| **Style Library** | `StyleLibraryPage.tsx`, `routes/styles.py` | Manage visual style references |
-| **Prompt Builder** | `PromptBuilderPage.tsx` | Visual builder for custom sidebar sections |
-| **Generated Images** | `GeneratedImagesPage.tsx`, `routes/gallery.py` | Browse all generated images by tool and date |
-| **Favorites** | `FavoritesPage.tsx`, `FavoritesContext.tsx` | Star/pin generations across tools |
-| **Prompt Library** | `PromptLibraryPage.tsx`, `routes/prompts.py` | Saveable, taggable prompt templates |
-| **Generation History** | `HistoryTimeline.tsx`, `routes/history.py` | Global timeline of all generations |
+| Feature | Module | Evidence |
+|---------|--------|----------|
+| Inpainting / Smart Erase / Outpaint | `routes/editor.py` (375 LOC) | Image editing pipeline |
+| Style Transfer | `routes/editor.py` | Apply artistic styles |
+| AI Upscale & Restore | `routes/system.py` | `useImageEnhance.ts` hook |
+| Background Removal | `routes/editor.py` | Uses rembg |
+| Color Palette Extraction | `routes/palette.py` | Dominant color analysis |
 
-#### Shared Capabilities
+### Workspace Tools
 
-| Feature | Module(s) | Description |
-|---------|-----------|-------------|
-| **Artboard / Canvas** | `ArtboardCanvas.tsx` (49 KB), `ArtboardContext.tsx`, `routes/artboard.py` | Infinite canvas for compositing images |
-| **Image Viewer** | `ImageViewer.tsx` (40 KB) | Full-screen viewer with zoom, pan, annotations, inpainting |
-| **Grid Gallery** | `GridGallery.tsx` (21 KB) | Thumbnail grid with favorites, context menus |
-| **Annotation Layer** | `AnnotationLayer.tsx` (14 KB) | Drawing overlay for markup on images |
-| **Style Fusion** | `StyleFusionPanel.tsx` (10 KB) | Blend two style references with image support |
-| **Color Palette** | `ColorPalette.tsx`, `routes/palette.py` | Extract and apply color palettes |
-| **Batch Queue** | `QueuePanel.tsx`, `routes/queue.py` | Queue multiple generation jobs |
-| **Export Package** | `routes/export.py` | ZIP export with images, XML, palette, reference sheets |
-| **Inpainting / Editing** | `editor/EditorToolbar.tsx`, `routes/editor.py` | Brush-based inpainting with AI fill |
-| **Voice-to-Text** | `useVoiceToText.tsx` (16 KB) | Gemini or native Speech Recognition input |
-| **Custom Sections** | `CustomSectionsContext.tsx`, `CustomSectionRenderer.tsx`, `useCustomSectionState.ts` | User-created prompt sidebar sections |
-| **Prompt Overrides** | `PromptOverridesContext.tsx`, `EditPromptModal.tsx` | Edit the prompt text of built-in sections |
-| **Multi-Project Tabs** | `ProjectTabsWrapper.tsx` (10 KB) | Multiple independent project instances per tool |
-| **Session Save/Load** | `SessionContext.tsx`, Electron IPC | Save/load workspace as `.madison` files |
-| **Keyboard Shortcuts** | `useShortcuts.tsx` (13 KB) | Customizable hotkeys with visual overlay |
+| Feature | Module | Evidence |
+|---------|--------|----------|
+| Art Table (Artboard) | `ArtboardCanvas.tsx` (907 LOC), `ArtboardContext.tsx`, `routes/artboard.py` | Multi-board canvas with collab support |
+| Crop Tool | `ArtboardCanvas.tsx` | Click-drag crop with undo |
+| Deep Reference Search | `DeepSearchPanel.tsx`, `routes/refsearch.py` (266 LOC) | Gemini-powered image search with SSE streaming |
+| Art Director (Voice) | `ArtDirectorWidget.tsx`, `useVoiceDirector.tsx`, `routes/director.py` | Voice-to-command edit pipeline |
+| Annotation Layer | `AnnotationLayer.tsx` (560 LOC) | Arrows, shapes, freehand, text overlays |
+| Style Library | `StyleLibraryPage.tsx`, `routes/styles.py` | Reusable style references |
+| Prompt Builder | `PromptBuilderPage.tsx` | Custom reusable prompts |
+| Grid Gallery (4×4) | `GridGallery.tsx` (696 LOC) | Batch variation generation |
+| Favorites | `FavoritesPage.tsx`, `FavoritesContext.tsx` | Star/pin generations |
+| Generation History | `GeneratedImagesPage.tsx` (686 LOC), `routes/history.py`, `routes/gallery.py` | Browse all generated images with metadata |
+| Export / Handoff | `routes/export.py` | ZIP package export |
+| Session Save/Load | `SessionContext.tsx` | Persist workspace state |
+| Project Tabs | `ProjectTabsWrapper.tsx` | Multi-project per tool |
+| Settings | `SettingsPanel.tsx` | API key, model, voice config |
 
 ---
 
-### 6. Architecture Overview
+## 6. Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Electron Shell                           │
-│  electron/main.js                                            │
-│  ┌──────────────────────┐  ┌─────────────────────────────┐  │
-│  │  Python Backend       │  │  Renderer (React SPA)       │  │
-│  │  (child process)      │  │  frontend/dist/index.html   │  │
-│  │                       │  │                             │  │
-│  │  FastAPI on :8420     │◄─┤  fetch('/api/...')          │  │
-│  │  ┌─────────────────┐ │  │  WebSocket /ws/progress     │  │
-│  │  │ 17 Route Modules│ │  │                             │  │
-│  │  │ (character, prop,│ │  │  7 Context Providers        │  │
-│  │  │  env, uilab, ... │ │  │  13 Tool Pages              │  │
-│  │  │  gallery, queue, │ │  │  18 Shared Components       │  │
-│  │  │  export, etc.)   │ │  │  10 UI Primitives           │  │
-│  │  └─────────────────┘ │  │                             │  │
-│  │  ┌─────────────────┐ │  │  State: React Context +     │  │
-│  │  │ core.py          │ │  │        localStorage         │  │
-│  │  │ (model registry, │ │  │                             │  │
-│  │  │  image gen,      │ │  │  Styles: Tailwind 4 +       │  │
-│  │  │  history, save)  │ │  │         CSS tokens          │  │
-│  │  └─────────────────┘ │  │                             │  │
-│  │  ┌─────────────────┐ │  └─────────────────────────────┘  │
-│  │  │ Gemini API       │ │                                   │
-│  │  │ (google-genai)   │ │  IPC: clipboard, session,         │
-│  │  └─────────────────┘ │  │  save-folder, console            │
-│  └──────────────────────┘  └─────────────────────────────┘  │
-│                                                              │
-│  Disk I/O:                                                   │
-│  ├── ALL GENERATED IMAGES/<tool>/<date>/*.png                │
-│  ├── STYLE_LIBRARY/*.{png,jpg}                               │
-│  ├── PROMPT_LIBRARY/*.json                                   │
-│  ├── ARTBOARD_LIBRARY/<name>/board.json                      │
-│  └── config/keys.json (API key)                              │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│                   Electron Shell                  │
+│  electron/main.js — spawns backend, loads Vite    │
+│  BrowserWindow → http://127.0.0.1:5173            │
+└──────────────┬───────────────────────────────────┘
+               │ IPC / HTTP
+┌──────────────▼───────────────────────────────────┐
+│              React SPA (Vite + Tailwind)           │
+│  app.tsx → AppShell → [Tool Pages]                 │
+│  Providers: Toast, Session, Shortcuts, Voice,      │
+│             Artboard, Favorites, CustomSections,   │
+│             VoiceDirector, ArtDirector             │
+│  Hooks: useApi (fetch + SSE), useClipboardPaste,   │
+│         useImageEnhance, useSettingsBackup          │
+└──────────────┬───────────────────────────────────┘
+               │ HTTP REST + WebSocket + SSE
+┌──────────────▼───────────────────────────────────┐
+│              FastAPI Backend (port 8420)            │
+│  server.py → 19 route modules                      │
+│  core.py — Gemini API wrapper (call_gemini_*)      │
+│  ws.py — WebSocket progress manager                │
+│  cancel.py — Request cancellation                  │
+└──────────────┬───────────────────────────────────┘
+               │ HTTPS
+┌──────────────▼───────────────────────────────────┐
+│         Google Gemini API (generativelanguage)     │
+│  Models: gemini-2.0-flash-exp, imagen-3, etc.     │
+│  Features: generateContent, google_search grounding│
+└──────────────────────────────────────────────────┘
 ```
 
-#### Data Flow
+**Data Flow**: User interacts with React UI → HTTP request to FastAPI → FastAPI calls Gemini API → returns base64 image → displayed in React ImageViewer. Progress updates via WebSocket. SSE for streaming (Deep Search, Art Director).
 
-1. **User action** in React UI → `apiFetch()` call (custom wrapper around `fetch`) to `http://127.0.0.1:8420/api/<route>`
-2. **FastAPI route** receives request → builds prompt text → calls Google Gemini API via `google-genai` SDK
-3. **Progress updates** sent via WebSocket at `/ws/progress` to update UI progress bars
-4. **Generated image** (base64) returned → saved to `ALL GENERATED IMAGES/<tool>/<date>/` by `core.py`
-5. **History entry** appended to `.history/log.jsonl` by `core._append_history_entry()`
-6. **Frontend** displays image in `ImageViewer` or `GridGallery`, with options to favorite, annotate, export
-
-#### Key Abstractions
-
-- **`core.py`** (631 lines): Central image generation logic, model registry, history logging, file saving. All route modules delegate to `core.generate_from_model()`.
-- **`ImageViewer.tsx`** (40 KB): Reusable image display component with zoom, pan, annotations, editor, clipboard paste. Used by every tool page.
-- **Context Providers**: 7 providers in `app.tsx` provide cross-cutting concerns (toast notifications, keyboard shortcuts, voice input, artboard state, favorites, prompt overrides, custom sections).
+**Persistence**: File system based. Generated images saved to `ALL GENERATED IMAGES/`. Artboard state in `ARTBOARD_LIBRARY/`. Settings in `config/`. Style library in `style_library/`. No database.
 
 ---
 
-### 7. Module Deep Dive
+## 7. Module Deep Dive
 
-#### 7.1 API Core (`src/pubg_madison_ai_suite/api/core.py`)
+### 7.1 Core API (`src/pubg_madison_ai_suite/api/core.py` — 585 LOC)
 
-**Purpose**: Shared image generation engine. Wraps Google Gemini/Imagen API calls with retry, cancellation, model selection, and save-to-disk logic.
+Central Gemini API wrapper. Provides `call_gemini_image()`, `call_gemini_text()`, and model listing. All route modules import from here. Evidence: `core.py:1` — all API routes use `from pubg_madison_ai_suite.api.core import ...`.
 
-**Key files**: `core.py` (631 LOC)
+### 7.2 Character Lab (`routes/character.py` — 745 LOC + `CharacterPage.tsx` — 3,088 LOC)
 
-**Key responsibilities**:
-- Model registry: 7 models defined with capabilities, resolution, latency
-- `generate_from_model()`: Accepts prompt + images → calls Gemini → returns base64 + saves PNG
-- `_append_history_entry()`: Logs every generation to `.history/log.jsonl`
-- `b64_to_image()` / `image_to_b64()`: Conversion utilities
-- `get_api_key()` / `set_api_key()`: API key management via `config/keys.json`
+Full character concept pipeline: generate, edit (with reference images), extract attributes to XML, enhance, randomize, multi-view (front/back/side/3-4). Includes style fusion (blend two reference styles), costume direction, character bible, preservation lock. The frontend is the largest single component.
 
-**Interactions**: Every generation route (`character.py`, `prop.py`, `environment.py`, etc.) imports and calls `core.generate_from_model()`.
+### 7.3 Prop/Environment/UILab Routes (668-837 LOC each)
 
----
+Mirror the Character Lab pattern for different asset types. Each has generate, extract-attributes, enhance, randomize endpoints. Prop and Environment now have dedicated Edit panels in the frontend (added in latest commit).
 
-#### 7.2 Character Generation (`routes/character.py` + `CharacterPage.tsx`)
+### 7.4 Editor (`routes/editor.py` — 375 LOC)
 
-**Purpose**: Full character concept art pipeline — attribute specification, multi-view generation, style fusion, custom sections.
+Image manipulation endpoints: inpaint (mask + prompt), smart-select (AI-driven region selection), smart-erase (remove masked area), outpaint (extend canvas), remove-background (rembg), style-transfer. Used by `ImageViewer.tsx`'s `EditorToolbar`.
 
-**Key files**:
-- `routes/character.py` (40 KB, ~830 LOC) — Pydantic models, prompt builder, generation endpoint
-- `CharacterPage.tsx` (167 KB, ~2,900 LOC) — **Largest file in repo.** Full tool page with sidebar sections, tab system, viewer, grid, artboard.
+### 7.5 Artboard System (`ArtboardCanvas.tsx` — 907 LOC + `ArtboardContext.tsx` + `routes/artboard.py` — 311 LOC)
 
-**Key interactions**:
-- Builds multi-part prompts from sidebar sections (Character Name, Body Type, Costume, Accessories, Style Fusion, Environment, Preservation Lock, plus custom sections)
-- Sends up to 6+ images to Gemini (reference images, fusion refs, custom section images)
-- Supports multi-view generation (Front, Side, Back, 3/4)
-- State persisted per project instance via `ProjectTabsWrapper`
+Multi-board infinite canvas. Items (images, text, frames) with z-ordering, selection, drag-move, resize. Undo/redo stack (50 levels). Annotation layer overlay. WebSocket-based collaborative mode (share room, remote cursors). New: crop tool, viewport persistence across tab switches.
 
-**Complexity hotspot**: `CharacterPage.tsx` at 2,900 LOC is the most complex single file. Contains all sidebar section definitions, prompt building logic, generation handlers, state management, and UI rendering.
+### 7.6 Deep Reference Search (`DeepSearchPanel.tsx` + `routes/refsearch.py` — 266 LOC)
 
----
+SSE-streaming search tool. Uses Gemini with Google Search grounding to find reference images. Backend scrapes URLs, downloads/validates images (Pillow), streams results to frontend. Configurable search depth and result count.
 
-#### 7.3 Image Viewer & Editor (`shared/ImageViewer.tsx`, `shared/AnnotationLayer.tsx`, `shared/editor/`)
+### 7.7 Art Director (`ArtDirectorWidget.tsx` + `useVoiceDirector.tsx` + `routes/director.py`)
 
-**Purpose**: Full-featured image viewer with annotations, inpainting, clipboard integration.
+Voice-to-command system. User speaks edit instructions → Gemini interprets as structured tool invocations → applies edits automatically. Uses function calling for routing to inpaint, edit, regenerate pipelines.
 
-**Key files**:
-- `ImageViewer.tsx` (40 KB, ~750 LOC)
-- `AnnotationLayer.tsx` (14 KB)
-- `editor/EditorToolbar.tsx`
+### 7.8 Gallery & History (`routes/gallery.py` — 277 LOC + `routes/history.py`)
 
-**Capabilities**: Zoom/pan, brush/eraser/fill tools, AI inpainting, annotation export, clipboard paste, keyboard shortcuts, favorites toggle.
+File-system based image gallery. Scans `ALL GENERATED IMAGES/` directory, reads generation metadata from filenames. Supports browsing by tool and date. History tracks generation parameters for each image.
+
+### 7.9 Style Library (`routes/styles.py` — 383 LOC + `StyleLibraryPage.tsx`)
+
+Folder-based style reference system. Users create folders, upload reference images, system generates guidance text. Categories: general and UI-specific. Used for style fusion in generation.
+
+### 7.10 React Context Providers (`frontend/src/hooks/`)
+
+14 hooks/contexts provide shared state: `ToastContext`, `SessionContext`, `ShortcutsProvider`, `VoiceToTextProvider`, `ArtboardProvider`, `FavoritesContext`, `CustomSectionsProvider`, `VoiceDirectorProvider`, `ArtDirectorProvider`, plus utility hooks (`useApi`, `useClipboardPaste`, `useImageEnhance`, `useSettingsBackup`, `useCustomSectionState`).
 
 ---
 
-#### 7.4 Artboard System (`shared/ArtboardCanvas.tsx`, `hooks/ArtboardContext.tsx`, `routes/artboard.py`)
+## 8. External Dependencies & Integrations
 
-**Purpose**: Infinite canvas for compositing and arranging multiple generated images.
-
-**Key files**:
-- `ArtboardCanvas.tsx` (49 KB, ~900 LOC) — Canvas rendering, drag/resize/select/copy/paste
-- `ArtboardContext.tsx` (16 KB) — State management, undo/redo, load/save
-- `routes/artboard.py` (12 KB) — Backend persistence (load/save/list/create boards)
-
-**Capabilities**: Multi-item selection, grouping, clipboard copy/paste, auto-fit-to-extents, WebSocket sync for collaborative editing.
-
----
-
-#### 7.5 Style & Prompt System
-
-**Purpose**: Manage visual references, prompt templates, and custom prompt sections.
-
-**Key files**:
-- `routes/styles.py` (12 KB) — Style library CRUD
-- `routes/prompts.py` (2.5 KB) — Prompt template CRUD
-- `PromptOverridesContext.tsx` (3.2 KB) — Per-section prompt customization
-- `CustomSectionsContext.tsx` (9.5 KB) — User-built sidebar sections
-- `useCustomSectionState.ts` (3.7 KB) — Runtime state for custom sections per tool
-- `CustomSectionRenderer.tsx` (13 KB) — Block type renderers (text, image, dropdown, slider, etc.)
-- `PromptBuilderPage.tsx` — Visual section builder with AI gut-check
-
----
-
-#### 7.6 Gallery & History (`routes/gallery.py`, `routes/history.py`)
-
-**Purpose**: Browse generated images and view generation audit trail.
-
-**Key files**:
-- `routes/gallery.py` (9.2 KB) — Parallel thumbnail generation, JPEG caching, lazy-load endpoints
-- `routes/history.py` (2.5 KB) — JSONL history parsing
-- `GeneratedImagesPage.tsx` — Date/tool browser with lazy thumbnail loading
-- `HistoryTimeline.tsx` — Chronological generation timeline
-
----
-
-#### 7.7 Batch Queue & Export (`routes/queue.py`, `routes/export.py`)
-
-**Purpose**: Queue multiple generation jobs; package outputs for handoff.
-
-**Key files**:
-- `routes/queue.py` (5.6 KB) — Async job queue with worker
-- `routes/export.py` (6.8 KB) — ZIP packaging with consistency sheets
-- `QueuePanel.tsx` (7.2 KB) — Floating queue UI
-
----
-
-#### 7.8 Electron Shell (`electron/main.js`)
-
-**Purpose**: Desktop wrapper that spawns the Python backend and loads the React SPA.
-
-**Key responsibilities** (476 LOC):
-- Single-instance lock
-- Backend process lifecycle (spawn, health check, wait)
-- Custom Electron menu (File: Save/Open Session, Set Save Folder, Reset App; Edit: Paste with clipboard image)
-- IPC bridge for clipboard reading, session save/load, save folder management
-- Console window for backend log viewing
-
----
-
-#### 7.9 Voice-to-Text (`hooks/useVoiceToText.tsx`)
-
-**Purpose**: Voice input using Gemini transcription or native Web Speech API.
-
-**Key file**: `useVoiceToText.tsx` (16 KB)
-
-**Capabilities**: Dual engine support (Gemini AI vs Windows native), context-aware transcription, duplicate/hallucination detection, real-time streaming, configurable settings.
-
----
-
-#### 7.10 UI Primitives (`components/ui/`)
-
-**Purpose**: Reusable form elements and layout components.
-
-**Files**: `Button.tsx`, `Card.tsx`, `ColorField.tsx`, `Input.tsx`, `NumberStepper.tsx`, `PanelSection.tsx`, `Select.tsx`, `TagPicker.tsx`, `Textarea.tsx`, `index.ts`
-
-**Design system**: CSS custom properties defined in `lib/tokens.css` (3.3 KB) with dark theme defaults. Tailwind 4 for utility classes.
-
----
-
-### 8. External Dependencies & Integrations
-
-#### Python (Runtime)
+### Python (Runtime)
 
 | Package | Purpose | Evidence |
 |---------|---------|----------|
-| `google-generativeai >=0.8.0` | Gemini model access (legacy SDK) | `requirements.txt:1` |
-| `google-genai >=0.6.0` | Gemini model access (new SDK) | `requirements.txt:2` |
-| `pillow >=10.0.0` | Image manipulation, thumbnails | `requirements.txt:3` |
-| `rembg >=2.0.50` | Background removal | `requirements.txt:4` |
-| `PyPDF2 >=3.0.0` | PDF reading (style library) | `requirements.txt:5` |
-| `pywin32 >=306` | Windows COM (save folder dialog) | `requirements.txt:6` |
-| `fastapi >=0.115.0` | HTTP API framework | `requirements.txt:7` |
-| `uvicorn[standard] >=0.34.0` | ASGI server | `requirements.txt:8` |
-| `requests >=2.31.0` | HTTP client (model API calls) | `requirements.txt:9` |
+| `google-generativeai` | Gemini API client (legacy) | `requirements.txt:1` |
+| `google-genai` | Gemini API client (new) | `requirements.txt:2` |
+| `pillow` | Image processing | `requirements.txt:3` |
+| `rembg` | Background removal | `requirements.txt:4` |
+| `PyPDF2` | PDF parsing | `requirements.txt:5` |
+| `pywin32` | Windows-specific (Photoshop COM) | `requirements.txt:6` |
+| `fastapi` | Web framework | `requirements.txt:7` |
+| `uvicorn` | ASGI server | `requirements.txt:8` |
+| `requests` | HTTP client (scraping) | `requirements.txt:9` |
 
-#### Node (Runtime)
+### Node.js (Runtime + Dev)
 
 | Package | Purpose | Evidence |
 |---------|---------|----------|
-| `react ^19.1.0` | UI framework | `package.json:14` |
-| `react-dom ^19.1.0` | React DOM renderer | `package.json:15` |
-| `lucide-react ^0.468.0` | Icon library | `package.json:13` |
-| `react-resizable-panels ^2.1.7` | Panel layout | `package.json:16` |
-| `clsx ^2.1.1` + `tailwind-merge ^3.5.0` | CSS class utilities | `package.json:12,17` |
+| `react` / `react-dom` | UI framework | `package.json:14-15` |
+| `lucide-react` | Icons | `package.json:13` |
+| `react-resizable-panels` | Split panes | `package.json:16` |
+| `tailwind-merge` / `clsx` | CSS utilities | `package.json:12,17` |
+| `electron` | Desktop shell (dev) | `package.json:29` |
+| `vite` | Build tool (dev) | `package.json:34` |
+| `typescript` | Type checking (dev) | `package.json:33` |
+| `tailwindcss` | CSS framework (dev) | `package.json:32` |
 
-#### Node (Dev)
+### External Services
 
-| Package | Purpose |
-|---------|---------|
-| `electron ^35.1.2` | Desktop wrapper |
-| `vite ^6.3.2` | Build tool |
-| `typescript ^5.8.3` | Type checking |
-| `@tailwindcss/vite ^4.1.0` | Tailwind CSS integration |
-| `electron-builder ^26.0.12` | Desktop packaging |
-| `concurrently ^9.1.2` | Parallel dev commands |
-
-#### External Services
-
-| Service | Usage | Evidence |
-|---------|-------|----------|
-| Google Gemini API | Image generation, text transcription, AI review | All generation routes + `system.py` |
+| Service | Purpose | Evidence |
+|---------|---------|----------|
+| Google Gemini API | Image generation, text generation, search grounding | `core.py`, all route modules |
+| Google Search (via Gemini) | Reference image discovery | `refsearch.py` |
 
 ---
 
-### 9. Configuration Surface
+## 9. Configuration Surface
 
-#### Files
-
-| File | Content |
-|------|---------|
-| `config/keys.json` | API key storage (gitignored) |
-| `frontend/vite.config.ts` | Vite build configuration (not present in root, implied by `package.json` scripts) |
-| `pyproject.toml` | Python package metadata |
-| `frontend/package.json` | Node package metadata |
-| `.gitignore` | Version control exclusions |
-
-#### Environment Variables (no values shown)
-
-| Variable | Set By | Purpose |
-|----------|--------|---------|
-| `GEMINI_API_KEY` | User | Gemini API authentication |
-| `GOOGLE_API_KEY` | User | Fallback API key |
-| `PUBG_IMAGE_MODEL` | User | Override default model |
-| `MADISON_API_PORT` | `run.bat` | Backend port (default: 8420) |
-| `PUBG_SUITE_ROOT` | `run.bat` | Project root path |
-| `PUBG_SUITE_SAVE_ROOT` | `run.bat` | Image save directory |
-| `PUBG_WEAPON_ASSETS_DIR` | `run.bat` | Weapon reference images |
-| `MADISON_BIND_HOST` | Optional | Backend bind address (default: 127.0.0.1) |
-| `VITE_DEV_SERVER_URL` | Dev only | Dev server URL for Electron |
+| File | Type | Key Names |
+|------|------|-----------|
+| `config/keys.json` | JSON | Gemini API key (gitignored) |
+| `run.bat` | Env vars | `PYTHONPATH`, `PUBG_SUITE_SAVE_ROOT`, `PUBG_SUITE_ROOT` |
+| `electron/main.js` | Constants | `DEV_URL`, `API_PORT`, `API_URL` |
+| `server.py` | Env vars | `MADISON_API_PORT`, `MADISON_BIND_HOST` |
+| `frontend/package.json` | Scripts | `dev`, `build`, `electron:dev`, `electron:build` |
+| localStorage (browser) | Keys | `madison-shortcuts`, `madison-theme`, `madison-settings`, `madison-artboard-*`, `madison-favorites`, `madison-voice-*` |
 
 ---
 
-### 10. Risks / Complexity Hotspots
+## 10. Risks / Complexity Hotspots
 
-#### Oversized Components
-
-| File | Size | LOC (est.) | Risk |
-|------|------|------------|------|
-| `CharacterPage.tsx` | 167 KB | 2,900 | Merge conflicts, cognitive load, untestable monolith |
-| `UILabPage.tsx` | 112 KB | 2,000 | Same as above |
-| `EnvironmentPage.tsx` | 94 KB | 1,600 | Same |
-| `PropPage.tsx` | 90 KB | 1,550 | Same |
-| `ArtboardCanvas.tsx` | 49 KB | 900 | Complex interaction logic |
-| `ImageViewer.tsx` | 40 KB | 750 | Feature-rich but large |
-
-#### Dead Code (593 KB)
-
-The entire `tools/` directory contains three legacy generators that are unreferenced:
-- `character_generator.py` (333 KB)
-- `prop_generator.py` (134 KB)
-- `Weapon_Generator_V1_3.py` (127 KB)
-
-These inflate repo size and may mislead contributors.
-
-#### Duplication Across Tool Pages
-
-`CharacterPage.tsx`, `PropPage.tsx`, `EnvironmentPage.tsx`, and `UILabPage.tsx` share substantial structural patterns: sidebar section rendering (`wrapSection`), context menu handling, custom section integration, generation request building. This is not extracted into shared abstractions.
-
-#### Single-Platform Runtime
-
-`run.bat` and `pywin32` dependency make this Windows-only. No macOS/Linux entry point exists.
-
-#### CORS Wide Open
-
-`server.py:27-32` sets `allow_origins=["*"]` — acceptable for localhost-only use but would be a security issue if exposed to a network.
-
-#### Large Git-Tracked Data
-
-`ARTBOARD_LIBRARY/Shawn Props/board.json` (8.3 MB) is tracked in git. Each edit creates a large diff.
+| Risk | Severity | Details |
+|------|----------|---------|
+| **Monolithic page components** | High | CharacterPage.tsx (3,088 LOC), UILabPage.tsx (2,133 LOC), EnvironmentPage.tsx (2,012 LOC), PropPage.tsx (1,903 LOC) — each contains all state, handlers, and JSX for an entire tool |
+| **Tracked binary blobs** | High | 102 MB of base64 artboard/settings data in git history |
+| **Dead legacy code** | Medium | 12K LOC in `tools/` directory never imported or used |
+| **No tests** | Medium | No test files found anywhere in the codebase |
+| **Tight coupling to Gemini** | Medium | All AI features depend on a single provider with no abstraction layer |
+| **Prompt duplication** | Low | Similar system prompts across 4 lab route modules |
+| **No README** | Low | But `run.bat` is self-documenting for Windows users |
+| **Windows-only** | Low | Acceptable for target audience (game studio) but limits contributors |
 
 ---
 
-### 11. Open Questions / Ambiguous Areas
+## 11. Open Questions / Ambiguous Areas
 
-1. **Are the legacy `tools/` scripts intentionally kept?** They're 100% unreferenced. If preserved for historical reference, they should be moved to a `_legacy/` branch.
-
-2. **Is `ARTBOARD_LIBRARY/` intended to be shared or local?** Currently git-tracked but contains user-specific data. The artboard collaboration feature (WebSocket sync in `artboard.py`) suggests it should be backend-managed, not git-tracked.
-
-3. **What is the deployment model?** The app appears to be distributed as a source checkout (developers clone and run `run.bat`). No installer or packaged Electron binary is in the repo (despite `electron-builder` being a dev dependency).
-
-4. **Is the `google-generativeai` package still needed alongside `google-genai`?** Both are declared. If the codebase has migrated to `google-genai`, the older package may be removable.
-
-5. **What is the purpose of `LORE_LIBRARY/` inside the legacy character generator?** It may contain valuable reference data that should be preserved even if the generator script is deleted.
-
-6. **How is `rembg` used?** It's in `requirements.txt` but the API routes importing it aren't obvious from route filenames — likely used within `editor.py` or `core.py` for background removal.
-
-7. **The `3d` page ID is defined but renders "Coming Soon".** Is this planned?
+1. **Are the legacy `tools/` directories used by any external tooling?** — They are included in the wheel build (`pyproject.toml:23`), but no API module imports them.
+2. **Is `config/user_settings_backup.json` intentionally tracked?** — It's 40 MB of serialized localStorage including base64 images. Likely accidental.
+3. **Is the WebSocket collaborative artboard mode production-ready?** — Room management exists but there's no authentication or rate limiting.
+4. **What is the deployment model?** — Currently dev-mode only (`vite` dev server + uvicorn). No production build pipeline for the Electron app.
+5. **Should `ALL GENERATED IMAGES/` be tracked?** — Currently gitignored (correct), but the pattern suggests it could grow very large on disk.
 
 ---
 
-### 12. Appendix: Evidence Index
+## 12. Appendix: Evidence Index
 
-| Claim | File | Lines / Notes |
-|-------|------|---------------|
-| Project name & version | `pyproject.toml` | Lines 6-8 |
-| React 19, Electron 35 | `frontend/package.json` | Lines 14, 29 |
-| FastAPI, Uvicorn | `requirements.txt` | Lines 7-8 |
-| 17 API routes | `server.py` | Lines 23-50 |
-| WebSocket progress | `server.py` | Lines 53-60 |
-| Model registry | `core.py` | Lines 25-98 |
-| Entry point (run.bat) | `run.bat` | Full file (28 lines) |
-| Electron lifecycle | `electron/main.js` | Lines 36-49, 450-475 |
-| Page routing | `frontend/src/app.tsx` | Lines 25-56 |
-| Context providers | `frontend/src/app.tsx` | Lines 60-74 |
-| Dead legacy code | `tools/AI_Character_Generator_v1_4/` | 333 KB, zero imports found |
-| Git-tracked artboard | `git ls-files -- ARTBOARD_LIBRARY/` | Returns `board.json` |
-| CORS config | `server.py` | Lines 27-32 |
-| API key storage | `core.py` | `get_api_key()` reads `config/keys.json` |
-| Voice-to-text dual engine | `useVoiceToText.tsx` | `VoiceEngine` type, `startNative`/`startGemini` |
-| Custom sections | `CustomSectionsContext.tsx` | 8 block types, import/export |
-| Prompt overrides | `PromptOverridesContext.tsx` | localStorage persistence |
-| Thumbnail caching | `routes/gallery.py` | `.thumbs/` JPEG cache, parallel generation |
-| Batch queue | `routes/queue.py` | Async worker with `asyncio` |
-| Export packaging | `routes/export.py` | ZIP with consistency sheet |
+| Evidence | File | Lines/Notes |
+|----------|------|-------------|
+| Project description | `pyproject.toml` | Line 8 |
+| Entry point | `run.bat` | Lines 1-56 |
+| Backend server | `src/pubg_madison_ai_suite/api/server.py` | Lines 1-69 (19 routers) |
+| Electron main | `electron/main.js` | Lines 1-40 |
+| React app root | `frontend/src/app.tsx` | Lines 1-50 |
+| Frontend package | `frontend/package.json` | Lines 1-37 |
+| Python deps | `requirements.txt` | Lines 1-9 |
+| Python build config | `pyproject.toml` | Lines 1-33 |
+| Git ignore rules | `.gitignore` | Lines 1-47 |
+| Tasks | `TASKS.md` | Full file |
+| LOC statistics | Snapshot scan | By extension table |
+| Largest files | File size scan | Top 15 |
+| Tracked output dirs | `git ls-files` | ARTBOARD_LIBRARY/, config/, .repo_snapshot/ |
+| Legacy tools | `src/pubg_madison_ai_suite/tools/` | 3 directories, 15 files |
+| API routes | `src/pubg_madison_ai_suite/api/routes/` | 19 modules |
+| Frontend components | `frontend/src/components/` | 63 .tsx files across tools/shared/shell/ui |
+| Health history | `.repo_snapshot/health_reports/health_history.csv` | 2 audit rows |
 
 ---
 
@@ -843,7 +655,7 @@ These inflate repo size and may mislead contributors.
 * Snapshot: `.repo_snapshot/repo_snapshot.md`
 * Snapshot JSON: `.repo_snapshot/repo_snapshot.json`
 * Health Report: `HEALTH_REPORT.md`
-* Health Metrics: `.repo_snapshot/health_reports/health_metrics__20260329_102917.json`
+* Health Metrics: `.repo_snapshot/health_reports/health_metrics__20260329_172858.json`
 * Tasks: `TASKS.md`
 * Comprehensive Report: `.repo_snapshot/repo_comprehensive_report.md`
 * Master Report: `MASTER_REPO_REPORT.md`

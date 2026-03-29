@@ -301,6 +301,22 @@ def _stream_search(api_key: str, query: str, image_b64: str | None,
                 img["relevance"] = desc_item.get("relevance", "")
                 break
 
+    summary_text = ""
+    if valid_images:
+        try:
+            sum_prompt = (
+                f"In 1-2 sentences, summarize what these reference images show and "
+                f"what design terms or concepts they represent. The search was: \"{query}\". "
+                f"Found {len(valid_images)} images. Be informative and specific about "
+                f"the visual qualities, materials, or styles represented."
+            )
+            summary_text = core.rest_generate_text(api_key, model, sum_prompt, timeout=15) or ""
+        except Exception:
+            pass
+
+    if summary_text:
+        yield f"data: {json.dumps({'summary': summary_text.strip()})}\n\n"
+
     yield f"data: {json.dumps({'status': f'Search complete. Found {len(valid_images)} reference images.', 'total': len(valid_images)})}\n\n"
     yield f"data: {json.dumps({'done': True, 'total': len(valid_images)})}\n\n"
 

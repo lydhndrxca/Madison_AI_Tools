@@ -138,7 +138,7 @@ export function ArtDirectorConfigModal({ open, onClose }: Props) {
                 onClick={handleGeneratePersona}
                 disabled={genBusy || !personaNameInput.trim()}
                 className="flex items-center gap-1 px-2.5 py-1 text-[10px] rounded cursor-pointer font-medium disabled:opacity-40 shrink-0"
-                style={{ background: "rgba(var(--color-accent-rgb, 59,130,246), 0.15)", color: "var(--color-accent)", border: "1px solid rgba(var(--color-accent-rgb, 59,130,246), 0.3)" }}
+                style={{ background: "rgba(255,255,255,0.08)", color: "var(--color-text-primary)", border: "1px solid var(--color-border)" }}
               >
                 {genBusy ? (
                   <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" /></svg>
@@ -181,9 +181,9 @@ export function ArtDirectorConfigModal({ open, onClose }: Props) {
                   onClick={() => updateDraft({ verbosity: v })}
                   className="flex-1 px-2 py-1.5 text-[10px] rounded cursor-pointer font-medium capitalize"
                   style={{
-                    background: draft.verbosity === v ? "rgba(var(--color-accent-rgb, 59,130,246), 0.15)" : "var(--color-input-bg)",
-                    color: draft.verbosity === v ? "var(--color-accent)" : "var(--color-text-secondary)",
-                    border: `1px solid ${draft.verbosity === v ? "rgba(var(--color-accent-rgb, 59,130,246), 0.3)" : "var(--color-border)"}`,
+                    background: draft.verbosity === v ? "rgba(255,255,255,0.12)" : "var(--color-input-bg)",
+                    color: draft.verbosity === v ? "var(--color-text-primary)" : "var(--color-text-secondary)",
+                    border: `1px solid ${draft.verbosity === v ? "rgba(255,255,255,0.25)" : "var(--color-border)"}`,
                   }}
                 >
                   {v}
@@ -200,9 +200,9 @@ export function ArtDirectorConfigModal({ open, onClose }: Props) {
                 onClick={() => updateDraft({ mode: "fast" })}
                 className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-[10px] rounded cursor-pointer font-medium"
                 style={{
-                  background: draft.mode === "fast" ? "rgba(250,204,21,0.15)" : "var(--color-input-bg)",
-                  color: draft.mode === "fast" ? "#facc15" : "var(--color-text-secondary)",
-                  border: `1px solid ${draft.mode === "fast" ? "rgba(250,204,21,0.3)" : "var(--color-border)"}`,
+                  background: draft.mode === "fast" ? "rgba(255,255,255,0.12)" : "var(--color-input-bg)",
+                  color: draft.mode === "fast" ? "var(--color-text-primary)" : "var(--color-text-secondary)",
+                  border: `1px solid ${draft.mode === "fast" ? "rgba(255,255,255,0.25)" : "var(--color-border)"}`,
                 }}
               >
                 Fast (Flash)
@@ -211,9 +211,9 @@ export function ArtDirectorConfigModal({ open, onClose }: Props) {
                 onClick={() => updateDraft({ mode: "deep" })}
                 className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-[10px] rounded cursor-pointer font-medium"
                 style={{
-                  background: draft.mode === "deep" ? "rgba(168,85,247,0.15)" : "var(--color-input-bg)",
-                  color: draft.mode === "deep" ? "#a855f7" : "var(--color-text-secondary)",
-                  border: `1px solid ${draft.mode === "deep" ? "rgba(168,85,247,0.3)" : "var(--color-border)"}`,
+                  background: draft.mode === "deep" ? "rgba(255,255,255,0.12)" : "var(--color-input-bg)",
+                  color: draft.mode === "deep" ? "var(--color-text-primary)" : "var(--color-text-secondary)",
+                  border: `1px solid ${draft.mode === "deep" ? "rgba(255,255,255,0.25)" : "var(--color-border)"}`,
                 }}
               >
                 Deep (Pro)
@@ -225,7 +225,7 @@ export function ArtDirectorConfigModal({ open, onClose }: Props) {
           <div>
             <div className="flex items-center justify-between mb-1">
               <span style={labelStyle}>Context Library</span>
-              <button onClick={() => fileRef.current?.click()} className="flex items-center gap-1 text-[10px] cursor-pointer" style={{ color: "var(--color-accent)" }}>
+              <button onClick={() => fileRef.current?.click()} className="flex items-center gap-1 text-[10px] cursor-pointer" style={{ color: "var(--color-text-secondary)" }}>
                 <ImagePlus className="h-3 w-3" /> Add Images
               </button>
               <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={handleAddImages} />
@@ -276,7 +276,7 @@ export function ArtDirectorConfigModal({ open, onClose }: Props) {
           <button
             onClick={handleSave}
             className="px-3 py-1.5 text-[11px] rounded cursor-pointer font-medium"
-            style={{ background: "var(--color-accent)", color: "var(--color-foreground)", border: "none" }}
+            style={{ background: "rgba(255,255,255,0.12)", color: "var(--color-text-primary)", border: "1px solid rgba(255,255,255,0.25)" }}
           >
             Save
           </button>

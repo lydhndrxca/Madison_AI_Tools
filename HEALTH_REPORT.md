@@ -2,53 +2,41 @@
 
 | Field | Value |
 |-------|-------|
-| **Report ID** | `20260329_102917` |
-| **Date** | 2026-03-29 10:29:17 |
-| **Overall Health** | **YELLOW** |
-| **Primary Issue Type** | Hygiene |
+| Report ID | `20260329_172858` |
+| Date | 2026-03-29 17:28:58 |
+| Overall Health | **RED** |
+| Primary Issue Type | Hygiene |
 
 ---
 
 ## Scoring
 
-### RED Triggers — None Active
+### RED Triggers
 
-| Trigger | Status | Evidence |
-|---------|--------|----------|
-| Secrets in source code | ✅ Pass | Regex scan found false positive in `electron/main.js` (`disk-cache` matched `sk-` pattern). No actual API keys, tokens, or credentials in tracked code. |
-| Broken/missing run entrypoint | ✅ Pass | `run.bat` exists, sets env vars, builds frontend if needed, launches Electron. |
-| Parallel systems detected | ✅ Pass | Legacy `tools/` directory exists but is completely unreferenced by `api/` code. No conflicting active systems. Classified as dead code, not parallel. |
-| Output-only dirs tracked in git | ✅ Pass | `git ls-files` shows only `ARTBOARD_LIBRARY/Shawn Props/board.json` (8.3 MB user data file). This is a user workspace file, not build output. `ALL GENERATED IMAGES/`, `output/`, `saves/` are all properly gitignored. |
+1. **Output-only dirs tracked in git** — `ARTBOARD_LIBRARY/Art Table/board.json` (62 MB) and `config/user_settings_backup.json` (40 MB) are committed. These are user-generated runtime artifacts, not source code. Evidence: `git ls-files -- ARTBOARD_LIBRARY/ config/user_settings_backup.json` returns 3 files.
 
-### YELLOW Triggers — 3 Active
+### YELLOW Triggers
 
-| Trigger | Status | Evidence |
-|---------|--------|----------|
-| Doc drift present | ⚠️ **YELLOW** | Zero governance documents exist (no README, ARCHITECTURE, PROJECT, SPEC, DECISIONS, TASKS, or AGENT_RULES). No documentation describes how to set up, run, or contribute. |
-| Any text file > 100 KB | ⚠️ **YELLOW** | 7 text files exceed 100 KB: `board.json` (8.3 MB), `character_generator.py` (333 KB), `package-lock.json` (263 KB), `CharacterPage.tsx` (167 KB), `prop_generator.py` (134 KB), `Weapon_Generator_V1_3.py` (127 KB), `UILabPage.tsx` (112 KB). |
-| Portability not satisfied | ⚠️ **YELLOW** | No README with setup/run instructions. `run.bat` is Windows-only. No cross-platform equivalent. Node and Python required but not documented. |
-| Misleading README claims | N/A | No README exists. |
-| Output dirs not in .gitignore | ✅ Pass | `ALL GENERATED IMAGES/`, `output/`, `saves/` are all in `.gitignore`. `ARTBOARD_LIBRARY/` and `STYLE_LIBRARY/` are intentionally tracked user workspace dirs. |
+1. **Doc drift** — No README.md exists. `pyproject.toml` describes the project but provides no setup/run instructions. The only runnable entry point is `run.bat` (Windows-only).
+2. **Text files > 100 KB** — `CharacterPage.tsx` (188 KB), `UILabPage.tsx` (115 KB), `EnvironmentPage.tsx` (106 KB), `PropPage.tsx` (101 KB).
+3. **Portability: Fail** — No `run.sh` or cross-platform launcher. `run.bat` is Windows CMD only. `pywin32` is a Windows-only dependency.
+4. **Sustained growth > 15%** — LOC grew from 39,562 → 55,126 (+39.3%) in one audit interval.
 
 ---
 
 ## Top 3 Risks
 
-1. **Zero documentation** — No README, no architecture doc, no setup guide. A new developer cannot onboard without tribal knowledge. This is the single biggest risk to the project's longevity and maintainability.
-
-2. **593 KB of dead legacy code** — Three standalone generator scripts (`character_generator.py`, `prop_generator.py`, `Weapon_Generator_V1_3.py`) totaling 593 KB are completely unreferenced. They inflate the repo, confuse contributors, and accumulate tech debt.
-
-3. **Oversized frontend components** — `CharacterPage.tsx` (167 KB, ~2,900 LOC), `UILabPage.tsx` (112 KB), `EnvironmentPage.tsx` (94 KB), and `PropPage.tsx` (90 KB) are extremely large single-file components. High cognitive load and merge conflict risk.
+1. **Repository bloat from tracked binary blobs** — 102 MB of serialized artboard/settings data makes cloning slow, diffs meaningless for those files, and will only grow. This is the most urgent issue.
+2. **Monolithic page components** — Four tool pages (Character, UI Lab, Prop, Environment) each exceed 100 KB / 1,900 LOC in single files. These are difficult to review, test, and maintain.
+3. **No README or onboarding docs** — A new contributor cannot set up the project without reading `run.bat` and guessing prerequisites.
 
 ---
 
 ## Top 3 Recommended Actions
 
-1. **Create README.md** with project description, prerequisites (Python ≥3.9, Node ≥18, Electron), setup steps (`pip install -r requirements.txt`, `cd frontend && npm install`), and run instructions (`run.bat` or manual steps).
-
-2. **Remove or archive legacy tools/** — Delete `tools/AI_Character_Generator_v1_4/`, `tools/AI_Gun_Generator_v1_3/`, `tools/AI_Multitool_v1_1/` (or move to a `_legacy/` branch). They are dead code with no references.
-
-3. **Add `ARTBOARD_LIBRARY/` to `.gitignore`** — The 8.3 MB `board.json` is user workspace data that shouldn't be version-controlled. Each user's artboard state is local.
+1. **Add `ARTBOARD_LIBRARY/` and `config/user_settings_backup.json` to `.gitignore`** and use `git rm --cached` to untrack them. This immediately removes 102 MB from the repo.
+2. **Create `README.md`** with prerequisites (Python 3.9+, Node 18+, Windows), install steps, and how to run.
+3. **Delete legacy tools** (`src/pubg_madison_ai_suite/tools/AI_Character_Generator_v1_4/`, `AI_Gun_Generator_v1_3/`, `AI_Multitool_v1_1/`) — 15 files, ~12K LOC of dead code superseded by the API routes.
 
 ---
 
@@ -56,78 +44,88 @@
 
 ### Governance
 
-No governance documents exist. The project relies entirely on commit messages and code comments for institutional knowledge. The `pyproject.toml` provides project name and version (`pubg-madison-ai-suite` v3.0.0) but no description of architecture or contribution workflow.
+| Document | Status |
+|----------|--------|
+| README.md | **MISSING** — no onboarding path |
+| PROJECT.md | MISSING |
+| SPEC.md | MISSING |
+| ARCHITECTURE.md | MISSING |
+| DECISIONS.md | MISSING |
+| TASKS.md | Present (contains Health Audit Cleanup items) |
+| AGENT_RULES.md | MISSING |
 
 ### Drift / Bloat
 
-| Item | Size | Issue |
-|------|------|-------|
-| `tools/AI_Character_Generator_v1_4/` | 333 KB | Dead code — standalone character generator superseded by `api/routes/character.py` |
-| `tools/AI_Gun_Generator_v1_3/` | 127 KB | Dead code — standalone weapon generator superseded by `api/routes/weapon.py` |
-| `tools/AI_Multitool_v1_1/` | 134 KB | Dead code — standalone prop generator superseded by `api/routes/prop.py` |
-| `ARTBOARD_LIBRARY/Shawn Props/board.json` | 8.3 MB | User workspace data tracked in git |
-| `ALL GENERATED IMAGES/.history/` | On-disk | History JSONL file (270 KB), properly gitignored |
+- **Tracked output dirs**: `ARTBOARD_LIBRARY/` (2 board JSON files, 62 MB + smaller), `config/user_settings_backup.json` (40 MB). Neither belongs in version control.
+- **.repo_snapshot/** is also tracked — health audit artifacts are committed. Low risk since these are small text files, but ideally should be gitignored.
+- **Legacy tools directory**: `src/pubg_madison_ai_suite/tools/` contains 3 old standalone Python generators (15 files, ~12K LOC). These are not imported by any API route and are dead code.
 
 ### Doc Drift
 
-| Area | Expected | Actual |
-|------|----------|--------|
-| How to run | README with instructions | Only `run.bat` exists — no text docs |
-| Architecture | ARCHITECTURE.md | None — must read code to understand Electron → FastAPI → Gemini flow |
-| API reference | API docs or docstrings | Route files have minimal docstrings |
+| # | Description | Evidence |
+|---|-------------|----------|
+| 1 | No README despite being a runnable project | `run.bat` exists, README.md does not |
+| 2 | `pyproject.toml` includes `tools/` in build but tools are unused | `[tool.hatch.build.targets.wheel]` lists `src/pubg_madison_ai_suite/tools/**` |
+| 3 | TASKS.md cleanup items from prior audit still open | All 6 items unchecked |
 
 ### Cleanup Candidates
 
-| # | Item | Action |
-|---|------|--------|
-| 1 | `tools/AI_Character_Generator_v1_4/` | Delete (dead code, 333 KB) |
-| 2 | `tools/AI_Gun_Generator_v1_3/` | Delete (dead code, 127 KB) |
-| 3 | `tools/AI_Multitool_v1_1/` | Delete (dead code, 134 KB) |
-| 4 | `ARTBOARD_LIBRARY/Shawn Props/board.json` | Add to `.gitignore`, remove from tracking |
-| 5 | `tools/AI_Character_Generator_v1_4/LORE_LIBRARY/` | Delete with parent |
+1. `src/pubg_madison_ai_suite/tools/AI_Character_Generator_v1_4/` — 1 file, 6,738 LOC
+2. `src/pubg_madison_ai_suite/tools/AI_Gun_Generator_v1_3/` — 12 files, 2,487+ LOC
+3. `src/pubg_madison_ai_suite/tools/AI_Multitool_v1_1/` — 2 files, 2,692+ LOC
+4. `ARTBOARD_LIBRARY/Art Table/board.json` — 62 MB tracked blob
+5. `config/user_settings_backup.json` — 40 MB tracked blob
+6. `.repo_snapshot/` files tracked in git — should be gitignored
 
 ### Growth & Trajectory
 
-| Metric | Value |
-|--------|-------|
-| Total code LOC | 39,562 |
-| Total code files | 103 |
-| Total code bytes | 1.9 MB |
-| Largest file | `CharacterPage.tsx` (167 KB, ~2,900 LOC) |
-| Git commits | 10 (rapid feature velocity) |
-| Avg LOC per commit | ~3,956 |
+| Metric | Prior (20260329_102917) | Current | Delta |
+|--------|------------------------|---------|-------|
+| Total LOC | 39,562 | 55,126 | +15,564 (+39.3%) |
+| Total text files | 129 | 283 | +154 |
+| Largest file LOC | 2,900 | 3,088 | CharacterPage.tsx |
 
-**Top files by size:**
+**Top files by LOC:**
 
-| File | Size | LOC (est.) |
-|------|------|------------|
-| `CharacterPage.tsx` | 167 KB | ~2,900 |
-| `UILabPage.tsx` | 112 KB | ~2,000 |
-| `EnvironmentPage.tsx` | 94 KB | ~1,600 |
-| `PropPage.tsx` | 90 KB | ~1,550 |
-| `ArtboardCanvas.tsx` | 49 KB | ~900 |
-| `character.py` (API) | 40 KB | ~830 |
-| `ImageViewer.tsx` | 40 KB | ~750 |
+| File | LOC | Bytes |
+|------|----:|------:|
+| CharacterPage.tsx | 3,088 | 188 KB |
+| character_generator.py (dead) | 6,738 | 341 KB |
+| prop_generator.py (dead) | 2,692 | 137 KB |
+| Weapon_Generator_V1_3.py (dead) | 2,487 | 130 KB |
+| UILabPage.tsx | 2,133 | 115 KB |
+| EnvironmentPage.tsx | 2,012 | 106 KB |
+| PropPage.tsx | 1,903 | 101 KB |
 
 ### Prompt & Template Surface
 
-Large multi-line string literals are concentrated in backend API routes:
-- `character.py`: character prompt builder (~50 lines), style rules, preservation constraints
-- `environment.py`: environment prompt builder, biome rules
-- `prop.py`: prop prompt builder, material rules
-- `uilab.py`: UI generation prompts
-- `system.py`: transcription prompt, AI review prompt
+- No centralized prompt template system (`src/templates.py` does not exist).
+- Prompts are embedded inline in API route handlers (e.g., `character.py`, `prop.py`, `environment.py`, `uilab.py`).
+- Each route module contains system instruction strings in generate/edit/extract handlers.
+- Near-duplicate prompt patterns exist across the 4 lab route files (character, prop, environment, uilab) — similar style rules, format instructions, and constraints.
 
-No near-duplicate prompts detected above 0.85 similarity threshold. Each tool's prompt builder is domain-specific. No `src/templates.py` exists.
+### Secrets Status
+
+- `config/keys.json` is properly gitignored and NOT tracked.
+- Grep matches for API key patterns in `config/user_settings_backup.json` and `ARTBOARD_LIBRARY/Art Table/board.json` are **false positives** — these are base64-encoded image data strings, not actual API keys.
+- **No real secrets found in tracked source code.**
+
+### Duplication Status
+
+- No parallel systems (single API server, single UI framework, single build system).
+- Structural duplication exists in the 4 lab page components (very similar patterns) but this is acceptable copy-paste customization, not divergent systems.
 
 ---
 
 ## Proposed Cleanup Plan
 
-| Priority | Task | Impact |
-|----------|------|--------|
-| P0 | Create `README.md` with setup/run guide | Unblocks onboarding |
-| P1 | Delete `tools/` legacy directory | -593 KB dead code |
-| P1 | Add `ARTBOARD_LIBRARY/` to `.gitignore` | -8.3 MB from repo |
-| P2 | Create `ARCHITECTURE.md` documenting Electron → FastAPI → Gemini flow | Knowledge preservation |
-| P3 | Consider splitting `CharacterPage.tsx` (2,900 LOC) into sub-components | Maintainability |
+| Priority | Action | Effort | Impact |
+|----------|--------|--------|--------|
+| P0 | Untrack `ARTBOARD_LIBRARY/` and `config/user_settings_backup.json`, add to `.gitignore` | 5 min | Removes 102 MB from repo |
+| P0 | Create `README.md` | 30 min | Enables onboarding |
+| P1 | Delete 3 legacy tool dirs | 5 min | Removes ~12K LOC dead code |
+| P1 | Add `.repo_snapshot/` to `.gitignore` | 2 min | Stops tracking audit artifacts |
+| P2 | Create `ARCHITECTURE.md` | 1 hr | Documents Electron→FastAPI→Gemini flow |
+| P2 | Split CharacterPage.tsx into sub-components | 2-4 hrs | Reduces largest file from 3K LOC |
+| P3 | Centralize prompt templates | 2-4 hrs | Reduces near-duplicate prompts |
+| P3 | Add `run.sh` for cross-platform support | 30 min | Improves portability |

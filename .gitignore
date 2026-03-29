@@ -26,10 +26,15 @@ Thumbs.db
 output/
 saves/
 config/keys.json
+config/user_settings_backup.json
 ALL GENERATED IMAGES/
+ARTBOARD_LIBRARY/
 last_character_prompt.txt
 backend.log
 **/window_state.json
+
+# Audit / snapshot outputs (regenerated on demand)
+.repo_snapshot/
 
 # Auto-copied weapon assets (regenerated from reference_guns/ at startup)
 src/pubg_madison_ai_suite/assets/Weapon_Generator/*.png
