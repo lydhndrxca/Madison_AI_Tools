@@ -15,37 +15,36 @@ import { ShortcutsProvider } from "./hooks/useShortcuts";
 import { VoiceToTextProvider } from "./hooks/useVoiceToText";
 import { ArtboardProvider } from "./hooks/ArtboardContext";
 import { FavoritesProvider } from "./hooks/FavoritesContext";
-import { PromptOverridesProvider } from "./hooks/PromptOverridesContext";
-import { FavoritesPage } from "./components/tools/favorites/FavoritesPage";
-import { PromptLibraryPage } from "./components/tools/prompt-library/PromptLibraryPage";
-import { HistoryTimeline } from "./components/tools/history/HistoryTimeline";
 import { PromptBuilderPage } from "./components/tools/prompt-builder/PromptBuilderPage";
 import { CustomSectionsProvider } from "./hooks/CustomSectionsContext";
+import { VoiceDirectorProvider } from "./hooks/useVoiceDirector";
+import { useSettingsBackup } from "./hooks/useSettingsBackup";
+import { ArtDirectorProvider } from "./hooks/ArtDirectorContext";
+import { TranscriptsPage } from "./components/tools/transcripts/TranscriptsPage";
 
-export type PageId = "style-library" | "prompt-builder" | "generated-images" | "favorites" | "prompt-library" | "history" | "gemini" | "multiview" | "character" | "weapon" | "prop" | "environment" | "uilab" | "3d";
+export type PageId = "style-library" | "prompt-builder" | "generated-images" | "favorites" | "history" | "gemini" | "multiview" | "character" | "weapon" | "prop" | "environment" | "uilab" | "3d" | "transcripts";
 
 function AppInner() {
   const [activePage, setActivePage] = useState<PageId>("character");
   const { addToast } = useToastContext();
-  const VALID_PAGES = new Set<string>(["style-library", "prompt-builder", "generated-images", "favorites", "prompt-library", "history", "gemini", "multiview", "character", "weapon", "prop", "environment", "uilab", "3d"]);
+  const VALID_PAGES = new Set<string>(["style-library", "prompt-builder", "generated-images", "favorites", "history", "gemini", "multiview", "character", "weapon", "prop", "environment", "uilab", "3d", "transcripts"]);
   const setPage = useCallback((p: string) => { if (VALID_PAGES.has(p)) setActivePage(p as PageId); }, []);
 
   return (
+    <VoiceDirectorProvider activePage={activePage}>
     <SessionProvider activePage={activePage} onSetActivePage={setPage} onToast={addToast}>
       <AppShell activePage={activePage} onNavigate={setActivePage}>
         <div className="h-full" style={{ display: activePage === "style-library" ? "contents" : "none" }}><StyleLibraryPage /></div>
         <div className="h-full" style={{ display: activePage === "prompt-builder" ? "contents" : "none" }}><PromptBuilderPage /></div>
-        <div className="h-full" style={{ display: activePage === "generated-images" ? "contents" : "none" }}><GeneratedImagesPage /></div>
-        <div className="h-full" style={{ display: activePage === "favorites" ? "contents" : "none" }}><FavoritesPage /></div>
-        <div className="h-full" style={{ display: activePage === "prompt-library" ? "contents" : "none" }}><PromptLibraryPage /></div>
-        <div className="h-full" style={{ display: activePage === "history" ? "contents" : "none" }}><HistoryTimeline /></div>
+        <div className="h-full" style={{ display: activePage === "generated-images" || activePage === "favorites" || activePage === "history" ? "contents" : "none" }}><GeneratedImagesPage defaultTab={activePage === "favorites" ? "favorites" : undefined} onNavigate={setPage} /></div>
         <div className="h-full" style={{ display: activePage === "gemini" ? "contents" : "none" }}><GeminiPage /></div>
         <div className="h-full" style={{ display: activePage === "multiview" ? "contents" : "none" }}><MultiviewPage /></div>
         <div className="h-full" style={{ display: activePage === "character" ? "contents" : "none" }}><CharacterLabWrapper /></div>
-        <div className="h-full" style={{ display: activePage === "weapon" ? "contents" : "none" }}><WeaponPage /></div>
+        <div className="h-full" style={{ display: activePage === "weapon" ? "contents" : "none" }}><WeaponPage active={activePage === "weapon"} /></div>
         <div className="h-full" style={{ display: activePage === "prop" ? "contents" : "none" }}><PropLabWrapper /></div>
         <div className="h-full" style={{ display: activePage === "environment" ? "contents" : "none" }}><EnvironmentLabWrapper /></div>
         <div className="h-full" style={{ display: activePage === "uilab" ? "contents" : "none" }}><UILabWrapper /></div>
+        <div className="h-full" style={{ display: activePage === "transcripts" ? "contents" : "none" }}><TranscriptsPage /></div>
         {activePage === "3d" && (
           <div className="flex items-center justify-center h-full">
             <p style={{ color: "var(--color-text-muted)" }}>3D GEN AI — Coming Soon</p>
@@ -53,21 +52,28 @@ function AppInner() {
         )}
       </AppShell>
     </SessionProvider>
+    </VoiceDirectorProvider>
   );
+}
+
+function BackupInit() {
+  useSettingsBackup();
+  return null;
 }
 
 export function App() {
   return (
     <ToastProvider>
+      <BackupInit />
       <ShortcutsProvider>
         <VoiceToTextProvider>
           <ArtboardProvider>
             <FavoritesProvider>
-              <PromptOverridesProvider>
-                <CustomSectionsProvider>
+              <CustomSectionsProvider>
+                <ArtDirectorProvider>
                   <AppInner />
-                </CustomSectionsProvider>
-              </PromptOverridesProvider>
+                </ArtDirectorProvider>
+              </CustomSectionsProvider>
             </FavoritesProvider>
           </ArtboardProvider>
         </VoiceToTextProvider>

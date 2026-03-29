@@ -46,6 +46,8 @@ interface EditorToolbarProps {
   onStyleTransfer: (preset: string, custom: string) => void;
   busy: boolean;
   locked?: boolean;
+  /** When true, hide the tool-specific options row (annotation is active) */
+  annotationActive?: boolean;
 }
 
 const TOOLS: { id: EditorTool; label: string; shortcut: string; Icon: React.ComponentType<{ className?: string }>; tip: string }[] = [
@@ -92,7 +94,7 @@ export function EditorToolbar({
   activeTool, onToolChange, brushSize, onBrushSizeChange,
   hasMask, onClearMask, onApplyInpaint,
   onSmartSelect, onSmartErase, onOutpaint, onRemoveBg, onStyleTransfer,
-  busy, locked = false,
+  busy, locked = false, annotationActive = false,
 }: EditorToolbarProps) {
   const [inpaintPrompt, setInpaintPrompt] = useState("");
   const [smartSubject, setSmartSubject] = useState("");
@@ -108,14 +110,14 @@ export function EditorToolbar({
     borderRadius: "var(--radius-sm)", color: "var(--color-text-primary)",
   };
 
-  const showBrushSize = activeTool === "brush" || activeTool === "eraser";
-  const showOptionsRow = activeTool !== "select";
+  const showToolSpecificOptions = activeTool !== "select" && !annotationActive;
+  const showInpaintBar = annotationActive || (activeTool === "brush" || activeTool === "marquee" || activeTool === "lasso");
 
   return (
     <div className="shrink-0" style={{ borderBottom: "1px solid var(--color-border)", background: "var(--color-card)" }}>
       {/* Tool buttons row */}
       <div className="flex items-center gap-1 px-2 py-1 flex-wrap">
-        {TOOLS.map((t, i) => {
+        {TOOLS.map((t) => {
           const Icon = t.Icon;
           return (
             <span key={t.id} className="contents">
@@ -143,27 +145,20 @@ export function EditorToolbar({
         ><Trash2 className="h-3 w-3 shrink-0" />Clear Mask</button>
       </div>
 
-      {/* Options row — hidden when in pointer/select mode */}
-      {showOptionsRow && <div className="flex items-center gap-2 px-2 py-1 flex-wrap" style={{ borderTop: "1px solid var(--color-border)" }}>
-        {showBrushSize && (
-          <div className="flex items-center gap-1.5">
-            <span className="text-[10px]" style={{ color: "var(--color-text-secondary)" }}>Size</span>
-            <input type="range" min={2} max={200} value={brushSize} disabled={locked} onChange={(e) => onBrushSizeChange(Number(e.target.value))}
-              className="w-24 h-3" />
-            <span className="text-[10px] w-6 text-center tabular-nums" style={{ color: "var(--color-text-muted)" }}>{brushSize}</span>
-          </div>
-        )}
+      {/* Options row — hidden when in pointer/select mode or annotation is active */}
+      {/* Inpaint prompt bar — visible during brush/marquee/lasso AND annotation mode */}
+      {showInpaintBar && (
+        <div className="flex items-center gap-1 px-2 py-1 flex-1 min-w-0" style={{ borderTop: "1px solid var(--color-border)" }}>
+          <input className="flex-1 px-2 py-0.5 text-[10px] min-w-0" style={inputStyle} disabled={locked}
+            placeholder={annotationActive ? "Draw annotations, then describe changes here and Apply Inpaint..." : "Describe what you want in the painted area (e.g. a leather belt, blue sky)..."}
+            value={inpaintPrompt} onChange={(e) => setInpaintPrompt(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") onApplyInpaint(inpaintPrompt); }}
+          />
+          <ActionBtn busy={busy} disabled={locked} onClick={() => onApplyInpaint(inpaintPrompt)} busyText="Applying...">Apply Inpaint</ActionBtn>
+        </div>
+      )}
 
-        {(activeTool === "brush" || activeTool === "marquee" || activeTool === "lasso") && (
-          <div className="flex items-center gap-1 flex-1 min-w-0">
-            <input className="flex-1 px-2 py-0.5 text-[10px] min-w-0" style={inputStyle} disabled={locked}
-              placeholder="Describe what you want in the painted area (e.g. a leather belt, blue sky)..."
-              value={inpaintPrompt} onChange={(e) => setInpaintPrompt(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") onApplyInpaint(inpaintPrompt); }}
-            />
-            <ActionBtn busy={busy} disabled={!hasMask || locked} onClick={() => onApplyInpaint(inpaintPrompt)} busyText="Applying...">Apply Inpaint</ActionBtn>
-          </div>
-        )}
+      {showToolSpecificOptions && <div className="flex items-center gap-2 px-2 py-1 flex-wrap" style={{ borderTop: "1px solid var(--color-border)" }}>
 
         {activeTool === "smartSelect" && (
           <div className="flex items-center gap-1 flex-1 min-w-0">

@@ -13,10 +13,9 @@ import {
   Bug,
   Palette,
   FolderOpen,
-  Star,
-  BookOpen,
-  Clock,
   Puzzle,
+  Star,
+  MessageSquare,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { PageId } from "@/app";
@@ -31,24 +30,26 @@ interface SidebarProps {
 
 type NavItem = { id: PageId; label: string; icon: React.ComponentType<{ className?: string }>; disabled?: boolean };
 
-const LIBRARY_ITEMS: NavItem[] = [
-  { id: "style-library", label: "Style Library", icon: Palette },
-  { id: "prompt-builder", label: "Prompt Builder", icon: Puzzle },
+const TOP_ITEMS: NavItem[] = [
   { id: "generated-images", label: "Generated Images", icon: FolderOpen },
   { id: "favorites", label: "Favorites", icon: Star },
-  { id: "prompt-library", label: "Prompt Library", icon: BookOpen },
-  { id: "history", label: "Generation History", icon: Clock },
+  { id: "prompt-builder", label: "Prompt Builder", icon: Puzzle },
+  { id: "style-library", label: "Style Library", icon: Palette },
+  { id: "transcripts", label: "Art Direction Logs", icon: MessageSquare },
 ];
 
 const TOOL_ITEMS: NavItem[] = [
-  { id: "gemini", label: "AI Generate Image", icon: Sparkles },
-  { id: "multiview", label: "Multiview", icon: Image },
-  { id: "character", label: "AI CharacterLab", icon: User },
-  { id: "weapon", label: "AI WeaponLab", icon: Crosshair },
-  { id: "prop", label: "AI PropLab", icon: Package },
-  { id: "environment", label: "AI Environment Lab", icon: Mountain },
+  { id: "character", label: "AI Character Lab", icon: User },
   { id: "uilab", label: "AI UI Lab", icon: Layout },
+  { id: "prop", label: "AI Prop Lab", icon: Package },
+  { id: "weapon", label: "AI Weapon Lab", icon: Crosshair },
+  { id: "environment", label: "AI Environment Lab", icon: Mountain },
   { id: "3d", label: "3D GEN AI", icon: Box, disabled: true },
+];
+
+const UTILITY_ITEMS: NavItem[] = [
+  { id: "gemini", label: "Default Gemini", icon: Sparkles },
+  { id: "multiview", label: "Multiview", icon: Image },
 ];
 
 export function Sidebar({ activePage, onNavigate, onSettingsClick, collapsed, setCollapsed }: SidebarProps) {
@@ -72,7 +73,7 @@ export function Sidebar({ activePage, onNavigate, onSettingsClick, collapsed, se
           <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-2">
             <button
               onClick={onSettingsClick}
-              className="flex items-center gap-2.5 rounded px-3 py-2 text-[13px] font-medium transition-all w-full text-left cursor-pointer mb-1"
+              className="flex items-center gap-2.5 rounded px-3 py-2 text-[13px] font-medium transition-all w-full text-left cursor-pointer"
               style={{
                 border: "none",
                 background: "transparent",
@@ -83,14 +84,7 @@ export function Sidebar({ activePage, onNavigate, onSettingsClick, collapsed, se
               Settings
             </button>
 
-            <p
-              className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-widest"
-              style={{ color: "var(--color-text-muted)" }}
-            >
-              Style Library
-            </p>
-
-            {LIBRARY_ITEMS.map((item) => {
+            {TOP_ITEMS.map((item) => {
               const Icon = item.icon;
               const active = activePage === item.id;
               return (
@@ -160,6 +154,43 @@ export function Sidebar({ activePage, onNavigate, onSettingsClick, collapsed, se
                       Soon
                     </span>
                   )}
+                </button>
+              );
+            })}
+
+            <p
+              className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-widest"
+              style={{ color: "var(--color-text-muted)" }}
+            >
+              Utilities
+            </p>
+
+            {UTILITY_ITEMS.map((item) => {
+              const Icon = item.icon;
+              const active = activePage === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => onNavigate(item.id)}
+                  className={cn(
+                    "relative flex items-center gap-2.5 rounded px-3 py-2 text-[13px] font-medium transition-all w-full text-left cursor-pointer",
+                    active
+                      ? "text-[var(--color-foreground)]"
+                      : "text-[var(--color-text-secondary)] hover:text-[var(--color-foreground)]",
+                  )}
+                  style={{
+                    border: "none",
+                    background: active ? "var(--color-hover)" : "transparent",
+                  }}
+                >
+                  {active && (
+                    <span
+                      className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-[2px] rounded-r-full"
+                      style={{ background: "var(--color-text-secondary)" }}
+                    />
+                  )}
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {item.label}
                 </button>
               );
             })}

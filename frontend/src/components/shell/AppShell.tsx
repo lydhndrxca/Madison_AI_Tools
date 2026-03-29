@@ -8,6 +8,7 @@ import { useWebSocket } from "@/hooks/useApi";
 import { useSessionContext } from "@/hooks/SessionContext";
 import { useVoiceToText, nativeSpeechSupported } from "@/hooks/useVoiceToText";
 import type { VoiceEngine } from "@/hooks/useVoiceToText";
+import { useVoiceDirector } from "@/hooks/useVoiceDirector";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import type { PageId } from "@/app";
 
@@ -147,17 +148,17 @@ const PAGE_LABELS: Record<PageId, string> = {
   "style-library": "Style Library",
   "prompt-builder": "Prompt Builder",
   "generated-images": "Generated Images",
-  "favorites": "Favorites",
-  "prompt-library": "Prompt Library",
+  "favorites": "Generated Images",
   "history": "Generation History",
-  "gemini": "AI Generate Image",
+  "gemini": "Default Gemini",
   "multiview": "Multiview",
-  "character": "AI CharacterLab",
-  "weapon": "AI WeaponLab",
-  "prop": "AI PropLab",
+  "character": "AI Character Lab",
+  "weapon": "AI Weapon Lab",
+  "prop": "AI Prop Lab",
   "environment": "AI Environment Lab",
   "uilab": "AI UI Lab",
   "3d": "3D GEN AI",
+  "transcripts": "Art Direction Logs",
 };
 
 export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
@@ -168,9 +169,20 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
   const [audioSettingsOpen, setAudioSettingsOpen] = useState(false);
   const { triggerSave, triggerOpen } = useSessionContext();
   const voice = useVoiceToText();
+  const director = useVoiceDirector();
   const [voiceCtxMenu, setVoiceCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [voiceRestartPending, setVoiceRestartPending] = useState(false);
   const { registerAction, unregisterAction } = useShortcuts();
+
+  const toggleVoiceToText = useCallback(() => {
+    if (director.active) director.toggle();
+    voice.toggle();
+  }, [voice, director]);
+
+  const toggleDirector = useCallback(() => {
+    if (voice.active) voice.toggle();
+    director.toggle();
+  }, [voice, director]);
 
   const switchVoiceEngine = useCallback((engine: VoiceEngine) => {
     if (voice.settings.engine === engine) { setVoiceCtxMenu(null); return; }
@@ -186,6 +198,17 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
     const timer = setTimeout(() => { voice.toggle(); setVoiceRestartPending(false); }, 150);
     return () => clearTimeout(timer);
   }, [voiceRestartPending, voice]);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { action, params } = (e as CustomEvent).detail;
+      if (action === "navigate" && params?.page) {
+        onNavigate(params.page as PageId);
+      }
+    };
+    window.addEventListener("voice-command", handler);
+    return () => window.removeEventListener("voice-command", handler);
+  }, [onNavigate]);
 
   const onWsMessage = useCallback(
     (msg: { type: string; data: Record<string, unknown> }) => {
@@ -270,7 +293,7 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
           {/* Voice-to-text button — onMouseDown preventDefault keeps focus in the active text field */}
           <button
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => voice.toggle()}
+            onClick={toggleVoiceToText}
             onContextMenu={(e) => { e.preventDefault(); setVoiceCtxMenu({ x: e.clientX, y: e.clientY }); }}
             className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded cursor-pointer font-medium${voice.active ? " voice-recording-indicator" : ""}`}
             style={{
@@ -283,6 +306,23 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
             {voice.active && <span className="voice-recording-dot" />}
             {!voice.active && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>}
             {voice.active ? "Voice Recording Active" : `Voice to Text${voice.settings.engine === "native" ? " (Native)" : ""}`}
+          </button>
+
+          {/* Voice Director button — hands-free art direction via Gemini function calling */}
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={toggleDirector}
+            className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded cursor-pointer font-medium${director.active ? " voice-recording-indicator" : ""}`}
+            style={{
+              background: director.active ? "rgba(139, 92, 246, 0.15)" : "transparent",
+              border: director.active ? "1px solid rgba(139, 92, 246, 0.4)" : "1px solid transparent",
+              color: director.active ? "#a78bfa" : "var(--color-text-secondary)",
+            }}
+            title={director.active ? "Voice Director is active — click to stop" : "Start Voice Director — speak commands to control the AI tools hands-free"}
+          >
+            {director.active && <span className="voice-recording-dot" style={{ background: "#a78bfa" }} />}
+            {!director.active && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 4-8 8 3 3 8-8"/><path d="m18 7-3-3"/><path d="M9 15 4.4 19.6a2.1 2.1 0 1 0 3 3L12 18"/></svg>}
+            {director.active ? "Director Listening..." : "Voice Director"}
           </button>
         </div>
         <main

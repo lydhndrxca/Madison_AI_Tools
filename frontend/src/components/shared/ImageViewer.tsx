@@ -5,6 +5,7 @@ import { EditorToolbar, STYLE_PRESETS } from "./editor/EditorToolbar";
 import type { EditorTool, OutpaintDir } from "./editor/EditorToolbar";
 import * as Mask from "./editor/maskEngine";
 import { apiFetch } from "@/hooks/useApi";
+import { useImageEnhance } from "@/hooks/useImageEnhance";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import { AnnotationToolbar, AnnotationCanvas, exportWithAnnotations, type Annotation, type AnnotationType } from "./AnnotationLayer";
 
@@ -86,8 +87,14 @@ export function ImageViewer({
   const [editorBusy, setEditorBusy] = useState(false);
   const [brushCursor, setBrushCursor] = useState<{ x: number; y: number } | null>(null);
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
+  const mainImageRef = useRef<HTMLImageElement>(null);
+  /** After swapping `src`, skip one `fitToContainer` when dimensions go 0 → loaded (tab switch). */
+  const suppressNextNaturalFitRef = useRef(false);
   const drawingRef = useRef(false);
   const prevDrawPos = useRef<{ x: number; y: number } | null>(null);
+
+  // AI Upres / Restore
+  const enhancer = useImageEnhance();
 
   // Annotation state
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -98,6 +105,9 @@ export function ImageViewer({
 
   const lockedRef = useRef(locked);
   lockedRef.current = locked;
+
+  const annotationToolRef = useRef(annotationTool);
+  annotationToolRef.current = annotationTool;
 
   // Marquee/lasso state
   const [marqueeStart, setMarqueeStart] = useState<{ x: number; y: number } | null>(null);
@@ -152,9 +162,25 @@ export function ImageViewer({
     }
   }, [naturalSize]);
 
+  const prevSrcForEditorReset = useRef<string | null | undefined>(undefined);
   // Reset editor state when source image changes (e.g. tab switch)
   useEffect(() => {
-    if (maskCanvasRef.current) { Mask.clearMask(maskCanvasRef.current); setHasMask(false); }
+    const prev = prevSrcForEditorReset.current;
+    prevSrcForEditorReset.current = src ?? null;
+
+    if (maskCanvasRef.current) {
+      Mask.clearMask(maskCanvasRef.current);
+      setHasMask(false);
+    }
+    // New bitmap can lag React state; avoid overlay sized for the old image while the new one is loading.
+    if (prev !== undefined && prev !== null && src != null && prev !== src) {
+      setNaturalSize({ w: 0, h: 0 });
+      suppressNextNaturalFitRef.current = true;
+      if (maskCanvasRef.current) {
+        maskCanvasRef.current.width = 1;
+        maskCanvasRef.current.height = 1;
+      }
+    }
     setEditorTool("select");
     setInpaintMode(false);
   }, [src]);
@@ -169,8 +195,14 @@ export function ImageViewer({
     regAction("toolMarquee", guard(() => { setEditorTool("marquee"); setInpaintMode(true); }));
     regAction("toolLasso", guard(() => { setEditorTool("lasso"); setInpaintMode(true); }));
     regAction("toolSmartSelect", guard(() => { setEditorTool("smartSelect"); setInpaintMode(true); }));
-    regAction("brushSmaller", guard(() => setBrushSize((s) => Math.max(2, s - 5))));
-    regAction("brushLarger", guard(() => setBrushSize((s) => Math.min(200, s + 5))));
+    regAction("brushSmaller", guard(() => {
+      if (annotationToolRef.current) setAnnotationLineWidth((s) => Math.max(1, s - 1));
+      else setBrushSize((s) => Math.max(2, s - 5));
+    }));
+    regAction("brushLarger", guard(() => {
+      if (annotationToolRef.current) setAnnotationLineWidth((s) => Math.min(20, s + 1));
+      else setBrushSize((s) => Math.min(200, s + 5));
+    }));
     return () => {
       for (const id of ["toolSelect", "toolBrush", "toolEraser", "toolMarquee", "toolLasso", "toolSmartSelect", "brushSmaller", "brushLarger"]) {
         unregAction(id);
@@ -281,16 +313,23 @@ export function ImageViewer({
       if (editorTool === "marquee") { e.preventDefault(); setMarqueeStart(pos); setMarqueeEnd(pos); return; }
       if (editorTool === "lasso") { e.preventDefault(); setLassoPoints([pos]); return; }
     }
+    if (annotationTool && annotationVisible) return;
     if (e.button === 0) {
       e.preventDefault(); setPanning(true); setPanButton(0); lastPos.current = { x: e.clientX, y: e.clientY };
     }
-  }, [locked, inpaintMode, src, isDrawingTool, editorTool, brushSize, screenToImage]);
+  }, [locked, inpaintMode, src, isDrawingTool, editorTool, brushSize, screenToImage, annotationTool, annotationVisible]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (locked) { setBrushCursor(null); }
+    const wantsAnnotBrush = !locked && annotationVisible && (annotationTool === "freehand" || annotationTool === "eraser");
     if (!locked && inpaintMode && isDrawingTool) {
       const rect = containerRef.current?.getBoundingClientRect();
       if (rect) setBrushCursor({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    } else if (wantsAnnotBrush) {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect) setBrushCursor({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    } else if (!inpaintMode || !isDrawingTool) {
+      setBrushCursor(null);
     }
     if (panning) {
       setPanX((p) => p + e.clientX - lastPos.current.x);
@@ -315,7 +354,7 @@ export function ImageViewer({
       const pos = screenToImage(e.clientX, e.clientY);
       if (pos) setLassoPoints((prev) => [...prev, pos]);
     }
-  }, [locked, panning, inpaintMode, editorTool, brushSize, marqueeStart, lassoPoints, screenToImage]);
+  }, [locked, panning, inpaintMode, editorTool, brushSize, marqueeStart, lassoPoints, screenToImage, annotationTool, annotationVisible]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (e.button === panButton) { setPanning(false); setPanButton(null); }
@@ -351,17 +390,38 @@ export function ImageViewer({
 
   const handleImageLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
-    setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    setNaturalSize({ w, h });
+    // Resize bitmap immediately so CSS size (naturalSize) never outruns buffer size
+    // (avoids stretched / misaligned mask overlay until the next useEffect tick).
+    if (maskCanvasRef.current && w > 0 && h > 0) {
+      Mask.resizeMask(maskCanvasRef.current, w, h);
+    }
   }, []);
 
   const prevNatRef = useRef({ w: 0, h: 0 });
   useEffect(() => {
     const prev = prevNatRef.current;
     prevNatRef.current = naturalSize;
-    if (naturalSize.w > 0 && naturalSize.h > 0 && (prev.w === 0 || prev.h === 0)) {
-      fitToContainer();
+    if (naturalSize.w > 0 && naturalSize.h > 0) {
+      if (suppressNextNaturalFitRef.current) {
+        suppressNextNaturalFitRef.current = false;
+      } else if (prev.w === 0 || prev.h === 0) {
+        fitToContainer();
+      }
     }
   }, [naturalSize, fitToContainer]);
+
+  // --- AI Enhance shortcut handlers ---
+  const handleEnhance = useCallback(async (mode: "upscale" | "restore") => {
+    if (!src || !onImageEdited || enhancer.busy) return;
+    const result = await enhancer.enhance(mode, src);
+    if (result) {
+      const label = mode === "upscale" ? "AI Upres" : "AI Restore";
+      onImageEdited(result, label);
+    }
+  }, [src, onImageEdited, enhancer]);
 
   // --- Context menu helpers ---
   const doAction = useCallback((fn?: () => void) => () => { setCtxMenu(null); fn?.(); }, []);
@@ -373,9 +433,14 @@ export function ImageViewer({
     { label: "Save", onClick: doAction(onSaveImage) },
     { separator: true },
     { label: "Fit to View", onClick: doAction(fitToContainer) },
-    { separator: true },
-    { label: "Clear", onClick: doAction(onClearImage) },
   ];
+  if (src && onImageEdited) {
+    menuItems.push({ separator: true });
+    menuItems.push({ label: enhancer.busy ? "AI Upres (processing…)" : "AI Upres", onClick: () => { setCtxMenu(null); handleEnhance("upscale"); } });
+    menuItems.push({ label: enhancer.busy ? "AI Restore (processing…)" : "AI Restore", onClick: () => { setCtxMenu(null); handleEnhance("restore"); } });
+  }
+  menuItems.push({ separator: true });
+  menuItems.push({ label: "Clear", onClick: doAction(onClearImage) });
   if (onClearAllImages) {
     menuItems.push({ label: "Clear All Generated", onClick: doAction(onClearAllImages) });
   }
@@ -412,9 +477,20 @@ export function ImageViewer({
         method: "POST", body: JSON.stringify({ image_b64: getImageB64(), subject }),
       });
       if (resp.mask_b64 && maskCanvasRef.current) {
-        await Mask.applyMaskImage(maskCanvasRef.current, `data:image/png;base64,${resp.mask_b64}`);
-        setHasMask(true);
-        setInpaintMode(true);
+        const imgEl = mainImageRef.current;
+        const nw = imgEl?.naturalWidth ?? 0;
+        const nh = imgEl?.naturalHeight ?? 0;
+        if (!nw || !nh) {
+          console.warn("[SmartSelect] Image not decoded yet (natural size 0); try again after load");
+        } else {
+          Mask.resizeMask(maskCanvasRef.current, nw, nh);
+          if (naturalSize.w !== nw || naturalSize.h !== nh) {
+            setNaturalSize({ w: nw, h: nh });
+          }
+          await Mask.applyMaskImage(maskCanvasRef.current, `data:image/png;base64,${resp.mask_b64}`);
+          setHasMask(true);
+          setInpaintMode(true);
+        }
       } else if (resp.error) {
         console.error("[SmartSelect]", resp.error);
       } else {
@@ -422,9 +498,10 @@ export function ImageViewer({
       }
     } catch (err) {
       console.error("[SmartSelect] Request failed:", err);
+    } finally {
+      setEditorBusy(false);
     }
-    setEditorBusy(false);
-  }, [src, getImageB64]);
+  }, [src, getImageB64, naturalSize.w, naturalSize.h]);
 
   const handleSmartErase = useCallback(async () => {
     if (!src || !maskCanvasRef.current || !Mask.maskHasContent(maskCanvasRef.current)) return;
@@ -503,12 +580,14 @@ export function ImageViewer({
   const toolbarBtnStyle = { background: "transparent", border: "none", color: "var(--color-text-secondary)" };
 
   const imgTransform = `translate(-50%, -50%) translate(${panX}px, ${panY}px) scale(${zoom})`;
-  const showBrushCursor = inpaintMode && isDrawingTool && !panning;
-  const canvasCursor = showBrushCursor ? "none" : inpaintMode && (editorTool === "marquee" || editorTool === "lasso") ? "crosshair" : panning ? "grabbing" : "default";
+  const isAnnotationBrush = annotationVisible && (annotationTool === "freehand" || annotationTool === "eraser");
+  const showBrushCursor = (inpaintMode && isDrawingTool && !panning) || (isAnnotationBrush && !panning);
+  const canvasCursor = showBrushCursor ? "none" : annotationTool && annotationVisible ? "crosshair" : inpaintMode && (editorTool === "marquee" || editorTool === "lasso") ? "crosshair" : panning ? "grabbing" : "default";
 
   const handleToolChange = useCallback((tool: EditorTool) => {
     setEditorTool(tool);
     setInpaintMode(tool !== "select");
+    if (tool !== "select") setAnnotationTool(null);
   }, []);
 
   // --- Fullscreen helpers ---
@@ -662,13 +741,17 @@ export function ImageViewer({
         onStyleTransfer={handleStyleTransfer}
         busy={editorBusy}
         locked={locked}
+        annotationActive={!!annotationTool}
       />
 
       <AnnotationToolbar
         annotations={annotations}
         onAnnotationsChange={setAnnotations}
         activeTool={annotationTool}
-        onToolChange={setAnnotationTool}
+        onToolChange={(t) => {
+          setAnnotationTool(t);
+          if (t) { setEditorTool("select"); setInpaintMode(false); }
+        }}
         visible={annotationVisible}
         onVisibilityChange={setAnnotationVisible}
         color={annotationColor}
@@ -686,10 +769,28 @@ export function ImageViewer({
         } : undefined}
       />
 
+      {/* Unified size slider — always visible, controls brush or annotation size */}
+      <div className="flex items-center gap-1.5 px-2 py-1 shrink-0" style={{ borderBottom: "1px solid var(--color-border)" }}>
+        <span className="text-[10px]" style={{ color: "var(--color-text-secondary)" }}>Size</span>
+        {annotationTool ? (
+          <>
+            <input type="range" min={1} max={20} value={annotationLineWidth} disabled={locked}
+              onChange={(e) => setAnnotationLineWidth(Number(e.target.value))} className="w-24 h-3" />
+            <span className="text-[10px] w-6 text-center tabular-nums" style={{ color: "var(--color-text-muted)" }}>{annotationLineWidth}</span>
+          </>
+        ) : (
+          <>
+            <input type="range" min={2} max={200} value={brushSize} disabled={locked}
+              onChange={(e) => setBrushSize(Number(e.target.value))} className="w-24 h-3" />
+            <span className="text-[10px] w-6 text-center tabular-nums" style={{ color: "var(--color-text-muted)" }}>{brushSize}</span>
+          </>
+        )}
+      </div>
+
       <div
         ref={containerRef}
         className="flex-1 overflow-hidden relative select-none"
-        style={{ background: "var(--color-canvas, #343434)", cursor: annotationTool ? "crosshair" : canvasCursor }}
+        style={{ background: "var(--color-canvas, #343434)", cursor: annotationTool && annotationVisible ? "crosshair" : canvasCursor }}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -700,6 +801,7 @@ export function ImageViewer({
         {src ? (
           <>
             <img
+              ref={mainImageRef}
               src={src} alt="" draggable={false} onLoad={handleImageLoad}
               style={{
                 position: "absolute", left: "50%", top: "50%",
@@ -833,14 +935,25 @@ export function ImageViewer({
           </div>
         )}
 
-        {showBrushCursor && brushCursor && (
+        {enhancer.busy && (
+          <div className="absolute inset-0 z-40 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.45)", pointerEvents: "none" }}>
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: "rgba(0,0,0,0.75)", border: "1px solid rgba(255,255,255,0.1)" }}>
+              <svg className="animate-spin h-4 w-4" style={{ color: "rgba(255,255,255,0.7)" }} viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+              <span className="text-xs font-medium" style={{ color: "rgba(255,255,255,0.8)" }}>Enhancing…</span>
+            </div>
+          </div>
+        )}
+
+        {showBrushCursor && brushCursor && (() => {
+          const cursorSize = isAnnotationBrush ? annotationLineWidth * zoom : brushSize * zoom;
+          return (
           <div
             style={{
               position: "absolute",
               left: brushCursor.x,
               top: brushCursor.y,
-              width: brushSize * zoom,
-              height: brushSize * zoom,
+              width: cursorSize,
+              height: cursorSize,
               transform: "translate(-50%, -50%)",
               borderRadius: "50%",
               border: "1.5px solid rgba(255,255,255,0.8)",
@@ -849,7 +962,8 @@ export function ImageViewer({
               zIndex: 40,
             }}
           />
-        )}
+          );
+        })()}
         {/* No overlay during generation — user can still zoom and pan */}
       </div>
 

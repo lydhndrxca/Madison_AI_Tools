@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { Button, Select, Textarea, NumberStepper } from "@/components/ui";
+import { Button, Select, Textarea, NumberStepper, Card } from "@/components/ui";
 import { ImageViewer } from "@/components/shared/ImageViewer";
 import { EditHistory } from "@/components/shared/EditHistory";
 import { GroupedTabBar } from "@/components/shared/TabBar";
@@ -13,10 +13,14 @@ import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste
 import { createHistoryEntry, pushHistory, createImageRecord } from "@/lib/imageHistory";
 import type { HistoryEntry, ImageRecord, HistorySettings } from "@/lib/imageHistory";
 import { XmlModal } from "@/components/shared/XmlModal";
-import { GripVertical, ChevronDown, ChevronRight, Lock, Unlock, Save, Upload, Pencil } from "lucide-react";
+import { ArtDirectorWidget } from "@/components/shared/ArtDirectorWidget";
+import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
+import { useArtDirector } from "@/hooks/ArtDirectorContext";
+import { DeepSearchPanel } from "@/components/shared/DeepSearchPanel";
+import type { SearchResult } from "@/components/shared/DeepSearchPanel";
+import { useArtboard } from "@/hooks/ArtboardContext";
+import { GripVertical, ChevronDown, ChevronRight, Lock, Unlock, Save, Upload } from "lucide-react";
 import { useShortcuts } from "@/hooks/useShortcuts";
-import { usePromptOverrides } from "@/hooks/PromptOverridesContext";
-import { EditPromptModal } from "@/components/shared/EditPromptModal";
 import { useCustomSections } from "@/hooks/CustomSectionsContext";
 import { useCustomSectionState } from "@/hooks/useCustomSectionState";
 import { CustomSectionRenderer } from "@/components/shared/CustomSectionRenderer";
@@ -36,6 +40,7 @@ const BUILTIN_TABS: TabDef[] = [
   { id: "panoramic", label: "Panoramic", group: "views", prompt: "Ultra-wide cinematic establishing shot." },
   { id: "detail", label: "Detail", group: "views", prompt: "Tight crop on a signature material or architectural detail." },
   { id: "artboard", label: "Art Table", group: "artboard" },
+  { id: "deepSearch", label: "Deep Search", group: "search" },
   { id: "refA", label: "Ref A", group: "refs" },
   { id: "refB", label: "Ref B", group: "refs" },
   { id: "refC", label: "Ref C", group: "refs" },
@@ -182,7 +187,6 @@ const SECTION_TIPS: Record<SectionId, string> = {
 
 const NON_COLLAPSIBLE: Set<SectionId> = new Set(["generate"]);
 const TOGGLEABLE_SECTIONS: Set<SectionId> = new Set(["identity", "envDescription", "attributes", "reimagine", "styleFusion", "preservation"]);
-const PROMPT_EDITABLE_SECTIONS: Set<SectionId> = new Set(["styleFusion", "preservation"]);
 
 interface ModelInfo { id: string; label: string; resolution: string; time_estimate: string; multimodal: boolean }
 
@@ -249,6 +253,8 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
 
   // Environment description
   const [description, setDescription] = useState("");
+  const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
+  const { setCurrentImage, setAttributesContext } = useArtDirector();
   const [editPrompt, setEditPrompt] = useState("");
 
   // Environment attributes
@@ -278,15 +284,14 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
   const [gridEditBusy, setGridEditBusy] = useState<Record<string, boolean>>({});
   const [viewGenCount, setViewGenCount] = useState(1);
   const [modelId, setModelId] = useState("");
+  const [editModel, setEditModel] = useState("");
+  const [multiviewModel, setMultiviewModel] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
   const { addToast } = useToastContext();
   const { addFavorite, removeFavorite, isFavorited, getFavoriteId } = useFavorites();
-  const promptOverrides = usePromptOverrides();
-  const { getSectionColor, setSectionColor } = useCustomSections();
+  const artboard = useArtboard();
+  const { getSectionColor } = useCustomSections();
   const customSections = useCustomSectionState("env");
-  const TOOL_ID = "env";
-  const [promptEditSection, setPromptEditSection] = useState<SectionId | null>(null);
-  const [promptCtxMenu, setPromptCtxMenu] = useState<{ x: number; y: number; section: SectionId } | null>(null);
 
   // Layout
   const [layout, setLayout] = useState<LayoutState>(() => loadDefaultLayout(layoutStorageKey));
@@ -434,6 +439,21 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
 
   const getMainImageB64 = useCallback(() => getImageB64("main"), [getImageB64]);
 
+  const handleSendSearchToArtboard = useCallback((images: SearchResult[]) => {
+    const existing = artboard.items;
+    let maxX = 0;
+    for (const it of existing) { if (it.x + it.w > maxX) maxX = it.x + it.w; }
+    const GAP = 20;
+    const COLS = Math.ceil(Math.sqrt(images.length));
+    const startX = existing.length > 0 ? maxX + GAP * 3 : 0;
+    const newItems = images.map((img, i) => ({
+      type: "image" as const, x: startX + (i % COLS) * (img.width + GAP), y: Math.floor(i / COLS) * (img.height + GAP),
+      w: img.width, h: img.height, rotation: 0, content: `data:image/png;base64,${img.b64}`,
+    }));
+    artboard.addItems(newItems);
+    setActiveTab("artboard");
+  }, [artboard, setActiveTab]);
+
   // --- Tab management ---
   const handleAddRef = useCallback(() => {
     refCounter.current++;
@@ -450,9 +470,6 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
     setImageIdx((prev) => { const n = { ...prev }; delete n[tabId]; return n; });
   }, []);
 
-  const handleEditTabPrompt = useCallback((tabId: string, newPrompt: string) => {
-    setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, prompt: newPrompt } : t));
-  }, []);
 
   // --- Build request body ---
   // --- Prompt override helpers ---
@@ -466,10 +483,51 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
 
   const resolveSection = useCallback((sectionId: SectionId): string => {
     if (!isSectionEnabled(sectionId)) return "";
-    const override = promptOverrides.getOverride(TOOL_ID, sectionId);
-    if (override !== null) return override;
     return getDefaultSectionPrompt(sectionId);
-  }, [isSectionEnabled, promptOverrides, getDefaultSectionPrompt]);
+  }, [isSectionEnabled, getDefaultSectionPrompt]);
+
+  const modelOptions = useMemo(() => models.map((m) => ({
+    value: m.id, label: `${m.label} — ${m.resolution} (${m.time_estimate})`,
+  })), [models]);
+
+  // Prompt preview
+  const [promptPreview, setPromptPreview] = useState("");
+  const [promptPreviewOpen, setPromptPreviewOpen] = useState(false);
+  const [lastSentPrompt, setLastSentPrompt] = useState("");
+
+  const buildPromptPreview = useCallback((): string => {
+    const desc = isSectionEnabled("envDescription") ? description : "";
+    if (!desc) return "(No description — enter an environment description first)";
+    const parts: string[] = [];
+    const idParts: string[] = [];
+    if (isSectionEnabled("identity")) {
+      if (envName) idParts.push(`Name: ${envName}`);
+      if (biome) idParts.push(`Biome: ${biome}`);
+      if (gameContext) idParts.push(`Context: ${gameContext}`);
+      if (timeOfDay) idParts.push(`Time: ${timeOfDay}`);
+      if (seasonWeather) idParts.push(`Season/Weather: ${seasonWeather}`);
+      if (envScale) idParts.push(`Scale: ${envScale}`);
+    }
+    let envPrompt = idParts.length ? `${idParts.join(", ")}\n\n${desc}` : desc;
+
+    const fusionCtx = resolveSection("styleFusion");
+    const lockCtx = resolveSection("preservation");
+    if (fusionCtx) envPrompt += `\n\n--- Style Fusion ---\n${fusionCtx}`;
+    if (lockCtx) envPrompt += `\n\n--- PRESERVATION CONSTRAINTS (HIGHEST PRIORITY) ---\n${lockCtx}`;
+
+    parts.push("[STYLE RULES] Cinematic environment concept art. Wide composition.");
+    if (extractMode === "recreate" && getImageB64("main")) {
+      parts.push(`\n[RECREATE MODE] Main Stage image will be sent as reference.`);
+      parts.push(`\nRecreate this environment as accurately as possible.\n\n${envPrompt}`);
+    } else {
+      parts.push(`\nGenerate a detailed environment image.\n\n${envPrompt}`);
+    }
+    const refImgs: string[] = [];
+    if (getImageB64("main")) refImgs.push("Main Stage image");
+    tabs.filter((t) => t.group === "refs").forEach((t) => { if (getImageB64(t.id)) refImgs.push(`${t.label} image`); });
+    if (refImgs.length) parts.push(`\n--- Attached Images ---\n${refImgs.join("\n")}`);
+    return parts.join("\n");
+  }, [description, envName, biome, gameContext, timeOfDay, seasonWeather, envScale, extractMode, isSectionEnabled, resolveSection, getImageB64, tabs]);
 
   const buildRequestBody = useCallback((viewType: string) => {
     const refImgs: string[] = [];
@@ -513,6 +571,30 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
     };
   }, [tabs, getImageB64, getMainImageB64, description, envName, biome, gameContext, timeOfDay, seasonWeather, envScale, attributes, styleFusion, preservation, modelId, extractMode, isSectionEnabled, styleLibraryFolder, styleLibraryFolders, customSections.getPromptContributions, customSections.getImageAttachments]);
 
+  // Apply edit handler (uses /environment/generate with edit_prompt)
+  const handleApplyEdit = useCallback(async () => {
+    if (!editPrompt.trim()) return;
+    const mainB64 = getMainImageB64();
+    if (!mainB64) { addToast("Load an image on Main Stage first", "info"); return; }
+    busy.start("apply");
+    try {
+      const body = {
+        ...buildRequestBody("main"),
+        reference_image_b64: mainB64,
+        edit_prompt: editPrompt,
+        model_id: editModel || modelId || undefined,
+      };
+      const res = await apiFetch<{ image_b64?: string; width?: number; height?: number; error?: string }>(
+        "/environment/generate", { method: "POST", body: JSON.stringify(body) },
+      );
+      if (res.image_b64) {
+        setTabImage("main", `data:image/png;base64,${res.image_b64}`, `Edit: ${editPrompt.slice(0, 40)}`);
+        setLastSentPrompt(buildPromptPreview());
+      } else if (res.error) addToast(res.error, "error");
+    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
+    busy.end("apply");
+  }, [editPrompt, getMainImageB64, buildRequestBody, editModel, modelId, setTabImage, addToast, busy, buildPromptPreview]);
+
   // --- Generate ---
   const handleGenerate = useCallback(async (viewType?: string) => {
     const vt = viewType || VIEW_TYPE_MAP[activeTab] || "main";
@@ -551,7 +633,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
       await Promise.all(views.map(async (vt) => {
         const tab = Object.entries(VIEW_TYPE_MAP).find(([, v]) => v === vt)?.[0];
         if (!tab) return;
-        const body = buildRequestBody(vt);
+        const body = { ...buildRequestBody(vt), model_id: multiviewModel || modelId || undefined };
         const resp = await apiFetch<{ image_b64?: string; error?: string }>("/env/generate", {
           method: "POST", body: JSON.stringify(body),
         });
@@ -866,17 +948,49 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
     addToast("Environment session cleared", "info");
   }, [addToast, customSections]);
 
-  // Listen for project-clear event from ProjectTabsWrapper
   useEffect(() => {
-    const handler = (e: Event) => {
+    const SK = "madison-envlab-projects";
+    const clearHandler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.storageKey === "madison-envlab-projects" && detail?.instanceId === instanceId) {
-        handleReset();
+      if (detail?.storageKey === SK && detail?.instanceId === instanceId) handleReset();
+    };
+    const saveHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.storageKey === SK && detail?.instanceId === instanceId) {
+        const state = { description, envName, biome, gameContext, timeOfDay, seasonWeather, envScale, attributes, lockedAttrs, styleFusion, preservation, modelId };
+        const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+        const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+        a.download = `environment_project_${instanceId + 1}.json`; a.click(); URL.revokeObjectURL(a.href);
       }
     };
-    window.addEventListener("project-clear", handler);
-    return () => window.removeEventListener("project-clear", handler);
-  }, [instanceId, handleReset]);
+    const loadHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.storageKey === SK && detail?.instanceId === instanceId && detail?.data) {
+        const d = detail.data as Record<string, unknown>;
+        if (typeof d.description === "string") setDescription(d.description);
+        if (typeof d.envName === "string") setEnvName(d.envName as string);
+        if (typeof d.biome === "string") setBiome(d.biome as string);
+        if (typeof d.gameContext === "string") setGameContext(d.gameContext as string);
+        if (typeof d.timeOfDay === "string") setTimeOfDay(d.timeOfDay as string);
+        if (typeof d.seasonWeather === "string") setSeasonWeather(d.seasonWeather as string);
+        if (typeof d.envScale === "string") setEnvScale(d.envScale as string);
+        if (d.attributes) setAttributes(d.attributes as typeof attributes);
+        if (d.lockedAttrs) setLockedAttrs(d.lockedAttrs as typeof lockedAttrs);
+        if (d.styleFusion) setStyleFusion(d.styleFusion as StyleFusionState);
+        if (d.preservation) setPreservation(d.preservation as typeof preservation);
+        if (typeof d.modelId === "string") setModelId(d.modelId);
+        addToast("Project loaded", "success");
+      }
+    };
+    window.addEventListener("project-clear", clearHandler);
+    window.addEventListener("project-save", saveHandler);
+    window.addEventListener("project-load", loadHandler);
+    return () => {
+      window.removeEventListener("project-clear", clearHandler);
+      window.removeEventListener("project-save", saveHandler);
+      window.removeEventListener("project-load", loadHandler);
+    };
+  }, [instanceId, handleReset, description, envName, biome, gameContext, timeOfDay, seasonWeather, envScale, attributes, lockedAttrs, styleFusion, preservation, modelId, addToast]);
 
   // History navigation
   const handleHistorySelect = useCallback((entry: HistoryEntry | null) => {
@@ -975,6 +1089,105 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
     };
   }, [active, registerAction, unregisterAction, handleGenerate, handleExtractAttributes, handleEnhanceDescription, handleRandomizeFull, handleReimagine, handleGenerateAllViews, handleSendToPS]);
 
+  // --- Voice Director command listener ---
+  const voiceCmdRef = useRef({
+    generate: () => handleGenerate(),
+    extract_attributes: handleExtractAttributes,
+    enhance_description: handleEnhanceDescription,
+    randomize: handleRandomizeFull,
+    reimagine: handleReimagine,
+    generate_all_views: handleGenerateAllViews,
+    generate_selected_view: () => handleGenerateSelectedView(),
+    set_field: (params: Record<string, unknown>) => {
+      const f = String(params.field || "").toLowerCase();
+      const v = String(params.value || "");
+      if (f === "description") setDescription(v);
+      else if (f === "env_name") setEnvName(v);
+      else if (f === "biome") setBiome(v);
+      else if (f === "game_context") setGameContext(v);
+      else if (f === "time_of_day") setTimeOfDay(v);
+      else if (f === "season_weather") setSeasonWeather(v);
+      else if (f === "env_scale") setEnvScale(v);
+    },
+    show_xml: () => setXmlOpen(true),
+    send_to_photoshop: handleSendToPS,
+    reset: handleReset,
+  });
+  voiceCmdRef.current = {
+    generate: () => handleGenerate(),
+    extract_attributes: handleExtractAttributes,
+    enhance_description: handleEnhanceDescription,
+    randomize: handleRandomizeFull,
+    reimagine: handleReimagine,
+    generate_all_views: handleGenerateAllViews,
+    generate_selected_view: () => handleGenerateSelectedView(),
+    set_field: (params: Record<string, unknown>) => {
+      const f = String(params.field || "").toLowerCase();
+      const v = String(params.value || "");
+      if (f === "description") setDescription(v);
+      else if (f === "env_name") setEnvName(v);
+      else if (f === "biome") setBiome(v);
+      else if (f === "game_context") setGameContext(v);
+      else if (f === "time_of_day") setTimeOfDay(v);
+      else if (f === "season_weather") setSeasonWeather(v);
+      else if (f === "env_scale") setEnvScale(v);
+    },
+    show_xml: () => setXmlOpen(true),
+    send_to_photoshop: handleSendToPS,
+    reset: handleReset,
+  };
+
+  useEffect(() => {
+    if (!active) return;
+    const handler = (e: Event) => {
+      const { action, params } = (e as CustomEvent).detail as { action: string; params: Record<string, unknown> };
+      const cmds = voiceCmdRef.current as Record<string, unknown>;
+      if (action in cmds) {
+        const fn = cmds[action];
+        if (typeof fn === "function") fn(params);
+      }
+    };
+    window.addEventListener("voice-command", handler);
+    return () => window.removeEventListener("voice-command", handler);
+  }, [active]);
+
+  // --- Gallery restore listener ---
+  useEffect(() => {
+    if (!active) return;
+    const handler = (e: Event) => {
+      const d = (e as CustomEvent).detail as Record<string, unknown>;
+      if (d._source_tool !== "environment") return;
+      if (typeof d.description === "string") setDescription(d.description);
+      if (typeof d.name === "string") setEnvName(d.name as string);
+      if (typeof d.biome === "string") setBiome(d.biome as string);
+      if (typeof d.game_context === "string") setGameContext(d.game_context as string);
+      if (typeof d.time_of_day === "string") setTimeOfDay(d.time_of_day as string);
+      if (typeof d.season_weather === "string") setSeasonWeather(d.season_weather as string);
+      if (typeof d.env_scale === "string") setEnvScale(d.env_scale as string);
+      if (typeof d.model === "string") setModelId(d.model as string);
+      if (typeof d._image_b64 === "string") {
+        const src = (d._image_b64 as string).startsWith("data:") ? d._image_b64 as string : `data:image/png;base64,${d._image_b64}`;
+        setGallery((prev) => ({ ...prev, main: [src] }));
+        setImageIdx((prev) => ({ ...prev, main: 0 }));
+        setActiveTab("main");
+      }
+    };
+    window.addEventListener("gallery-restore", handler);
+    return () => window.removeEventListener("gallery-restore", handler);
+  }, [active]);
+
+  useEffect(() => {
+    if (active) {
+      setCurrentImage(currentSrc || null);
+    }
+  }, [active, currentSrc, setCurrentImage]);
+
+  useEffect(() => {
+    if (active) {
+      setAttributesContext(description || "");
+    }
+  }, [active, description, setAttributesContext]);
+
   // ---------------------------------------------------------------------------
   // Render helpers
   // ---------------------------------------------------------------------------
@@ -984,9 +1197,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
     const isToggleable = TOGGLEABLE_SECTIONS.has(id);
     const isEnabled = isSectionEnabled(id);
     const isCollapsible = !NON_COLLAPSIBLE.has(id);
-    const isPromptEditable = PROMPT_EDITABLE_SECTIONS.has(id);
-    const sectionHasOverride = isPromptEditable && promptOverrides.hasOverride(TOOL_ID, id);
-    const sectionColor = getSectionColor(TOOL_ID, id);
+    const sectionColor = getSectionColor("env", id);
     return (
       <div
         key={id}
@@ -997,19 +1208,13 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
         onDragEnd={handleDragEnd}
         onDragLeave={() => { if (dragOverId === id) setDragOverId(null); }}
         onMouseDown={(e) => { if (e.button === 1 && isToggleable) { e.preventDefault(); toggleSectionEnabled(id); } }}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          setPromptCtxMenu({ x: e.clientX, y: e.clientY, section: id });
-        }}
         className="section-card-hover"
         style={{
           border: dragOverId === id && dragItemRef.current !== id
             ? "1px solid var(--color-accent, #6a6aff)"
             : sectionColor
               ? `1px solid ${sectionColor}`
-              : sectionHasOverride
-                ? "1px solid var(--color-accent)"
-                : "1px solid var(--color-border)",
+              : "1px solid var(--color-border)",
           borderRadius: "var(--radius-lg)",
           background: "var(--color-card)",
           opacity: isEnabled ? 1 : 0.4,
@@ -1034,7 +1239,6 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
             >
               {collapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
               <span className="text-xs font-semibold uppercase tracking-wider">{SECTION_LABELS[id]}</span>
-              {sectionHasOverride && <Pencil className="h-2.5 w-2.5 shrink-0" style={{ color: "var(--color-accent)" }} />}
             </button>
           ) : (
             <span className="flex-1 py-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }} title={SECTION_TIPS[id]}>
@@ -1140,7 +1344,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
               border: "1px solid var(--color-border)",
               fontWeight: extractTargets[key] ? 600 : 400,
             }}
-            title={`When active, Extract will fill the ${label} section`}
+            title={`When active, Extract will fill the ${label} panel`}
           >{label}</button>
         ))}
       </div>
@@ -1168,7 +1372,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
         </Button>
       </div>
       <div className="pt-1">
-        <Button variant="primary" className="w-full" size="lg" generating={busy.is("gen")} generatingText="Generating..." onClick={generationMode === "grid" ? handleGridGenerate : () => handleGenerate()} title="Generate a new environment concept based on all enabled sections">
+        <Button variant="primary" className="w-full" size="lg" generating={busy.is("gen")} generatingText="Generating..." onClick={generationMode === "grid" ? handleGridGenerate : () => handleGenerate()} title="Generate a new environment concept based on all enabled panels">
           Generate Environment
         </Button>
       </div>
@@ -1668,6 +1872,21 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
         onClick={handleGenerateSelectedView}
         title="Generate only the currently selected view"
       >Generate Selected View</Button>
+      {modelOptions.length > 0 && (
+        <div>
+          <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Gemini model (multi-view)</label>
+          <select
+            className="w-full px-2 py-1 text-[10px] rounded-[var(--radius-sm)] truncate"
+            style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
+            value={multiviewModel || modelId}
+            onChange={(e) => setMultiviewModel(e.target.value)}
+            disabled={busy.is("allViews")}
+            title="Model used for Generate All Views and Generate Selected View."
+          >
+            {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+      )}
       <NumberStepper value={viewGenCount} min={1} max={10} onChange={setViewGenCount} label="Count:" />
     </div>
   );
@@ -1720,14 +1939,10 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
         {customSections.sections.map((cs) => {
           const csCollapsed = customSections.isCollapsed(cs.id);
           const csEnabled = customSections.isEnabled(cs.id);
-          const csColor = cs.color || getSectionColor(TOOL_ID, `custom:${cs.id}`);
+          const csColor = cs.color || getSectionColor("env", `custom:${cs.id}`);
           return (
             <div
               key={`custom:${cs.id}`}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setPromptCtxMenu({ x: e.clientX, y: e.clientY, section: `custom:${cs.id}` as SectionId });
-              }}
               className="section-card-hover"
               style={{
                 border: csColor ? `1px solid ${csColor}` : "1px solid var(--color-border)",
@@ -1783,11 +1998,86 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
           onClick={handleSetDefaultLayout}
           className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded text-[10px] font-medium cursor-pointer transition-colors"
           style={{ background: "transparent", color: "var(--color-text-muted)", border: "1px dashed var(--color-border)" }}
-          title="Save current section order and collapsed states as default"
+          title="Save current panel order and collapsed states as default"
         >
           <Save className="h-3 w-3" />
           Set Active Layout as Default
         </button>
+      </div>
+
+      {/* Middle Column - Edit Panel */}
+      <div className="w-[320px] h-full shrink-0 overflow-y-auto p-3 space-y-2" style={{ borderRight: "1px solid var(--color-border)" }}>
+        <Card>
+          <div className="px-3 py-2 flex flex-col gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Edit Environment</p>
+            <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>Describe changes to apply:</p>
+            <Textarea value={editPrompt} onChange={(e) => setEditPrompt(e.target.value)} rows={14} placeholder="Tell the AI what to change — e.g. Add fog in the valley, change to sunset lighting, make the water more turbulent..." disabled={busy.is("apply")} />
+            <Button variant="primary" className="w-full" generating={busy.is("apply")} generatingText="Applying..." onClick={handleApplyEdit} title="Send your edit instructions to the AI — it will modify the current image based on what you wrote above">Apply Changes</Button>
+            {modelOptions.length > 0 && (
+              <div>
+                <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Gemini model (edit)</label>
+                <select
+                  className="w-full px-2 py-1 text-[10px] rounded-[var(--radius-sm)] truncate"
+                  style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
+                  value={editModel || modelId}
+                  onChange={(e) => setEditModel(e.target.value)}
+                  disabled={busy.is("apply")}
+                  title="Model used for Apply Changes edits."
+                >
+                  {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
+            )}
+            {!isRefTab && (
+              <EditHistory
+                entries={currentHistory}
+                activeEntryId={activeHistoryId}
+                onRestore={(entryId: string) => {
+                  const entry = currentHistory.find((h) => h.id === entryId) ?? null;
+                  handleHistorySelect(entry);
+                }}
+                onRestoreCurrent={() => handleHistorySelect(null)}
+                onClearHistory={handleClearHistory}
+                defaultOpen={true}
+              />
+            )}
+
+            {/* Prompt Preview */}
+            <div className="rounded" style={{ border: "1px solid var(--color-border)", background: "var(--color-input-bg)" }}>
+              <button
+                onClick={() => setPromptPreviewOpen((p) => !p)}
+                className="w-full flex items-center justify-between px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider cursor-pointer"
+                style={{ background: "transparent", border: "none", color: "var(--color-text-secondary)" }}
+              >
+                <span>Prompt Preview {lastSentPrompt ? "(last sent)" : ""}</span>
+                {promptPreviewOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              </button>
+              {promptPreviewOpen && (
+                <div className="px-2.5 pb-2 space-y-1.5">
+                  <Button
+                    size="sm" className="w-full"
+                    onClick={() => { setPromptPreview(buildPromptPreview()); }}
+                    title="Build the exact prompt that will be sent to the AI"
+                  >Preview Instructions</Button>
+                  <pre
+                    className="text-[10px] leading-relaxed whitespace-pre-wrap break-words max-h-[400px] overflow-y-auto p-2 rounded select-text"
+                    style={{ background: "var(--color-background)", color: "var(--color-text-muted)", border: "1px solid var(--color-border)" }}
+                  >{promptPreview || lastSentPrompt || "Click 'Preview Instructions' to see the full prompt"}</pre>
+                  {(promptPreview || lastSentPrompt) && (
+                    <Button
+                      size="sm" className="w-full"
+                      onClick={() => {
+                        navigator.clipboard.writeText(promptPreview || lastSentPrompt);
+                        addToast("Prompt copied to clipboard", "success");
+                      }}
+                      title="Copy the prompt text to your clipboard"
+                    >Copy Prompt</Button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
       </div>
 
       {/* RIGHT PANEL */}
@@ -1800,7 +2090,6 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
               onSelect={setActiveTab}
               onAddRef={handleAddRef}
               onRemoveTab={handleRemoveRef}
-              onEditTabPrompt={handleEditTabPrompt}
               noBorder
             />
           </div>
@@ -1812,9 +2101,12 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
           </div>
         </div>
 
+        {/* Image viewer */}
         <div className="flex-1 flex overflow-hidden min-h-0">
           {activeTab === "artboard" ? (
             <ArtboardCanvas />
+          ) : activeTab === "deepSearch" ? (
+            <DeepSearchPanel onSendToArtboard={handleSendSearchToArtboard} />
           ) : generationMode === "grid" && activeTab === "main" && gridResults.length > 0 ? (
             <div className="flex-1 min-w-0">
               <GridGallery
@@ -1832,125 +2124,29 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
               />
             </div>
           ) : (
-            <>
-              <div className="flex-1 min-w-0">
-                <ImageViewer
-                  src={currentSrc}
-                  imageCount={currentImages.length}
-                  imageIndex={currentIdx}
-                  onPrevImage={() => setImageIdx((p) => ({ ...p, [activeTab]: Math.max(0, (p[activeTab] ?? 0) - 1) }))}
-                  onNextImage={() => setImageIdx((p) => ({ ...p, [activeTab]: Math.min((gallery[activeTab]?.length ?? 1) - 1, (p[activeTab] ?? 0) + 1) }))}
-                  onPasteImage={handlePasteImage}
-                  onClearImage={handleClearImage}
-                  onClearAllImages={handleClearAllGenerated}
-                  onImageEdited={(newSrc: string, label: string) => appendToGallery(activeTab, newSrc, label)}
-                  locked={busy.any}
-                  isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
-                  onToggleFavorite={currentSrc ? () => { const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "environment", label: activeTab || "main", source: "viewer" }); } : undefined}
-                />
-              </div>
-              <div className="w-[200px] shrink-0 overflow-y-auto" style={{ borderLeft: "1px solid var(--color-border)" }}>
-                <EditHistory
-                  entries={currentHistory}
-                  activeEntryId={activeHistoryId}
-                  onRestore={(entryId: string) => {
-                    const entry = currentHistory.find((h) => h.id === entryId) ?? null;
-                    handleHistorySelect(entry);
-                  }}
-                  onRestoreCurrent={() => handleHistorySelect(null)}
-                  onClearHistory={handleClearHistory}
-                />
-              </div>
-            </>
+            <div className="flex-1 min-w-0 relative">
+              <ImageViewer
+                src={currentSrc}
+                imageCount={currentImages.length}
+                imageIndex={currentIdx}
+                onPrevImage={() => setImageIdx((p) => ({ ...p, [activeTab]: Math.max(0, (p[activeTab] ?? 0) - 1) }))}
+                onNextImage={() => setImageIdx((p) => ({ ...p, [activeTab]: Math.min((gallery[activeTab]?.length ?? 1) - 1, (p[activeTab] ?? 0) + 1) }))}
+                onPasteImage={handlePasteImage}
+                onClearImage={handleClearImage}
+                onClearAllImages={handleClearAllGenerated}
+                onImageEdited={(newSrc: string, label: string) => appendToGallery(activeTab, newSrc, label)}
+                locked={busy.any}
+                isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
+                onToggleFavorite={currentSrc ? () => { const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "environment", label: activeTab || "main", source: "viewer" }); } : undefined}
+              />
+              <ArtDirectorWidget onOpenConfig={() => setArtDirectorConfigOpen(true)} />
+            </div>
           )}
         </div>
       </div>
 
       {xmlOpen && <XmlModal xml={xmlContent} title="Environment XML" onClose={() => setXmlOpen(false)} />}
-
-      {promptCtxMenu && (() => {
-        const isCustom = promptCtxMenu.section.startsWith("custom:");
-        const isEditable = !isCustom && PROMPT_EDITABLE_SECTIONS.has(promptCtxMenu.section);
-        const colorKey = isCustom ? promptCtxMenu.section : promptCtxMenu.section;
-        const currentColor = getSectionColor(TOOL_ID, colorKey);
-        return (
-          <div className="fixed inset-0 z-[55]" onClick={() => setPromptCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setPromptCtxMenu(null); }}>
-            <div
-              className="absolute py-1 rounded-md shadow-lg"
-              style={{
-                left: promptCtxMenu.x, top: promptCtxMenu.y,
-                background: "var(--color-card)", border: "1px solid var(--color-border)",
-                minWidth: 200, zIndex: 56,
-              }}
-            >
-              {isEditable && (
-                <>
-                  <button
-                    className="w-full text-left px-3 py-1.5 text-xs cursor-pointer"
-                    style={{ background: "transparent", border: "none", color: "var(--color-text-primary)" }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-hover)")}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                    onClick={() => { setPromptEditSection(promptCtxMenu.section); setPromptCtxMenu(null); }}
-                  >
-                    <Pencil className="h-3 w-3 inline mr-2" style={{ verticalAlign: "-2px" }} />
-                    Edit Prompt
-                  </button>
-                  {promptOverrides.hasOverride(TOOL_ID, promptCtxMenu.section) && (
-                    <button
-                      className="w-full text-left px-3 py-1.5 text-xs cursor-pointer"
-                      style={{ background: "transparent", border: "none", color: "var(--color-text-primary)" }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-hover)")}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                      onClick={() => { promptOverrides.clearOverride(TOOL_ID, promptCtxMenu.section); setPromptCtxMenu(null); addToast("Prompt reset to default", "info"); }}
-                    >
-                      Reset Prompt to Default
-                    </button>
-                  )}
-                  <div className="my-1" style={{ borderTop: "1px solid var(--color-border)" }} />
-                </>
-              )}
-              <div className="px-3 py-1">
-                <div className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--color-text-muted)" }}>
-                  Section Color
-                </div>
-                <div className="flex items-center gap-1 flex-wrap">
-                  {["#808080", "#e05050", "#e09040", "#d0c040", "#50b060", "#40a0d0", "#6070e0", "#a060d0", "#d060a0"].map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => { setSectionColor(TOOL_ID, colorKey, c); setPromptCtxMenu(null); }}
-                      className="w-4 h-4 rounded-full cursor-pointer shrink-0"
-                      style={{ background: c, border: currentColor === c ? "2px solid white" : "1px solid var(--color-border)" }}
-                    />
-                  ))}
-                  <input
-                    type="color"
-                    value={currentColor || "#808080"}
-                    onChange={(e) => { setSectionColor(TOOL_ID, colorKey, e.target.value); }}
-                    className="w-4 h-4 rounded cursor-pointer border-0 p-0"
-                    title="Custom color"
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                  {currentColor && (
-                    <button
-                      type="button"
-                      onClick={() => { setSectionColor(TOOL_ID, colorKey, undefined); setPromptCtxMenu(null); }}
-                      className="text-[9px] px-1.5 py-0.5 rounded cursor-pointer"
-                      style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-muted)" }}
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {promptEditSection && (
-        <EditPromptModal open sectionLabel={SECTION_LABELS[promptEditSection]} defaultText={getDefaultSectionPrompt(promptEditSection)} currentText={promptOverrides.getOverride(TOOL_ID, promptEditSection) ?? getDefaultSectionPrompt(promptEditSection)} hasOverride={promptOverrides.hasOverride(TOOL_ID, promptEditSection)} onSave={(text) => { promptOverrides.setOverride(TOOL_ID, promptEditSection, text); setPromptEditSection(null); addToast("Prompt saved", "success"); }} onReset={() => { promptOverrides.clearOverride(TOOL_ID, promptEditSection); addToast("Prompt reset to default", "info"); }} onClose={() => setPromptEditSection(null)} />
-      )}
+      <ArtDirectorConfigModal open={artDirectorConfigOpen} onClose={() => setArtDirectorConfigOpen(false)} />
     </div>
   );
 }

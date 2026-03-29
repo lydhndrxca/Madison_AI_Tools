@@ -33,13 +33,10 @@ export function TagPicker({
 }: TagPickerProps) {
   const [expanded, setExpanded] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
-  const [editingTag, setEditingTag] = useState<TagItem | null>(null);
-  const [editPromptVal, setEditPromptVal] = useState("");
   const [adding, setAdding] = useState(false);
   const [newLabel, setNewLabel] = useState("");
   const [newPrompt, setNewPrompt] = useState("");
   const ctxRef = useRef<HTMLDivElement>(null);
-  const editRef = useRef<HTMLTextAreaElement>(null);
   const addLabelRef = useRef<HTMLInputElement>(null);
 
   const allTags = presets;
@@ -71,19 +68,8 @@ export function TagPicker({
   }, [ctxMenu]);
 
   useEffect(() => {
-    if (editingTag && editRef.current) editRef.current.focus();
-  }, [editingTag]);
-
-  useEffect(() => {
     if (adding && addLabelRef.current) addLabelRef.current.focus();
   }, [adding]);
-
-  const handleEditPrompt = () => {
-    if (!ctxMenu) return;
-    setEditingTag(ctxMenu.tag);
-    setEditPromptVal(ctxMenu.tag.prompt);
-    setCtxMenu(null);
-  };
 
   const handleDelete = () => {
     if (!ctxMenu) return;
@@ -91,16 +77,6 @@ export function TagPicker({
     onChange(selected.filter((s) => s.label !== label));
     if (onPresetsChange) onPresetsChange(presets.filter((p) => p.label !== label));
     setCtxMenu(null);
-  };
-
-  const commitEdit = () => {
-    if (!editingTag) return;
-    const updated = { ...editingTag, prompt: editPromptVal };
-    if (onPresetsChange) {
-      onPresetsChange(presets.map((p) => (p.label === editingTag.label ? updated : p)));
-    }
-    onChange(selected.map((s) => (s.label === editingTag.label ? updated : s)));
-    setEditingTag(null);
   };
 
   const commitAdd = () => {
@@ -210,26 +186,6 @@ export function TagPicker({
         </div>
       )}
 
-      {/* Inline edit prompt */}
-      {editingTag && (
-        <div className="mt-1.5 flex flex-col gap-1 p-1.5 rounded-[var(--radius-sm)]" style={{ background: "var(--color-panel)", border: "1px solid var(--color-border)" }}>
-          <span className="text-[10px] font-semibold" style={{ color: "var(--color-text-secondary)" }}>Edit prompt for "{editingTag.label}"</span>
-          <textarea
-            ref={editRef}
-            className="w-full px-1.5 py-0.5 text-[10px] resize-none"
-            rows={2}
-            style={inputStyle}
-            value={editPromptVal}
-            onChange={(e) => setEditPromptVal(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commitEdit(); } if (e.key === "Escape") setEditingTag(null); }}
-          />
-          <div className="flex gap-1 justify-end">
-            <button type="button" className="px-2 py-0.5 text-[10px] rounded-[var(--radius-sm)] cursor-pointer" style={{ background: "var(--color-accent)", color: "var(--color-foreground)", border: "none" }} onClick={commitEdit}>Save</button>
-            <button type="button" className="px-2 py-0.5 text-[10px] rounded-[var(--radius-sm)] cursor-pointer" style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }} onClick={() => setEditingTag(null)}>Cancel</button>
-          </div>
-        </div>
-      )}
-
       {/* Context menu */}
       {ctxMenu && (
         <div
@@ -237,16 +193,6 @@ export function TagPicker({
           className="fixed z-50 py-1 rounded-[var(--radius-sm)] shadow-lg"
           style={{ left: ctxMenu.x, top: ctxMenu.y, background: "var(--color-card)", border: "1px solid var(--color-border)", minWidth: 120 }}
         >
-          <button
-            type="button"
-            className="block w-full text-left px-3 py-1 text-[11px] cursor-pointer"
-            style={{ color: "var(--color-text-primary)", background: "transparent", border: "none" }}
-            onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--color-input-bg)"; }}
-            onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; }}
-            onClick={handleEditPrompt}
-          >
-            Edit Prompt
-          </button>
           <button
             type="button"
             className="block w-full text-left px-3 py-1 text-[11px] cursor-pointer"

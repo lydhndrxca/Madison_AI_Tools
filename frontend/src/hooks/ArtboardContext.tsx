@@ -57,6 +57,10 @@ export interface ArtboardContextValue {
   selection: Set<string>;
 
   setViewport: (v: ArtboardViewport) => void;
+  /** True after user has explicitly panned/zoomed — prevents auto-fit on tab return. */
+  viewportTouched: boolean;
+  markViewportTouched: () => void;
+  resetViewportTouched: () => void;
   addItem: (item: Omit<ArtboardItem, "id" | "zIndex">) => string;
   addItems: (items: Omit<ArtboardItem, "id" | "zIndex">[]) => void;
   removeItems: (ids: string[]) => void;
@@ -178,6 +182,9 @@ export function ArtboardProvider({ children }: { children: ReactNode }) {
   const [activeBoardId, setActiveBoardId] = useState<string>(() => boards[0]?.id ?? DEFAULT_BOARD_ID);
   const [items, setItems] = useState<ArtboardItem[]>(() => loadBoardItems(activeBoardId));
   const [viewport, setViewport] = useState<ArtboardViewport>({ zoom: 1, panX: 0, panY: 0 });
+  const [viewportTouched, setViewportTouched] = useState(false);
+  const markViewportTouched = useCallback(() => setViewportTouched(true), []);
+  const resetViewportTouched = useCallback(() => setViewportTouched(false), []);
   const [selection, setSelection] = useState<Set<string>>(new Set());
 
   const undoStack = useRef<ArtboardItem[][]>([]);
@@ -338,6 +345,7 @@ export function ArtboardProvider({ children }: { children: ReactNode }) {
     setItems(newItems);
     setSelection(new Set());
     setViewport({ zoom: 1, panX: 0, panY: 0 });
+    setViewportTouched(false);
     undoStack.current = [];
     redoStack.current = [];
     setCanUndo(false);
@@ -425,7 +433,8 @@ export function ArtboardProvider({ children }: { children: ReactNode }) {
   return (
     <ArtboardCtx.Provider value={{
       items, viewport, selection,
-      setViewport, addItem, addItems, removeItems, updateItem, moveItems, resizeItem,
+      setViewport, viewportTouched, markViewportTouched, resetViewportTouched,
+      addItem, addItems, removeItems, updateItem, moveItems, resizeItem,
       bringToFront, sendToBack, setSelection, selectAll, clearSelection,
       undo, redo, clearBoard, canUndo, canRedo,
       boards, activeBoardId, createBoard, switchBoard, renameBoard, deleteBoard, duplicateBoard,

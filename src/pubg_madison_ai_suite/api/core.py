@@ -324,6 +324,58 @@ def rest_generate_text_multimodal(
 
 
 # ---------------------------------------------------------------------------
+# REST-based Gemini function-calling (voice commands, etc.)
+# ---------------------------------------------------------------------------
+
+def rest_generate_with_tools(
+    api_key: str,
+    model_name: str,
+    contents_raw: list,
+    tool_declarations: list[dict],
+    timeout: int = 30,
+    cancel_event: Event | None = None,
+) -> dict:
+    """REST call to Gemini with function-calling tools.
+
+    Returns either {"functionCall": {"name": ..., "args": {...}}}
+    or {"text": "..."} depending on model decision.
+    """
+    if cancel_event and cancel_event.is_set():
+        raise RuntimeError("Cancelled by user")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
+
+    parts: list[dict] = []
+    for item in contents_raw:
+        if isinstance(item, str):
+            parts.append({"text": item})
+        elif isinstance(item, Image.Image):
+            parts.append(image_to_inline_data(item))
+        elif isinstance(item, dict):
+            parts.append(item)
+
+    body: dict[str, Any] = {
+        "contents": [{"parts": parts}],
+        "tools": [{"functionDeclarations": tool_declarations}],
+        "tool_config": {"function_calling_config": {"mode": "ANY"}},
+    }
+
+    resp = requests.post(url, json=body, headers=headers, timeout=timeout)
+    if cancel_event and cancel_event.is_set():
+        raise RuntimeError("Cancelled by user")
+    if resp.status_code != 200:
+        raise RuntimeError(f"Gemini API returned {resp.status_code}: {resp.text[:300]}")
+    data = resp.json()
+    for cand in data.get("candidates", []):
+        for part in cand.get("content", {}).get("parts", []):
+            if "functionCall" in part:
+                return {"functionCall": part["functionCall"]}
+            if "text" in part:
+                return {"text": part["text"]}
+    return {"text": ""}
+
+
+# ---------------------------------------------------------------------------
 # REST-based Gemini image generation (extracted & unified)
 # ---------------------------------------------------------------------------
 

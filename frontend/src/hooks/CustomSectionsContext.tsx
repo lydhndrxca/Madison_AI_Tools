@@ -95,7 +95,7 @@ export function buildSectionPrompt(
 export function createEmptySection(): CustomSectionDef {
   return {
     id: generateId(),
-    name: "New Section",
+    name: "New Panel",
     tools: ["character", "prop", "env", "uilab"],
     color: undefined,
     blocks: [],

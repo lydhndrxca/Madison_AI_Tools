@@ -40,7 +40,7 @@ export function TabBar({ tabs, active, onSelect }: TabBarProps) {
 export interface TabDef {
   id: string;
   label: string;
-  group: "stage" | "views" | "refs" | "library" | "artboard";
+  group: "stage" | "views" | "refs" | "library" | "artboard" | "search";
   prompt?: string;
   isCustom?: boolean;
 }
@@ -51,8 +51,9 @@ interface GroupedTabBarProps {
   onSelect: (id: string) => void;
   onAddRef?: () => void;
   onRemoveTab?: (tabId: string) => void;
-  onEditTabPrompt?: (tabId: string, newPrompt: string) => void;
   noBorder?: boolean;
+  /** Tab id currently receiving an image generation (pulsing highlight). */
+  generatingTabId?: string | null;
 }
 
 const GROUP_BG: Record<string, string> = {
@@ -60,15 +61,14 @@ const GROUP_BG: Record<string, string> = {
   views: "transparent",
   library: "rgba(255,255,255,0.02)",
   artboard: "rgba(200,200,200,0.08)",
+  search: "rgba(100,180,255,0.06)",
   refs: "rgba(0,0,0,0.08)",
 };
 
-export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, onEditTabPrompt, noBorder }: GroupedTabBarProps) {
-  const groups: ("stage" | "views" | "library" | "artboard" | "refs")[] = ["stage", "views", "library", "artboard", "refs"];
+export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, noBorder, generatingTabId }: GroupedTabBarProps) {
+  const groups: ("stage" | "views" | "library" | "artboard" | "search" | "refs")[] = ["stage", "views", "library", "artboard", "search", "refs"];
 
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
-  const [editingTab, setEditingTab] = useState<{ id: string; label: string; prompt: string } | null>(null);
-  const [editPromptVal, setEditPromptVal] = useState("");
   const ctxRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -83,25 +83,10 @@ export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, o
   }, [ctxMenu]);
 
   const handleTabContextMenu = (e: React.MouseEvent, tab: TabDef) => {
+    if (tab.group !== "refs") return;
     e.preventDefault();
     e.stopPropagation();
     setCtxMenu({ x: e.clientX, y: e.clientY, tabId: tab.id });
-  };
-
-  const openEditPrompt = () => {
-    if (!ctxMenu) return;
-    const tab = tabs.find((t) => t.id === ctxMenu.tabId);
-    if (!tab) return;
-    setEditingTab({ id: tab.id, label: tab.label, prompt: tab.prompt || "" });
-    setEditPromptVal(tab.prompt || "");
-    setCtxMenu(null);
-  };
-
-  const savePrompt = () => {
-    if (editingTab && onEditTabPrompt) {
-      onEditTabPrompt(editingTab.id, editPromptVal);
-    }
-    setEditingTab(null);
   };
 
   return (
@@ -120,6 +105,7 @@ export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, o
               )}
               {groupTabs.map((tab) => {
                 const isActive = active === tab.id;
+                const isGenerating = generatingTabId != null && generatingTabId === tab.id;
                 return (
                   <button
                     key={tab.id}
@@ -127,6 +113,7 @@ export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, o
                     onContextMenu={(e) => handleTabContextMenu(e, tab)}
                     className={cn(
                       "text-xs font-medium transition-all whitespace-nowrap cursor-pointer relative",
+                      isGenerating && "btn-generating rounded-md",
                       isActive
                         ? "text-[var(--color-foreground)]"
                         : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]",
@@ -140,7 +127,6 @@ export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, o
                       marginBottom: -1,
                       zIndex: isActive ? 2 : 1,
                     }}
-                    title={tab.prompt ? `View prompt: ${tab.prompt}\n\nRight-click to edit or remove.` : "Right-click for options"}
                   >
                     {tab.label}
                   </button>
@@ -151,7 +137,7 @@ export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, o
                   onClick={onAddRef}
                   className="px-2 text-xs cursor-pointer transition-colors"
                   style={{ color: "var(--color-text-muted)", background: "transparent", border: "none", paddingBottom: 5, marginBottom: -1 }}
-                  title="Add a new reference image tab — use these for pasting inspiration or reference photos"
+                  title="Add a new reference image tab"
                 >+</button>
               )}
             </div>
@@ -159,10 +145,11 @@ export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, o
         })}
       </div>
 
-      {/* Right-click context menu */}
+      {/* Right-click context menu for ref tabs */}
       {ctxMenu && (() => {
         const ctxTab = tabs.find((t) => t.id === ctxMenu.tabId);
         const isRef = ctxTab?.group === "refs";
+        if (!isRef || !onRemoveTab) return null;
         return (
           <div
             ref={ctxRef}
@@ -171,53 +158,11 @@ export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, o
             onMouseDown={(e) => e.stopPropagation()}
           >
             <div className="py-1 rounded shadow-lg" style={{ background: "var(--color-card, #4F4F4F)", border: "1px solid var(--color-border, #3A3A3A)", minWidth: 140 }}>
-              {!isRef && (
-                <button className="ctx-menu-item" onClick={openEditPrompt}>Edit Prompt</button>
-              )}
-              {isRef && onRemoveTab && (
-                <button className="ctx-menu-item" onClick={() => { onRemoveTab(ctxMenu.tabId); setCtxMenu(null); }}>Remove</button>
-              )}
+              <button className="ctx-menu-item" onClick={() => { onRemoveTab(ctxMenu.tabId); setCtxMenu(null); }}>Remove</button>
             </div>
           </div>
         );
       })()}
-
-      {/* Edit Prompt modal */}
-      {editingTab && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center" style={{ background: "rgba(0,0,0,0.5)" }}
-          onMouseDown={() => setEditingTab(null)}>
-          <div
-            className="rounded-lg shadow-xl p-4 flex flex-col gap-3"
-            style={{ background: "var(--color-card)", border: "1px solid var(--color-border)", width: 420, maxWidth: "90vw" }}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            <div className="text-sm font-semibold" style={{ color: "var(--color-foreground)" }}>
-              Edit Prompt — {editingTab.label}
-            </div>
-            <textarea
-              className="w-full px-3 py-2 text-xs rounded resize-none"
-              rows={5}
-              style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
-              value={editPromptVal}
-              onChange={(e) => setEditPromptVal(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); savePrompt(); } if (e.key === "Escape") setEditingTab(null); }}
-              autoFocus
-            />
-            <div className="flex gap-2 justify-end">
-              <button
-                className="px-3 py-1 text-xs rounded cursor-pointer"
-                style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-                onClick={() => setEditingTab(null)}
-              >Cancel</button>
-              <button
-                className="px-3 py-1 text-xs rounded cursor-pointer"
-                style={{ background: "var(--color-accent)", color: "var(--color-foreground)", border: "none" }}
-                onClick={savePrompt}
-              >Save</button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 }

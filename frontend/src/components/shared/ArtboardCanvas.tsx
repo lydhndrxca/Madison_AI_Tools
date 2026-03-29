@@ -1,12 +1,15 @@
 import {
   useState, useCallback, useRef, useEffect, useMemo,
+  type CSSProperties,
   type MouseEvent as RME, type WheelEvent as RWE,
 } from "react";
 import { useArtboard, type ArtboardItem } from "@/hooks/ArtboardContext";
 import { useArtboardSync } from "@/hooks/useArtboardSync";
 import { apiFetch } from "@/hooks/useApi";
+import { useImageEnhance } from "@/hooks/useImageEnhance";
 import { useToastContext } from "@/hooks/ToastContext";
 import { expDecay } from "@/lib/easing";
+import { AnnotationToolbar, AnnotationCanvas, type Annotation, type AnnotationType } from "./AnnotationLayer";
 
 const DRAG_THRESHOLD = 3;
 const DOT_SPACING = 40;
@@ -26,12 +29,65 @@ export function ArtboardCanvas() {
     clearSelection, undo, redo, clearBoard,
     boards, activeBoardId, createBoard, switchBoard, renameBoard, deleteBoard, duplicateBoard,
     loadItemsDirectly,
+    viewportTouched, markViewportTouched, resetViewportTouched,
     mode, roomId, roomUsers, remoteCursors,
     joinRoom, leaveRoom,
   } = useArtboard();
   const { addToast } = useToastContext();
   const { sendCursor, setCredentials } = useArtboardSync();
+  const enhancer = useImageEnhance();
   const { zoom, panX, panY } = viewport;
+
+  const [annotationsByBoard, setAnnotationsByBoard] = useState<Record<string, Annotation[]>>({});
+  const annotations = annotationsByBoard[activeBoardId] ?? [];
+  const setAnnotations = useCallback(
+    (next: Annotation[] | ((prev: Annotation[]) => Annotation[])) => {
+      setAnnotationsByBoard((prev) => {
+        const cur = prev[activeBoardId] ?? [];
+        const resolved = typeof next === "function" ? (next as (p: Annotation[]) => Annotation[])(cur) : next;
+        return { ...prev, [activeBoardId]: resolved };
+      });
+    },
+    [activeBoardId],
+  );
+
+  const [annotationTool, setAnnotationTool] = useState<AnnotationType | null>(null);
+  const [annotationColor, setAnnotationColor] = useState("#ff4444");
+  const [annotationLineWidth, setAnnotationLineWidth] = useState(3);
+  const [annotationVisible, setAnnotationVisible] = useState(true);
+
+  const annotationWorldPlacement = useMemo(() => {
+    const PAD = 600;
+    const MIN_W = 1200;
+    const MIN_H = 1200;
+    let minX = -MIN_W / 2;
+    let maxX = MIN_W / 2;
+    let minY = -MIN_H / 2;
+    let maxY = MIN_H / 2;
+    for (const it of items) {
+      minX = Math.min(minX, it.x - PAD);
+      minY = Math.min(minY, it.y - PAD);
+      maxX = Math.max(maxX, it.x + it.w + PAD);
+      maxY = Math.max(maxY, it.y + it.h + PAD);
+    }
+    for (const a of annotations) {
+      for (const p of a.points) {
+        minX = Math.min(minX, p.x - PAD);
+        minY = Math.min(minY, p.y - PAD);
+        maxX = Math.max(maxX, p.x + PAD);
+        maxY = Math.max(maxY, p.y + PAD);
+      }
+      if (a.type === "text" && a.text && a.points.length >= 1) {
+        const p = a.points[0];
+        const fs = Math.max(14, a.lineWidth * 5);
+        maxX = Math.max(maxX, p.x + a.text.length * fs * 0.55 + PAD);
+        maxY = Math.max(maxY, p.y + PAD);
+      }
+    }
+    const w = Math.max(MIN_W, maxX - minX);
+    const h = Math.max(MIN_H, maxY - minY);
+    return { x: minX, y: minY, width: w, height: h };
+  }, [items, annotations]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef(viewport);
@@ -43,6 +99,11 @@ export function ArtboardCanvas() {
   const [marquee, setMarquee] = useState<{ sx: number; sy: number; cx: number; cy: number } | null>(null);
   const [editingText, setEditingText] = useState<string | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; items: CtxMenuItem[] } | null>(null);
+
+  // Crop tool state
+  const [cropMode, setCropMode] = useState(false);
+  const [cropTarget, setCropTarget] = useState<string | null>(null);
+  const [cropRect, setCropRect] = useState<{ sx: number; sy: number; cx: number; cy: number } | null>(null);
   const [styleLibModal, setStyleLibModal] = useState<{ imageIds: string[] } | null>(null);
   const [slFolders, setSlFolders] = useState<{ name: string; category: string }[]>([]);
   const [slNewName, setSlNewName] = useState("");
@@ -95,7 +156,8 @@ export function ArtboardCanvas() {
     const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
     const nz = Math.min(20, Math.max(0.05, v.zoom * f));
     setViewport({ zoom: nz, panX: mx - cx - wx * nz, panY: my - cy - wy * nz });
-  }, [setViewport]);
+    markViewportTouched();
+  }, [setViewport, markViewportTouched]);
 
   // ---------------------------------------------------------------------------
   // Middle-mouse pan
@@ -114,6 +176,7 @@ export function ArtboardCanvas() {
       middlePanRef.current = { lastX: e.clientX, lastY: e.clientY };
       const v = viewportRef.current;
       setViewport({ zoom: v.zoom, panX: v.panX + e.clientX - lastX, panY: v.panY + e.clientY - lastY });
+      markViewportTouched();
     };
     const onUp = (e: PointerEvent) => {
       if (e.button === 1) { setIsMiddlePanning(false); try { el.releasePointerCapture(e.pointerId); } catch {} }
@@ -121,7 +184,7 @@ export function ArtboardCanvas() {
     el.addEventListener("pointerdown", onDown); el.addEventListener("pointermove", onMove);
     el.addEventListener("pointerup", onUp); el.addEventListener("pointercancel", onUp);
     return () => { el.removeEventListener("pointerdown", onDown); el.removeEventListener("pointermove", onMove); el.removeEventListener("pointerup", onUp); el.removeEventListener("pointercancel", onUp); };
-  }, [setViewport]);
+  }, [setViewport, markViewportTouched]);
 
   // ---------------------------------------------------------------------------
   // Fit viewport to show all items
@@ -156,8 +219,11 @@ export function ArtboardCanvas() {
     setViewport({ zoom: nz, panX: -cx * nz, panY: -cy * nz });
   }, [setViewport]);
 
-  // Auto-fit when component mounts (tab opened)
-  useEffect(() => { requestAnimationFrame(() => fitToExtents()); }, [fitToExtents]);
+  // Auto-fit only on first visit; subsequent visits restore the previous viewport
+  useEffect(() => {
+    if (!viewportTouched) requestAnimationFrame(() => fitToExtents());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Coordinate helpers
@@ -177,9 +243,50 @@ export function ArtboardCanvas() {
   // ---------------------------------------------------------------------------
   // Mouse handlers (drag items / marquee select)
   // ---------------------------------------------------------------------------
+  // Crop apply: uses canvas to crop the image content
+  const applyCrop = useCallback(() => {
+    if (!cropTarget || !cropRect) return;
+    const item = items.find((i) => i.id === cropTarget);
+    if (!item || item.type !== "image") { setCropMode(false); setCropTarget(null); setCropRect(null); return; }
+    const x1 = Math.min(cropRect.sx, cropRect.cx), y1 = Math.min(cropRect.sy, cropRect.cy);
+    const x2 = Math.max(cropRect.sx, cropRect.cx), y2 = Math.max(cropRect.sy, cropRect.cy);
+    const cw = x2 - x1, ch = y2 - y1;
+    if (cw < 5 || ch < 5) { setCropMode(false); setCropTarget(null); setCropRect(null); return; }
+    const img = new Image();
+    img.onload = () => {
+      const scaleX = img.naturalWidth / item.w, scaleY = img.naturalHeight / item.h;
+      const sx = (x1 - item.x) * scaleX, sy = (y1 - item.y) * scaleY;
+      const sw = cw * scaleX, sh = ch * scaleY;
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(sw); canvas.height = Math.round(sh);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(img, Math.round(sx), Math.round(sy), Math.round(sw), Math.round(sh), 0, 0, canvas.width, canvas.height);
+      const cropped = canvas.toDataURL("image/png");
+      updateItem(cropTarget, { content: cropped, x: x1, y: y1, w: cw, h: ch });
+      setCropMode(false); setCropTarget(null); setCropRect(null);
+    };
+    img.src = item.content;
+  }, [cropTarget, cropRect, items, updateItem]);
+
+  const cancelCrop = useCallback(() => { setCropMode(false); setCropTarget(null); setCropRect(null); }, []);
+
   const handleMouseDown = useCallback((e: RME, directItem?: ArtboardItem) => {
     if (e.button !== 0 || editingText) return;
+    if (annotationTool && annotationVisible) return;
     setCtxMenu(null);
+
+    // Crop mode: clicking on an image starts the crop rectangle
+    if (cropMode) {
+      const w = screenToWorld(e.clientX, e.clientY);
+      const hit = directItem ?? hitTest(w.wx, w.wy);
+      if (hit && hit.type === "image") {
+        setCropTarget(hit.id);
+        setCropRect({ sx: w.wx, sy: w.wy, cx: w.wx, cy: w.wy });
+      }
+      return;
+    }
+
     const w = screenToWorld(e.clientX, e.clientY);
     const hit = directItem ?? hitTest(w.wx, w.wy);
     if (hit) {
@@ -192,9 +299,14 @@ export function ArtboardCanvas() {
       if (!e.shiftKey) clearSelection();
       setMarquee({ sx: e.clientX, sy: e.clientY, cx: e.clientX, cy: e.clientY });
     }
-  }, [screenToWorld, hitTest, selection, setSelection, clearSelection, editingText]);
+  }, [screenToWorld, hitTest, selection, setSelection, clearSelection, editingText, annotationTool, annotationVisible, cropMode]);
 
   const handleMouseMove = useCallback((e: RME | MouseEvent) => {
+    if (cropMode && cropRect) {
+      const w = screenToWorld(e.clientX, e.clientY);
+      setCropRect((prev) => prev ? { ...prev, cx: w.wx, cy: w.wy } : null);
+      return;
+    }
     if (dragging) {
       const last = dragLastRef.current; if (!last) return;
       if (Math.hypot(e.clientX - dragging.startX, e.clientY - dragging.startY) <= DRAG_THRESHOLD) return;
@@ -203,7 +315,7 @@ export function ArtboardCanvas() {
       dragLastRef.current = { x: e.clientX, y: e.clientY };
     } else if (marquee) { setMarquee((m) => m ? { ...m, cx: e.clientX, cy: e.clientY } : null); }
     else if (resizing) { resizeItem(resizing.id, Math.max(20, resizing.origW + (e.clientX - resizing.startX) / zoom), Math.max(20, resizing.origH + (e.clientY - resizing.startY) / zoom)); }
-  }, [dragging, marquee, resizing, moveItems, resizeItem, zoom]);
+  }, [dragging, marquee, resizing, cropMode, cropRect, moveItems, resizeItem, zoom, screenToWorld]);
 
   const handleMouseUp = useCallback((e: RME | MouseEvent) => {
     if (e.button !== 0) return;
@@ -222,12 +334,12 @@ export function ArtboardCanvas() {
   }, [dragging, marquee, items, selection, screenToWorld, setSelection]);
 
   useEffect(() => {
-    if (!dragging && !marquee && !resizing) return;
+    if (!dragging && !marquee && !resizing && !(cropMode && cropRect)) return;
     const mv = (e: MouseEvent) => handleMouseMove(e);
     const up = (e: MouseEvent) => handleMouseUp(e);
     window.addEventListener("mousemove", mv); window.addEventListener("mouseup", up);
     return () => { window.removeEventListener("mousemove", mv); window.removeEventListener("mouseup", up); };
-  }, [dragging, marquee, resizing, handleMouseMove, handleMouseUp]);
+  }, [dragging, marquee, resizing, cropMode, cropRect, handleMouseMove, handleMouseUp]);
 
   const handleResizeStart = useCallback((e: RME, item: ArtboardItem) => {
     e.stopPropagation(); e.preventDefault();
@@ -239,7 +351,11 @@ export function ArtboardCanvas() {
   // ---------------------------------------------------------------------------
   const ingestImage = useCallback((dataUrl: string, wx: number, wy: number) => {
     const img = new Image();
-    img.onload = () => { let w = img.naturalWidth, h = img.naturalHeight; if (w > 512) { h = (h * 512) / w; w = 512; } addItem({ type: "image", x: wx - w / 2, y: wy - h / 2, w, h, rotation: 0, content: dataUrl }); };
+    img.onload = () => {
+      const w = img.naturalWidth || 1;
+      const h = img.naturalHeight || 1;
+      addItem({ type: "image", x: wx - w / 2, y: wy - h / 2, w, h, rotation: 0, content: dataUrl });
+    };
     img.src = dataUrl;
   }, [addItem]);
 
@@ -301,10 +417,11 @@ export function ArtboardCanvas() {
     try {
       const data = await apiFetch<{ items: ArtboardItem[] }>(`/artboard/boards/${encodeURIComponent(name)}`);
       loadItemsDirectly(data.items);
+      setAnnotations([]);
       addToast(`Loaded "${name}"`, "success");
       setSaveLoadModal(null);
     } catch { addToast("Load failed", "error"); }
-  }, [loadItemsDirectly, addToast]);
+  }, [loadItemsDirectly, addToast, setAnnotations]);
 
   const handleDeleteSavedBoard = useCallback(async (name: string) => {
     try {
@@ -372,19 +489,20 @@ export function ArtboardCanvas() {
       reader.onload = () => {
         try {
           const parsed = JSON.parse(String(reader.result)) as ArtboardItem[];
-          if (Array.isArray(parsed)) { loadItemsDirectly(parsed); addToast("Imported", "success"); }
+          if (Array.isArray(parsed)) { loadItemsDirectly(parsed); setAnnotations([]); addToast("Imported", "success"); }
         } catch { addToast("Invalid JSON file", "error"); }
       };
       reader.readAsText(file);
     };
     input.click();
-  }, [loadItemsDirectly, addToast]);
+  }, [loadItemsDirectly, addToast, setAnnotations]);
 
   // ---------------------------------------------------------------------------
   // Context menu
   // ---------------------------------------------------------------------------
   const handleContextMenu = useCallback((e: RME) => {
     e.preventDefault(); e.stopPropagation();
+    if (annotationTool && annotationVisible) return;
     const w = screenToWorld(e.clientX, e.clientY);
     const hit = hitTest(w.wx, w.wy);
     if (hit) {
@@ -397,7 +515,46 @@ export function ArtboardCanvas() {
         { label: "Bring to Front", action: () => { setCtxMenu(null); bringToFront(ids); } },
         { label: "Send to Back", action: () => { setCtxMenu(null); sendToBack(ids); } },
       ];
-      if (imgIds.length > 0) mi.push({ label: "Add to Style Library\u2026", action: () => { setCtxMenu(null); openStyleLibModal(imgIds); }, separator: true });
+      if (imgIds.length > 0) {
+        mi.push({ label: "Add to Style Library\u2026", action: () => { setCtxMenu(null); openStyleLibModal(imgIds); }, separator: true });
+        mi.push({
+          label: enhancer.busy ? "AI Upres (processing\u2026)" : "AI Upres",
+          separator: true,
+          action: () => {
+            setCtxMenu(null);
+            if (enhancer.busy) return;
+            (async () => {
+              for (const id of imgIds) {
+                const item = items.find((i) => i.id === id);
+                if (!item) continue;
+                const result = await enhancer.enhance("upscale", item.content);
+                if (result) {
+                  const img = new Image();
+                  img.onload = () => updateItem(id, { content: result, w: img.naturalWidth, h: img.naturalHeight });
+                  img.src = result;
+                }
+              }
+              addToast("AI Upres complete", "success");
+            })();
+          },
+        });
+        mi.push({
+          label: enhancer.busy ? "AI Restore (processing\u2026)" : "AI Restore",
+          action: () => {
+            setCtxMenu(null);
+            if (enhancer.busy) return;
+            (async () => {
+              for (const id of imgIds) {
+                const item = items.find((i) => i.id === id);
+                if (!item) continue;
+                const result = await enhancer.enhance("restore", item.content);
+                if (result) updateItem(id, { content: result });
+              }
+              addToast("AI Restore complete", "success");
+            })();
+          },
+        });
+      }
       setCtxMenu({ x: e.clientX, y: e.clientY, items: mi });
     } else {
       const mi: CtxMenuItem[] = [
@@ -405,10 +562,10 @@ export function ArtboardCanvas() {
         { label: "Add Text", action: () => { setCtxMenu(null); addItem({ type: "text", x: w.wx - 100, y: w.wy - 20, w: 200, h: 40, rotation: 0, content: "Text", fontSize: 16, fontColor: "#ffffff" }); } },
         { label: "Add Frame", action: () => { setCtxMenu(null); addItem({ type: "frame", x: w.wx - 150, y: w.wy - 100, w: 300, h: 200, rotation: 0, content: "", borderColor: "rgba(255,255,255,0.5)", borderWidth: 2 }); } },
       ];
-      if (items.length > 0) mi.push({ label: "Clear Board", action: () => { setCtxMenu(null); clearBoard(); }, danger: true, separator: true });
+      if (items.length > 0) mi.push({ label: "Clear Board", action: () => { setCtxMenu(null); clearBoard(); setAnnotations([]); }, danger: true, separator: true });
       setCtxMenu({ x: e.clientX, y: e.clientY, items: mi });
     }
-  }, [screenToWorld, hitTest, selection, items, setSelection, removeItems, bringToFront, sendToBack, addItem, clearBoard, doCopy, doPaste, openStyleLibModal]);
+  }, [screenToWorld, hitTest, selection, items, setSelection, removeItems, bringToFront, sendToBack, addItem, clearBoard, doCopy, doPaste, openStyleLibModal, enhancer, updateItem, addToast, setAnnotations, annotationTool, annotationVisible]);
 
   useEffect(() => { const d = () => setCtxMenu(null); window.addEventListener("click", d); return () => window.removeEventListener("click", d); }, []);
 
@@ -419,13 +576,13 @@ export function ArtboardCanvas() {
     const h = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable) return;
-      if ((e.key === "Delete" || e.key === "Backspace") && selection.size > 0) { e.preventDefault(); removeItems([...selection]); }
-      else if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
-      else if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) { e.preventDefault(); redo(); }
-      else if ((e.ctrlKey || e.metaKey) && e.key === "a") { e.preventDefault(); selectAll(); }
-      else if ((e.ctrlKey || e.metaKey) && e.key === "c") { e.preventDefault(); doCopy(); }
-      else if (e.key === "Escape") { clearSelection(); setEditingText(null); }
-      else if (e.key === "Home") { e.preventDefault(); fitToExtents(); }
+      if ((e.key === "Delete" || e.key === "Backspace") && selection.size > 0) { e.preventDefault(); e.stopPropagation(); removeItems([...selection]); }
+      else if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); undo(); }
+      else if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) { e.preventDefault(); e.stopPropagation(); redo(); }
+      else if ((e.ctrlKey || e.metaKey) && e.key === "a") { e.preventDefault(); e.stopPropagation(); selectAll(); }
+      else if ((e.ctrlKey || e.metaKey) && e.key === "c") { e.preventDefault(); e.stopPropagation(); doCopy(); }
+      else if (e.key === "Escape") { e.stopPropagation(); clearSelection(); setEditingText(null); setAnnotationTool(null); cancelCrop(); }
+      else if (e.key === "Home") { e.preventDefault(); e.stopPropagation(); fitToExtents(); }
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
@@ -501,8 +658,8 @@ export function ArtboardCanvas() {
     return () => cancelAnimationFrame(rafId);
   }, [mode]);
 
-  const btnBase = "px-2 py-1 text-[11px] rounded cursor-pointer transition-colors";
-  const btnStyle: React.CSSProperties = { background: "rgba(255,255,255,0.08)", color: "var(--color-text-primary, #ddd)", border: "1px solid rgba(255,255,255,0.12)" };
+  const tbBtn = "p-1 rounded transition-colors cursor-pointer hover:bg-[var(--color-hover)]";
+  const tbStyle: CSSProperties = { background: "transparent", border: "none", color: "var(--color-text-secondary)" };
 
   // ---------------------------------------------------------------------------
   // Render
@@ -510,14 +667,14 @@ export function ArtboardCanvas() {
   return (
     <div className="h-full w-full flex flex-col" style={{ background: "#2a2a2a" }}>
       {/* Top bar: board switcher + actions */}
-      <div className="flex items-center gap-1.5 px-2 py-1 shrink-0" style={{ borderBottom: "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.2)" }}>
+      <div className="flex items-center gap-1 px-2 py-1 shrink-0" style={{ borderBottom: "1px solid var(--color-border)" }}>
         {/* Board dropdown */}
         <div className="relative" ref={boardDropRef}>
-          <button className={btnBase} style={btnStyle} onClick={() => setBoardDropdownOpen((p) => !p)}>
-            {activeBoard?.name || "Board"} <span style={{ color: "rgba(255,255,255,0.3)", marginLeft: 4 }}>{"\u25BE"}</span>
+          <button className="flex items-center gap-1 px-1.5 py-1 text-[11px] rounded cursor-pointer transition-colors hover:bg-[var(--color-hover)]" style={{ background: "transparent", border: "none", color: "var(--color-text-primary)" }} onClick={() => setBoardDropdownOpen((p) => !p)}>
+            {activeBoard?.name || "Board"} <span className="text-[9px]" style={{ color: "var(--color-text-muted)" }}>{"\u25BE"}</span>
           </button>
           {boardDropdownOpen && (
-            <div className="absolute top-full left-0 mt-1 z-[9999] py-1 rounded-md shadow-lg min-w-[200px]" style={{ background: "var(--color-card, #2f2f2f)", border: "1px solid var(--color-border, rgba(255,255,255,0.12))" }}>
+            <div className="absolute top-full left-0 mt-1 z-[9999] py-1 rounded-md shadow-lg min-w-[200px]" style={{ background: "var(--color-card)", border: "1px solid var(--color-border)" }}>
               {boards.map((b) => (
                 <div key={b.id} className="flex items-center gap-1 px-2 py-1 group" onMouseEnter={(e) => { (e.currentTarget).style.background = "rgba(255,255,255,0.06)"; }} onMouseLeave={(e) => { (e.currentTarget).style.background = "transparent"; }}>
                   {renamingBoard === b.id ? (
@@ -533,44 +690,93 @@ export function ArtboardCanvas() {
                   )}
                 </div>
               ))}
-              <div className="mx-2 my-1 h-px" style={{ background: "rgba(255,255,255,0.1)" }} />
+              <div className="mx-2 my-1 h-px" style={{ background: "var(--color-border)" }} />
               <button className="w-full text-left px-2 py-1 text-[11px] cursor-pointer" style={{ background: "transparent", border: "none", color: "var(--color-text-muted)" }} onClick={() => { const id = createBoard("New Board"); switchBoard(id); setBoardDropdownOpen(false); }} onMouseEnter={(e) => { (e.currentTarget).style.background = "rgba(255,255,255,0.06)"; }} onMouseLeave={(e) => { (e.currentTarget).style.background = "transparent"; }}>+ New Board</button>
             </div>
           )}
         </div>
 
-        <div className="w-px h-4 mx-1" style={{ background: "rgba(255,255,255,0.1)" }} />
+        <span className="w-px h-4 mx-0.5" style={{ background: "var(--color-border)" }} />
 
-        {/* Save / Load */}
-        <button className={btnBase} style={btnStyle} onClick={openSaveModal}>Save</button>
-        <button className={btnBase} style={btnStyle} onClick={openLoadModal}>Load</button>
-        <button className={btnBase} style={btnStyle} onClick={handleExportJson}>Export</button>
-        <button className={btnBase} style={btnStyle} onClick={handleImportJson}>Import</button>
+        <button className={tbBtn} style={tbStyle} onClick={openSaveModal} title="Save board to server">
+          <span className="text-[11px]">Save</span>
+        </button>
+        <button className={tbBtn} style={tbStyle} onClick={openLoadModal} title="Load board from server">
+          <span className="text-[11px]">Load</span>
+        </button>
+        <button className={tbBtn} style={tbStyle} onClick={handleExportJson} title="Export board as JSON">
+          <span className="text-[11px]">Export</span>
+        </button>
+        <button className={tbBtn} style={tbStyle} onClick={handleImportJson} title="Import board from JSON">
+          <span className="text-[11px]">Import</span>
+        </button>
 
-        <div className="w-px h-4 mx-1" style={{ background: "rgba(255,255,255,0.1)" }} />
+        <span className="w-px h-4 mx-0.5" style={{ background: "var(--color-border)" }} />
 
-        {/* Share / Join */}
         {mode === "local" ? (
           <>
-            <button className={btnBase} style={{ ...btnStyle, background: "rgba(80,160,255,0.15)", borderColor: "rgba(80,160,255,0.3)" }} onClick={openShareModal}>Share</button>
-            <button className={btnBase} style={btnStyle} onClick={openJoinModal}>Join</button>
+            <button className={tbBtn} style={tbStyle} onClick={openShareModal} title="Share this board with others">
+              <span className="text-[11px]">Share</span>
+            </button>
+            <button className={tbBtn} style={tbStyle} onClick={openJoinModal} title="Join a shared board">
+              <span className="text-[11px]">Join</span>
+            </button>
           </>
         ) : (
           <div className="flex items-center gap-1.5">
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: "rgba(80,160,255,0.15)", color: "rgba(80,160,255,0.9)", border: "1px solid rgba(80,160,255,0.3)" }}>Room: {roomId}</span>
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: "rgba(80,160,255,0.1)", color: "rgba(80,160,255,0.8)", border: "1px solid rgba(80,160,255,0.2)" }}>Room: {roomId}</span>
             {roomUsers.map((u) => (
-              <span key={u.name} className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: u.color + "22", color: u.color, border: `1px solid ${u.color}44` }}>{u.name}</span>
+              <span key={u.name} className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: u.color + "18", color: u.color, border: `1px solid ${u.color}33` }}>{u.name}</span>
             ))}
-            <button className={btnBase} style={{ ...btnStyle, color: "#e55" }} onClick={leaveRoom}>Leave</button>
+            <button className={tbBtn} style={{ ...tbStyle, color: "#e55" }} onClick={leaveRoom} title="Leave the shared room">
+              <span className="text-[11px]">Leave</span>
+            </button>
           </div>
         )}
 
+        <span className="w-px h-4 mx-0.5" style={{ background: "var(--color-border)" }} />
+        <button
+          className={tbBtn}
+          style={{ ...tbStyle, ...(cropMode ? { background: "rgba(80,160,255,0.15)", color: "rgba(80,160,255,0.9)", border: "1px solid rgba(80,160,255,0.3)" } : {}) }}
+          onClick={() => { if (cropMode) cancelCrop(); else { setCropMode(true); clearSelection(); setAnnotationTool(null); } }}
+          title={cropMode ? "Cancel crop mode" : "Crop tool — click and drag on an image to crop it"}
+        >
+          <span className="text-[11px]">{cropMode ? "✂ Cancel" : "✂ Crop"}</span>
+        </button>
+
         <div className="flex-1" />
-        <span className="text-[10px] font-mono" style={{ color: "rgba(255,255,255,0.3)" }}>{items.length} items</span>
+        <span className="text-[10px] font-mono" style={{ color: "var(--color-text-muted)" }}>{items.length} items</span>
       </div>
 
+      <AnnotationToolbar
+        annotations={annotations}
+        onAnnotationsChange={setAnnotations}
+        activeTool={annotationTool}
+        onToolChange={setAnnotationTool}
+        visible={annotationVisible}
+        onVisibilityChange={setAnnotationVisible}
+        color={annotationColor}
+        onColorChange={setAnnotationColor}
+        lineWidth={annotationLineWidth}
+        onLineWidthChange={setAnnotationLineWidth}
+      />
+      {annotationTool !== null && (
+        <div className="flex items-center gap-1.5 px-2 py-1 shrink-0" style={{ borderBottom: "1px solid var(--color-border)" }}>
+          <span className="text-[10px]" style={{ color: "var(--color-text-secondary)" }}>Stroke</span>
+          <input
+            type="range"
+            min={1}
+            max={20}
+            value={annotationLineWidth}
+            onChange={(e) => setAnnotationLineWidth(Number(e.target.value))}
+            className="w-24 h-3"
+          />
+          <span className="text-[10px] w-6 text-center tabular-nums" style={{ color: "var(--color-text-muted)" }}>{annotationLineWidth}</span>
+        </div>
+      )}
+
       {/* Canvas */}
-      <div ref={containerRef} className="flex-1 relative overflow-hidden select-none outline-none" style={{ backgroundImage: "radial-gradient(circle, rgba(255,255,255,0.1) 1px, transparent 1px)", backgroundSize: `${ds}px ${ds}px`, backgroundPosition: `${panX}px ${panY}px`, cursor: grabbing ? "grabbing" : "default" }} onWheel={handleWheel} onMouseDown={(e) => handleMouseDown(e)} onContextMenu={handleContextMenu} tabIndex={0} onMouseMove={mode === "shared" ? (e) => { const w = screenToWorld(e.clientX, e.clientY); sendCursor(w.wx, w.wy); } : undefined}>
+      <div ref={containerRef} className="flex-1 relative overflow-hidden select-none outline-none" style={{ backgroundImage: "radial-gradient(circle, rgba(255,255,255,0.1) 1px, transparent 1px)", backgroundSize: `${ds}px ${ds}px`, backgroundPosition: `${panX}px ${panY}px`, cursor: grabbing ? "grabbing" : cropMode ? "crosshair" : annotationTool && annotationVisible ? "crosshair" : "default" }} onWheel={handleWheel} onMouseDown={(e) => handleMouseDown(e)} onContextMenu={handleContextMenu} tabIndex={0} onMouseMove={mode === "shared" ? (e) => { const w = screenToWorld(e.clientX, e.clientY); sendCursor(w.wx, w.wy); } : undefined}>
         {/* World-space container */}
         <div style={{ position: "absolute", left: "50%", top: "50%", transform: `translate(-50%, -50%) translate(${panX}px, ${panY}px) scale(${zoom})`, pointerEvents: "none" }}>
           {sortedItems.map((item) => {
@@ -579,7 +785,17 @@ export function ArtboardCanvas() {
               <div key={item.id} style={{ position: "absolute", left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: "auto", outline: isSel ? "2px dashed rgba(80,160,255,0.9)" : "none", outlineOffset: 2, boxShadow: isSel ? "0 0 12px rgba(80,160,255,0.25)" : "none", cursor: grabbing ? "grabbing" : "grab" }}
                 onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, item); }}
                 onDoubleClick={() => { if (item.type === "text") setEditingText(item.id); }}>
-                {item.type === "image" && <img src={item.content} alt="" draggable={false} style={{ width: "100%", height: "100%", objectFit: "contain", border: item.borderWidth ? `${item.borderWidth}px solid ${item.borderColor || "#888"}` : "none" }} />}
+                {item.type === "image" && (
+                  <div className="relative" style={{ width: "100%", height: "100%" }}>
+                    <img src={item.content} alt="" draggable={false} style={{ width: "100%", height: "100%", objectFit: "fill", display: "block", border: item.borderWidth ? `${item.borderWidth}px solid ${item.borderColor || "#888"}` : "none" }} />
+                    <span
+                      className="text-[10px] font-mono pointer-events-none leading-none whitespace-nowrap"
+                      style={{ position: "absolute", left: 4, bottom: 4, color: "rgba(255,255,255,0.4)", textShadow: "0 1px 3px rgba(0,0,0,0.8)" }}
+                    >
+                      {Math.round(item.w)} x {Math.round(item.h)}
+                    </span>
+                  </div>
+                )}
                 {item.type === "text" && (editingText === item.id
                   ? <textarea autoFocus defaultValue={item.content} onBlur={(e) => { updateItem(item.id, { content: e.target.value }); setEditingText(null); }} onKeyDown={(e) => { if (e.key === "Escape") setEditingText(null); }} onMouseDown={(e) => e.stopPropagation()} className="w-full h-full resize-none outline-none p-1" style={{ background: "rgba(0,0,0,0.4)", color: item.fontColor || "#fff", fontSize: item.fontSize || 16, border: "1px solid rgba(80,160,255,0.5)" }} />
                   : <div style={{ width: "100%", height: "100%", color: item.fontColor || "#fff", fontSize: item.fontSize || 16, padding: 4, overflow: "hidden", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{item.content}</div>)}
@@ -588,6 +804,19 @@ export function ArtboardCanvas() {
               </div>
             );
           })}
+
+          <AnnotationCanvas
+            width={annotationWorldPlacement.width}
+            height={annotationWorldPlacement.height}
+            worldPlacement={annotationWorldPlacement}
+            zoom={zoom}
+            visible={annotationVisible}
+            annotations={annotations}
+            onAnnotationsChange={setAnnotations}
+            activeTool={annotationTool}
+            color={annotationColor}
+            lineWidth={annotationLineWidth}
+          />
 
           {/* Remote cursors (smoothly interpolated via expDecay) */}
           {smoothCursors.map((c) => (
@@ -602,6 +831,46 @@ export function ArtboardCanvas() {
 
         {/* Marquee selection rectangle */}
         {marqueeRect && marqueeRect.width > 2 && marqueeRect.height > 2 && <div style={{ position: "fixed", left: marqueeRect.left, top: marqueeRect.top, width: marqueeRect.width, height: marqueeRect.height, background: "rgba(80,160,255,0.12)", border: "1px solid rgba(80,160,255,0.5)", pointerEvents: "none", zIndex: 9990 }} />}
+
+        {/* Crop overlay */}
+        {cropMode && cropTarget && cropRect && (() => {
+          const x1 = Math.min(cropRect.sx, cropRect.cx), y1 = Math.min(cropRect.sy, cropRect.cy);
+          const x2 = Math.max(cropRect.sx, cropRect.cx), y2 = Math.max(cropRect.sy, cropRect.cy);
+          const cw = x2 - x1, ch = y2 - y1;
+          if (cw < 2 || ch < 2) return null;
+          const el = containerRef.current;
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          const cx = r.width / 2, cy = r.height / 2;
+          const left = cx + panX + x1 * zoom;
+          const top = cy + panY + y1 * zoom;
+          const w = cw * zoom;
+          const h = ch * zoom;
+          return (
+            <>
+              <div style={{ position: "absolute", left, top, width: w, height: h, border: "2px dashed rgba(255,200,0,0.9)", background: "rgba(255,200,0,0.08)", pointerEvents: "none", zIndex: 9991 }} />
+              <div className="flex items-center gap-1" style={{ position: "absolute", left: left + w / 2 - 60, top: top + h + 8, zIndex: 9992 }}>
+                <button
+                  className="px-2.5 py-1 text-[11px] rounded cursor-pointer font-medium"
+                  style={{ background: "rgba(255,200,0,0.9)", border: "none", color: "#222" }}
+                  onClick={applyCrop}
+                >Crop</button>
+                <button
+                  className="px-2.5 py-1 text-[11px] rounded cursor-pointer"
+                  style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.2)", color: "rgba(255,255,255,0.7)" }}
+                  onClick={cancelCrop}
+                >Cancel</button>
+              </div>
+            </>
+          );
+        })()}
+
+        {/* Crop mode hint */}
+        {cropMode && !cropRect && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded text-[11px] font-medium" style={{ background: "rgba(255,200,0,0.15)", border: "1px solid rgba(255,200,0,0.3)", color: "rgba(255,200,0,0.9)", zIndex: 9991 }}>
+            Click and drag on an image to crop it
+          </div>
+        )}
 
         {/* Info bar */}
         <div className="absolute bottom-2 left-3 flex items-center gap-2 px-2.5 py-1 rounded-md" style={{ background: "rgba(0,0,0,0.5)", zIndex: 10 }}>

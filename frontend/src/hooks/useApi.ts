@@ -43,6 +43,48 @@ export async function apiFetch<T = unknown>(
   }
 }
 
+/**
+ * POST with Server-Sent Events streaming.  Calls `onToken` for each text
+ * chunk as the model generates, then resolves when the stream ends.
+ */
+export async function apiFetchSSE(
+  path: string,
+  body: unknown,
+  onToken: (token: string) => void,
+  signal?: AbortSignal,
+): Promise<{ error?: string }> {
+  const res = await fetch(`${BACKEND}/api${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    return { error: `${res.status}: ${text}` };
+  }
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      try {
+        const evt = JSON.parse(line.slice(6));
+        if (evt.token) onToken(evt.token);
+        if (evt.error) return { error: evt.error };
+        if (evt.done) return {};
+      } catch { /* skip malformed */ }
+    }
+  }
+  return {};
+}
+
 export function useApiPost<TReq, TRes>(path: string) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

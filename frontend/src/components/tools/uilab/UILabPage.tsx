@@ -12,14 +12,18 @@ import { useFavorites } from "@/hooks/FavoritesContext";
 import { useSessionRegister } from "@/hooks/SessionContext";
 import { useClipboardPaste } from "@/hooks/useClipboardPaste";
 import { XmlModal } from "@/components/shared/XmlModal";
+import { ArtDirectorWidget } from "@/components/shared/ArtDirectorWidget";
+import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
+import { useArtDirector } from "@/hooks/ArtDirectorContext";
+import { DeepSearchPanel } from "@/components/shared/DeepSearchPanel";
+import type { SearchResult } from "@/components/shared/DeepSearchPanel";
+import { useArtboard } from "@/hooks/ArtboardContext";
 import { GripVertical, ChevronDown, ChevronRight, Save, FolderPlus, Trash2, Pencil, ImagePlus, X, FolderOpen, ArrowLeft, Eye, EyeOff, Monitor } from "lucide-react";
 import { EditHistory } from "@/components/shared/EditHistory";
 import { StyleFusionPanel, buildFusionBrief, EMPTY_FUSION } from "@/components/shared/StyleFusionPanel";
 import type { StyleFusionState } from "@/components/shared/StyleFusionPanel";
 import type { HistoryEntry } from "@/lib/imageHistory";
 import { useShortcuts } from "@/hooks/useShortcuts";
-import { usePromptOverrides } from "@/hooks/PromptOverridesContext";
-import { EditPromptModal } from "@/components/shared/EditPromptModal";
 import { useCustomSections } from "@/hooks/CustomSectionsContext";
 import { useCustomSectionState } from "@/hooks/useCustomSectionState";
 import { CustomSectionRenderer } from "@/components/shared/CustomSectionRenderer";
@@ -34,6 +38,7 @@ const BUILTIN_TABS: TabDef[] = [
   { id: "styleLib", label: "Style Library", group: "library" },
   { id: "userLib", label: "User Library", group: "library" },
   { id: "artboard", label: "Art Table", group: "artboard" },
+  { id: "deepSearch", label: "Deep Search", group: "search" },
   { id: "refA", label: "Ref A", group: "refs" },
   { id: "refB", label: "Ref B", group: "refs" },
   { id: "refC", label: "Ref C", group: "refs" },
@@ -119,7 +124,6 @@ const SECTION_TIPS: Record<SectionId, string> = {
 
 const NON_COLLAPSIBLE: Set<SectionId> = new Set(["generate"]);
 const TOGGLEABLE_SECTIONS: Set<SectionId> = new Set(["buttonLayout", "scrollbarParts", "charGen", "styleFusion"]);
-const PROMPT_EDITABLE_SECTIONS: Set<SectionId> = new Set(["styleFusion"]);
 
 interface ModelInfo { id: string; label: string; resolution: string; time_estimate: string; multimodal: boolean }
 
@@ -188,6 +192,8 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
   // UI Generator state
   const [elementType, setElementType] = useState("icon");
   const [prompt, setPrompt] = useState("");
+  const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
+  const { setCurrentImage, setAttributesContext } = useArtDirector();
   const [genCount, setGenCount] = useState(1);
   const [modelId, setModelId] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -247,12 +253,9 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
   const dragItemRef = useRef<SectionId | null>(null);
   const { addToast } = useToastContext();
   const { addFavorite, removeFavorite, isFavorited, getFavoriteId } = useFavorites();
-  const promptOverrides = usePromptOverrides();
-  const { getSectionColor, setSectionColor } = useCustomSections();
+  const artboard = useArtboard();
+  const { getSectionColor } = useCustomSections();
   const customSections = useCustomSectionState("uilab");
-  const TOOL_ID = "uilab";
-  const [promptEditSection, setPromptEditSection] = useState<SectionId | null>(null);
-  const [promptCtxMenu, setPromptCtxMenu] = useState<{ x: number; y: number; section: SectionId } | null>(null);
 
   const [xmlOpen, setXmlOpen] = useState(false);
 
@@ -309,6 +312,21 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
     if (id === "charGen") return elementType === "font" || elementType === "number";
     return true;
   }, [elementType]);
+
+  const handleSendSearchToArtboard = useCallback((images: SearchResult[]) => {
+    const existing = artboard.items;
+    let maxX = 0;
+    for (const it of existing) { if (it.x + it.w > maxX) maxX = it.x + it.w; }
+    const GAP = 20;
+    const COLS = Math.ceil(Math.sqrt(images.length));
+    const startX = existing.length > 0 ? maxX + GAP * 3 : 0;
+    const newItems = images.map((img, i) => ({
+      type: "image" as const, x: startX + (i % COLS) * (img.width + GAP), y: Math.floor(i / COLS) * (img.height + GAP),
+      w: img.width, h: img.height, rotation: 0, content: `data:image/png;base64,${img.b64}`,
+    }));
+    artboard.addItems(newItems);
+    setActiveTab("artboard");
+  }, [artboard, setActiveTab]);
 
   // --- Tab management ---
   const handleAddRef = useCallback(() => {
@@ -512,7 +530,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
     return result;
   }, [tabs, refImages]);
 
-  // --- Prompt override helpers ---
+  // --- Section prompt resolution ---
   const getDefaultSectionPrompt = useCallback((sectionId: SectionId): string => {
     switch (sectionId) {
       case "styleFusion": return buildFusionBrief(styleFusion);
@@ -522,10 +540,8 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
 
   const resolveSection = useCallback((sectionId: SectionId): string => {
     if (!isSectionEnabled(sectionId)) return "";
-    const override = promptOverrides.getOverride(TOOL_ID, sectionId);
-    if (override !== null) return override;
     return getDefaultSectionPrompt(sectionId);
-  }, [isSectionEnabled, promptOverrides, getDefaultSectionPrompt]);
+  }, [isSectionEnabled, getDefaultSectionPrompt]);
 
   // --- Generation handlers ---
   const handleGenerate = useCallback(async () => {
@@ -588,6 +604,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
               image_b64: b64,
               width: cw,
               height: ch,
+              label: `${String.fromCharCode(65 + Math.floor(i / 4))}${(i % 4) + 1}`,
             }));
             if (res.full_grid_b64) {
               newResults.push({
@@ -595,6 +612,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
                 image_b64: res.full_grid_b64,
                 width: cw * 4,
                 height: ch * 4,
+                label: "Full",
               });
             }
             setGalleryResults((prev) => [...prev, ...newResults]);
@@ -740,17 +758,47 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
     addToast("Session cleared", "info");
   }, [addToast, customSections]);
 
-  // Listen for project-clear event from ProjectTabsWrapper
   useEffect(() => {
-    const handler = (e: Event) => {
+    const SK = "madison-uilab-projects";
+    const clearHandler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.storageKey === "madison-uilab-projects" && detail?.instanceId === instanceId) {
-        handleReset();
+      if (detail?.storageKey === SK && detail?.instanceId === instanceId) handleReset();
+    };
+    const saveHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.storageKey === SK && detail?.instanceId === instanceId) {
+        const state = { prompt, elementType, sbOrientation, fontChars, styleFusion, modelId, styleLibraryFolder, buttonShape, borderStyle, outputSize };
+        const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+        const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+        a.download = `uilab_project_${instanceId + 1}.json`; a.click(); URL.revokeObjectURL(a.href);
       }
     };
-    window.addEventListener("project-clear", handler);
-    return () => window.removeEventListener("project-clear", handler);
-  }, [instanceId, handleReset]);
+    const loadHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.storageKey === SK && detail?.instanceId === instanceId && detail?.data) {
+        const d = detail.data as Record<string, unknown>;
+        if (typeof d.prompt === "string") setPrompt(d.prompt);
+        if (typeof d.elementType === "string") setElementType(d.elementType as typeof elementType);
+        if (typeof d.buttonShape === "string") setButtonShape(d.buttonShape as string);
+        if (typeof d.borderStyle === "string") setBorderStyle(d.borderStyle as string);
+        if (typeof d.outputSize === "string") setOutputSize(d.outputSize as string);
+        if (typeof d.sbOrientation === "string") setSbOrientation(d.sbOrientation as string);
+        if (typeof d.fontChars === "string") setFontChars(d.fontChars as string);
+        if (d.styleFusion) setStyleFusion(d.styleFusion as StyleFusionState);
+        if (typeof d.modelId === "string") setModelId(d.modelId);
+        if (typeof d.styleLibraryFolder === "string") setStyleLibraryFolder(d.styleLibraryFolder as string);
+        addToast("Project loaded", "success");
+      }
+    };
+    window.addEventListener("project-clear", clearHandler);
+    window.addEventListener("project-save", saveHandler);
+    window.addEventListener("project-load", loadHandler);
+    return () => {
+      window.removeEventListener("project-clear", clearHandler);
+      window.removeEventListener("project-save", saveHandler);
+      window.removeEventListener("project-load", loadHandler);
+    };
+  }, [instanceId, handleReset, prompt, elementType, sbOrientation, fontChars, styleFusion, modelId, styleLibraryFolder, buttonShape, borderStyle, outputSize, addToast]);
 
   // Grid cell handlers
   const handleGridCopy = useCallback(async (id: string) => {
@@ -943,6 +991,54 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
       for (const id of ["uiGenerate", "uiShowXml"]) unregisterAction(id);
     };
   }, [active, registerAction, unregisterAction, handleGenerate]);
+
+  // --- Voice Director command listener ---
+  const voiceCmdRef = useRef({
+    generate: handleGenerate,
+    clear_gallery: handleClearGallery,
+    reset: handleReset,
+  });
+  voiceCmdRef.current = { generate: handleGenerate, clear_gallery: handleClearGallery, reset: handleReset };
+
+  useEffect(() => {
+    if (!active) return;
+    const handler = (e: Event) => {
+      const { action } = (e as CustomEvent).detail as { action: string; params: Record<string, unknown> };
+      const cmds = voiceCmdRef.current as Record<string, unknown>;
+      if (action in cmds) {
+        const fn = cmds[action];
+        if (typeof fn === "function") fn();
+      }
+    };
+    window.addEventListener("voice-command", handler);
+    return () => window.removeEventListener("voice-command", handler);
+  }, [active]);
+
+  // --- Gallery restore listener ---
+  useEffect(() => {
+    if (!active) return;
+    const handler = (e: Event) => {
+      const d = (e as CustomEvent).detail as Record<string, unknown>;
+      if (d._source_tool !== "uilab") return;
+      if (typeof d.description === "string") setPrompt(d.description);
+      if (typeof d.prompt === "string") setPrompt(d.prompt as string);
+      if (typeof d.model === "string") setModelId(d.model as string);
+    };
+    window.addEventListener("gallery-restore", handler);
+    return () => window.removeEventListener("gallery-restore", handler);
+  }, [active]);
+
+  useEffect(() => {
+    if (active) {
+      setCurrentImage(mainstageSrc || null);
+    }
+  }, [active, mainstageSrc, setCurrentImage]);
+
+  useEffect(() => {
+    if (active) {
+      setAttributesContext(prompt || "");
+    }
+  }, [active, prompt, setAttributesContext]);
 
   // ---------------------------------------------------------------------------
   // Render helpers
@@ -1917,9 +2013,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
           const canToggle = TOGGLEABLE_SECTIONS.has(sectionId);
           const enabled = isSectionEnabled(sectionId);
           const label = SECTION_LABELS[sectionId];
-          const isPromptEditable = PROMPT_EDITABLE_SECTIONS.has(sectionId);
-          const sectionHasOverride = isPromptEditable && promptOverrides.hasOverride(TOOL_ID, sectionId);
-          const sectionColor = getSectionColor(TOOL_ID, sectionId);
+          const sectionColor = getSectionColor("uilab", sectionId);
 
           const wrapSection = (children: ReactNode) => (
             <div
@@ -1931,19 +2025,13 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
               onDragEnd={handleDragEnd}
               onDragLeave={() => { if (dragOverId === sectionId) setDragOverId(null); }}
               onMouseDown={(e) => { if (e.button === 1 && canToggle) { e.preventDefault(); toggleSectionEnabled(sectionId); } }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setPromptCtxMenu({ x: e.clientX, y: e.clientY, section: sectionId });
-              }}
               className="section-card-hover"
               style={{
                 border: dragOverId === sectionId && dragItemRef.current !== sectionId
                   ? "1px solid var(--color-accent, #6a6aff)"
                   : sectionColor
                     ? `1px solid ${sectionColor}`
-                    : sectionHasOverride
-                      ? "1px solid var(--color-accent)"
-                      : "1px solid var(--color-border)",
+                    : "1px solid var(--color-border)",
                 borderRadius: "var(--radius-lg)",
                 background: "var(--color-card)",
                 opacity: enabled ? 1 : 0.4,
@@ -1968,7 +2056,6 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
                   >
                     {collapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
                     <span className="text-xs font-semibold uppercase tracking-wider">{label}</span>
-                    {sectionHasOverride && <Pencil className="h-2.5 w-2.5 shrink-0" style={{ color: "var(--color-accent)" }} />}
                   </button>
                 ) : (
                   <span className="flex-1 py-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }} title={SECTION_TIPS[sectionId]}>
@@ -1985,7 +2072,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
                       color: enabled ? "var(--color-foreground)" : "var(--color-text-muted)",
                       border: "1px solid var(--color-border)",
                     }}
-                    title={enabled ? "This section is ON. Click to turn off." : "This section is OFF. Click to turn on."}
+                    title={enabled ? "This panel is ON. Click to turn off." : "This panel is OFF. Click to turn on."}
                   >
                     {enabled ? "ON" : "OFF"}
                   </button>
@@ -2008,14 +2095,10 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
         {customSections.sections.map((cs) => {
           const csCollapsed = customSections.isCollapsed(cs.id);
           const csEnabled = customSections.isEnabled(cs.id);
-          const csColor = cs.color || getSectionColor(TOOL_ID, `custom:${cs.id}`);
+          const csColor = cs.color || getSectionColor("uilab", `custom:${cs.id}`);
           return (
             <div
               key={`custom:${cs.id}`}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setPromptCtxMenu({ x: e.clientX, y: e.clientY, section: `custom:${cs.id}` as SectionId });
-              }}
               className="section-card-hover"
               style={{
                 border: csColor ? `1px solid ${csColor}` : "1px solid var(--color-border)",
@@ -2071,7 +2154,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
           onClick={handleSetDefaultLayout}
           className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded text-[10px] font-medium cursor-pointer transition-colors"
           style={{ background: "transparent", color: "var(--color-text-muted)", border: "1px dashed var(--color-border)" }}
-          title="Save current section order as default"
+          title="Save current panel order as default"
         >
           <Save className="h-3 w-3" />
           Set Active Layout as Default
@@ -2103,7 +2186,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
         <div className="flex-1 overflow-hidden min-h-0">
           {activeTab === "main" && (
             <div className="flex h-full overflow-hidden">
-              <div className="flex-1 min-w-0 h-full">
+              <div className="flex-1 min-w-0 h-full relative">
                 <input ref={mainstageFileInputRef} type="file" accept="image/*" className="hidden" onChange={handleMainstageFileSelect} />
                 <ImageViewer
                   src={mainstageSrc}
@@ -2120,6 +2203,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
                   isFavorited={mainstageSrc ? isFavorited(mainstageSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
                   onToggleFavorite={mainstageSrc ? () => { const b64 = mainstageSrc.replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "uilab", label: "main", source: "viewer" }); } : undefined}
                 />
+                <ArtDirectorWidget onOpenConfig={() => setArtDirectorConfigOpen(true)} />
               </div>
               {mainstageHistory.length > 0 && (
                 <div className="w-[220px] shrink-0 overflow-y-auto p-2" style={{ borderLeft: "1px solid var(--color-border)" }}>
@@ -2153,10 +2237,18 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
               styleLibraryFolders={slFolders.map((f) => ({ name: f.name }))}
               onRefreshStyleFolders={loadSlFolders}
               isFavorited={(b64) => isFavorited(b64)}
-              onToggleFavorite={(id, b64, w, h) => { if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "uilab", label: `grid-${id}`, prompt: "", source: "grid", width: w, height: h }); }}
+              onToggleFavorite={(id, b64, w, h) => {
+                if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); }
+                else {
+                  const cell = galleryResults.find((r) => r.id === id);
+                  const favLabel = cell?.label ? `Grid ${cell.label}` : `grid-${id}`;
+                  addFavorite({ image_b64: b64, tool: "uilab", label: favLabel, prompt: "", source: "grid", width: w, height: h });
+                }
+              }}
             />
           )}
           {activeTab === "artboard" && <ArtboardCanvas />}
+          {activeTab === "deepSearch" && <DeepSearchPanel onSendToArtboard={handleSendSearchToArtboard} />}
           {activeTab === "styleLib" && renderStyleLibraryTab()}
           {activeTab === "userLib" && renderUserLibraryTab()}
           {isRefTab && (
@@ -2206,90 +2298,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
 
       {/* XML Modal */}
       {xmlOpen && <XmlModal xml={xmlContent} title="UI Lab XML" onClose={() => setXmlOpen(false)} />}
-
-      {promptCtxMenu && (() => {
-        const isCustom = promptCtxMenu.section.startsWith("custom:");
-        const isEditable = !isCustom && PROMPT_EDITABLE_SECTIONS.has(promptCtxMenu.section);
-        const colorKey = isCustom ? promptCtxMenu.section : promptCtxMenu.section;
-        const currentColor = getSectionColor(TOOL_ID, colorKey);
-        return (
-          <div className="fixed inset-0 z-[55]" onClick={() => setPromptCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setPromptCtxMenu(null); }}>
-            <div
-              className="absolute py-1 rounded-md shadow-lg"
-              style={{
-                left: promptCtxMenu.x, top: promptCtxMenu.y,
-                background: "var(--color-card)", border: "1px solid var(--color-border)",
-                minWidth: 200, zIndex: 56,
-              }}
-            >
-              {isEditable && (
-                <>
-                  <button
-                    className="w-full text-left px-3 py-1.5 text-xs cursor-pointer"
-                    style={{ background: "transparent", border: "none", color: "var(--color-text-primary)" }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-hover)")}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                    onClick={() => { setPromptEditSection(promptCtxMenu.section); setPromptCtxMenu(null); }}
-                  >
-                    <Pencil className="h-3 w-3 inline mr-2" style={{ verticalAlign: "-2px" }} />
-                    Edit Prompt
-                  </button>
-                  {promptOverrides.hasOverride(TOOL_ID, promptCtxMenu.section) && (
-                    <button
-                      className="w-full text-left px-3 py-1.5 text-xs cursor-pointer"
-                      style={{ background: "transparent", border: "none", color: "var(--color-text-primary)" }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-hover)")}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                      onClick={() => { promptOverrides.clearOverride(TOOL_ID, promptCtxMenu.section); setPromptCtxMenu(null); addToast("Prompt reset to default", "info"); }}
-                    >
-                      Reset Prompt to Default
-                    </button>
-                  )}
-                  <div className="my-1" style={{ borderTop: "1px solid var(--color-border)" }} />
-                </>
-              )}
-              <div className="px-3 py-1">
-                <div className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--color-text-muted)" }}>
-                  Section Color
-                </div>
-                <div className="flex items-center gap-1 flex-wrap">
-                  {["#808080", "#e05050", "#e09040", "#d0c040", "#50b060", "#40a0d0", "#6070e0", "#a060d0", "#d060a0"].map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => { setSectionColor(TOOL_ID, colorKey, c); setPromptCtxMenu(null); }}
-                      className="w-4 h-4 rounded-full cursor-pointer shrink-0"
-                      style={{ background: c, border: currentColor === c ? "2px solid white" : "1px solid var(--color-border)" }}
-                    />
-                  ))}
-                  <input
-                    type="color"
-                    value={currentColor || "#808080"}
-                    onChange={(e) => { setSectionColor(TOOL_ID, colorKey, e.target.value); }}
-                    className="w-4 h-4 rounded cursor-pointer border-0 p-0"
-                    title="Custom color"
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                  {currentColor && (
-                    <button
-                      type="button"
-                      onClick={() => { setSectionColor(TOOL_ID, colorKey, undefined); setPromptCtxMenu(null); }}
-                      className="text-[9px] px-1.5 py-0.5 rounded cursor-pointer"
-                      style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-muted)" }}
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {promptEditSection && (
-        <EditPromptModal open sectionLabel={SECTION_LABELS[promptEditSection]} defaultText={getDefaultSectionPrompt(promptEditSection)} currentText={promptOverrides.getOverride(TOOL_ID, promptEditSection) ?? getDefaultSectionPrompt(promptEditSection)} hasOverride={promptOverrides.hasOverride(TOOL_ID, promptEditSection)} onSave={(text) => { promptOverrides.setOverride(TOOL_ID, promptEditSection, text); setPromptEditSection(null); addToast("Prompt saved", "success"); }} onReset={() => { promptOverrides.clearOverride(TOOL_ID, promptEditSection); addToast("Prompt reset to default", "info"); }} onClose={() => setPromptEditSection(null)} />
-      )}
+      <ArtDirectorConfigModal open={artDirectorConfigOpen} onClose={() => setArtDirectorConfigOpen(false)} />
     </div>
   );
 }

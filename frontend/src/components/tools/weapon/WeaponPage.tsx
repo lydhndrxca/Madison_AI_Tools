@@ -10,10 +10,15 @@ import { useFavorites } from "@/hooks/FavoritesContext";
 import { useSessionRegister, useSessionContext } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
 import { XmlModal } from "@/components/shared/XmlModal";
+import { ArtDirectorWidget } from "@/components/shared/ArtDirectorWidget";
+import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
+import { useArtDirector } from "@/hooks/ArtDirectorContext";
+import { DeepSearchPanel } from "@/components/shared/DeepSearchPanel";
+import type { SearchResult } from "@/components/shared/DeepSearchPanel";
 
 interface ModelInfo { id: string; label: string; resolution: string; time_estimate: string; multimodal: boolean; }
 
-const VIEW_TABS = ["Main Stage", "3/4", "Front", "Back", "Side", "Top", "Bottom", "Ref A", "Ref B", "Ref C"];
+const VIEW_TABS = ["Main Stage", "3/4", "Front", "Back", "Side", "Top", "Bottom", "Deep Search", "Ref A", "Ref B", "Ref C"];
 
 const VIEW_KEY_MAP: Record<string, string> = {
   "Main Stage": "main",
@@ -45,7 +50,11 @@ function useBusySet() {
   return { is, start, end, endAll, any: set.size > 0 };
 }
 
-export function WeaponPage() {
+interface WeaponPageProps {
+  active?: boolean;
+}
+
+export function WeaponPage({ active = true }: WeaponPageProps) {
   const [activeTab, setActiveTab] = useState("Main Stage");
   const busy = useBusySet();
   const [genText, setGenText] = useState<Record<string, string>>({});
@@ -66,6 +75,8 @@ export function WeaponPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { addToast } = useToastContext();
   const { addFavorite, removeFavorite, isFavorited, getFavoriteId } = useFavorites();
+  const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
+  const { setCurrentImage, setAttributesContext } = useArtDirector();
 
   useEffect(() => {
     apiFetch<{ models: ModelInfo[]; current: string }>("/system/models").then((r) => {
@@ -337,6 +348,70 @@ export function WeaponPage() {
     },
   );
 
+  useEffect(() => {
+    if (active) {
+      setCurrentImage(currentSrc || null);
+    }
+  }, [active, currentSrc, setCurrentImage]);
+
+  useEffect(() => {
+    if (active) {
+      setAttributesContext(editText || "");
+    }
+  }, [active, editText, setAttributesContext]);
+
+  // --- Voice Director command listener ---
+  const voiceCmdRef = useRef({
+    generate: handleGenerate,
+    extract_attributes: handleExtract,
+    enhance_description: handleEnhance,
+    generate_all_views: handleGenerateAllViews,
+    send_to_photoshop: handleSendToPS,
+    save_image: handleSaveImage,
+  });
+  voiceCmdRef.current = {
+    generate: handleGenerate,
+    extract_attributes: handleExtract,
+    enhance_description: handleEnhance,
+    generate_all_views: handleGenerateAllViews,
+    send_to_photoshop: handleSendToPS,
+    save_image: handleSaveImage,
+  };
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { action, params } = (e as CustomEvent).detail as { action: string; params: Record<string, unknown> };
+      if (action === "generate" && params.description) setEditText(String(params.description));
+      const cmds = voiceCmdRef.current as Record<string, unknown>;
+      if (action in cmds) {
+        const fn = cmds[action];
+        if (typeof fn === "function") fn();
+      }
+    };
+    window.addEventListener("voice-command", handler);
+    return () => window.removeEventListener("voice-command", handler);
+  }, []);
+
+  // --- Gallery restore listener ---
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const d = (e as CustomEvent).detail as Record<string, unknown>;
+      if (d._source_tool !== "weapon") return;
+      if (typeof d.weapon_name === "string") setWeaponName(d.weapon_name as string);
+      if (typeof d.material_finish === "string") setFinish(d.material_finish as string);
+      if (typeof d.condition === "string") setCondition(d.condition as string);
+      if (typeof d.model === "string") setModelId(d.model as string);
+      if (typeof d._image_b64 === "string") {
+        const src = (d._image_b64 as string).startsWith("data:") ? d._image_b64 as string : `data:image/png;base64,${d._image_b64}`;
+        setGallery((prev) => ({ ...prev, "Main Stage": [src] }));
+        setImageIdx((prev) => ({ ...prev, "Main Stage": 0 }));
+        setActiveTab("Main Stage");
+      }
+    };
+    window.addEventListener("gallery-restore", handler);
+    return () => window.removeEventListener("gallery-restore", handler);
+  }, []);
+
   return (
     <div className="flex flex-col h-full">
       <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileSelect} />
@@ -419,23 +494,30 @@ export function WeaponPage() {
               <Button size="sm" generating={busy.is("generate")} generatingText="Generating..." onClick={handleGenerate} title="Quickly regenerate the weapon using your current settings">Quick Generate</Button>
             </div>
             <TabBar tabs={VIEW_TABS} active={activeTab} onSelect={setActiveTab} />
-            <ImageViewer
-              src={currentSrc}
-              placeholder={`No ${activeTab.toLowerCase()} image loaded`}
-              showToolbar={true}
-              locked={busy.any}
-              onSaveImage={handleSaveImage}
-              onCopyImage={handleCopyImage}
-              onPasteImage={handlePasteImage}
-              onOpenImage={handleOpenImage}
-              onClearImage={isRefTab ? handleClearRef : undefined}
-              imageCount={currentImages.length}
-              imageIndex={currentIdx}
-              onPrevImage={handlePrevImage}
-              onNextImage={handleNextImage}
-              isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
-              onToggleFavorite={currentSrc ? () => { const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "weapon", label: activeTab || "main", source: "viewer" }); } : undefined}
-            />
+            {activeTab === "Deep Search" ? (
+              <DeepSearchPanel />
+            ) : (
+              <div className="relative flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
+                <ImageViewer
+                  src={currentSrc}
+                  placeholder={`No ${activeTab.toLowerCase()} image loaded`}
+                  showToolbar={true}
+                  locked={busy.any}
+                  onSaveImage={handleSaveImage}
+                  onCopyImage={handleCopyImage}
+                  onPasteImage={handlePasteImage}
+                  onOpenImage={handleOpenImage}
+                  onClearImage={isRefTab ? handleClearRef : undefined}
+                  imageCount={currentImages.length}
+                  imageIndex={currentIdx}
+                  onPrevImage={handlePrevImage}
+                  onNextImage={handleNextImage}
+                  isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
+                  onToggleFavorite={currentSrc ? () => { const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "weapon", label: activeTab || "main", source: "viewer" }); } : undefined}
+                />
+                <ArtDirectorWidget onOpenConfig={() => setArtDirectorConfigOpen(true)} />
+              </div>
+            )}
             <div className="flex items-center gap-1 px-2 py-1 shrink-0 overflow-x-auto" style={{ borderTop: "1px solid var(--color-border)" }}>
               {["side", "threequarter", "front", "back", "top", "bottom"].map((view) => {
                 const label = Object.entries(VIEW_KEY_MAP).find(([, v]) => v === view)?.[0] || view;
@@ -446,6 +528,7 @@ export function WeaponPage() {
         </Panel>
       </PanelGroup>
       {showXml && <XmlModal xml={buildWeaponXml()} title="Weapon XML" onClose={() => setShowXml(false)} />}
+      <ArtDirectorConfigModal open={artDirectorConfigOpen} onClose={() => setArtDirectorConfigOpen(false)} />
     </div>
   );
 }

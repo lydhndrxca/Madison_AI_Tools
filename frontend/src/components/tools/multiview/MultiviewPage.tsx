@@ -220,6 +220,23 @@ export function MultiviewPage() {
     },
   );
 
+  // --- Voice Director command listener ---
+  const voiceCmdRef = useRef({ generate: handleGenerate, allViews: handleGenerateAll, selectedView: handleGenerateSelected });
+  voiceCmdRef.current = { generate: handleGenerate, allViews: handleGenerateAll, selectedView: handleGenerateSelected };
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { action, params } = (e as CustomEvent).detail as { action: string; params: Record<string, unknown> };
+      if (action === "generate") {
+        if (params.prompt) setPrompt(String(params.prompt));
+        setTimeout(() => voiceCmdRef.current.generate(), 50);
+      } else if (action === "generate_all_views") voiceCmdRef.current.allViews();
+      else if (action === "generate_selected_view") voiceCmdRef.current.selectedView();
+    };
+    window.addEventListener("voice-command", handler);
+    return () => window.removeEventListener("voice-command", handler);
+  }, []);
+
   return (
     <div className="flex h-full">
       <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileSelect} />

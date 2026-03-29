@@ -274,6 +274,40 @@ export function GeminiPage() {
     },
   );
 
+  // --- Voice Director command listener ---
+  const voiceCmdRef = useRef({ generate: handleGenerate });
+  voiceCmdRef.current = { generate: handleGenerate };
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { action, params } = (e as CustomEvent).detail as { action: string; params: Record<string, unknown> };
+      if (action === "generate") {
+        if (params.prompt) setPrompt(String(params.prompt));
+        setTimeout(() => voiceCmdRef.current.generate(), 50);
+      }
+    };
+    window.addEventListener("voice-command", handler);
+    return () => window.removeEventListener("voice-command", handler);
+  }, []);
+
+  // --- Gallery restore listener ---
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const d = (e as CustomEvent).detail as Record<string, unknown>;
+      if (d._source_tool !== "gemini") return;
+      if (typeof d.description === "string") setPrompt(d.description);
+      if (typeof d.prompt === "string") setPrompt(d.prompt as string);
+      if (typeof d.model === "string") setModelId(d.model as string);
+      if (typeof d._image_b64 === "string") {
+        const src = (d._image_b64 as string).startsWith("data:") ? d._image_b64 as string : `data:image/png;base64,${d._image_b64}`;
+        setGallery((prev) => ({ ...prev, main: [src] }));
+        setImageIdx((prev) => ({ ...prev, main: 0 }));
+      }
+    };
+    window.addEventListener("gallery-restore", handler);
+    return () => window.removeEventListener("gallery-restore", handler);
+  }, []);
+
   const isGenerating = busy.is("generate");
   const pct = batchCount > 0 && isGenerating ? (completedCount / batchCount) * 100 : 0;
 

@@ -1,7 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { Plus, X } from "lucide-react";
+import { Plus } from "lucide-react";
 
 const MAX_PROJECTS = 10;
+const DEFAULT_COUNT = 3;
 
 interface ProjectMeta {
   name: string;
@@ -18,7 +19,27 @@ function ensureUid(p: ProjectMeta): ProjectMeta {
   return p.uid ? p : { ...p, uid: crypto.randomUUID() };
 }
 
+const MIGRATION_KEY = "madison-project-tabs-v2";
+
+function makeDefaults(defaultName: string): ProjectMeta[] {
+  return Array.from({ length: DEFAULT_COUNT }, (_, i) => ({
+    name: `${defaultName} ${i + 1}`,
+    uid: crypto.randomUUID(),
+  }));
+}
+
 function loadProjects(storageKey: string, defaultName: string): ProjectMeta[] {
+  if (!localStorage.getItem(MIGRATION_KEY)) {
+    localStorage.setItem(MIGRATION_KEY, "1");
+    const keys = [
+      "madison-charlab-projects",
+      "madison-proplab-projects",
+      "madison-envlab-projects",
+      "madison-uilab-projects",
+    ];
+    for (const k of keys) localStorage.removeItem(k);
+  }
+
   try {
     const raw = localStorage.getItem(storageKey);
     if (raw) {
@@ -26,7 +47,7 @@ function loadProjects(storageKey: string, defaultName: string): ProjectMeta[] {
       if (Array.isArray(parsed) && parsed.length > 0) return parsed.map(ensureUid);
     }
   } catch { /* */ }
-  return [{ name: `${defaultName} 1`, uid: crypto.randomUUID() }];
+  return makeDefaults(defaultName);
 }
 
 function saveProjects(storageKey: string, projects: ProjectMeta[]) {
@@ -35,17 +56,61 @@ function saveProjects(storageKey: string, projects: ProjectMeta[]) {
   } catch { /* quota exceeded */ }
 }
 
-export function ProjectTabsWrapper({ storageKey, defaultProjectName = "Project", children }: ProjectTabsWrapperProps) {
-  const [projects, setProjects] = useState<ProjectMeta[]>(() => loadProjects(storageKey, defaultProjectName));
+const menuBtnStyle: React.CSSProperties = {
+  background: "transparent",
+  border: "none",
+  color: "var(--color-text-primary)",
+};
+
+function CtxMenuItem({
+  label,
+  onClick,
+  danger,
+  disabled,
+}: {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      className="flex items-center w-full px-3 py-1.5 text-[11px] text-left cursor-pointer transition-colors"
+      style={{
+        ...menuBtnStyle,
+        color: danger ? "#e55" : "var(--color-text-primary)",
+        opacity: disabled ? 0.35 : 1,
+      }}
+      disabled={disabled}
+      onMouseEnter={(e) => {
+        if (!disabled) e.currentTarget.style.background = "var(--color-input-bg)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "transparent";
+      }}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
+}
+
+export function ProjectTabsWrapper({
+  storageKey,
+  defaultProjectName = "Project",
+  children,
+}: ProjectTabsWrapperProps) {
+  const [projects, setProjects] = useState<ProjectMeta[]>(() =>
+    loadProjects(storageKey, defaultProjectName),
+  );
   const [activeIdx, setActiveIdx] = useState(0);
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [editValue, setEditValue] = useState("");
-
-  // Right-click context menu
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; idx: number } | null>(null);
   const ctxRef = useRef<HTMLDivElement>(null);
+  const loadInputRef = useRef<HTMLInputElement>(null);
+  const loadTargetRef = useRef<number>(0);
 
-  // Close context menu on outside click or Escape
   useEffect(() => {
     if (!ctxMenu) return;
     const handleClick = (e: MouseEvent) => {
@@ -62,23 +127,32 @@ export function ProjectTabsWrapper({ storageKey, defaultProjectName = "Project",
     };
   }, [ctxMenu]);
 
-  const persist = useCallback((next: ProjectMeta[]) => {
-    setProjects(next);
-    saveProjects(storageKey, next);
-  }, [storageKey]);
+  const persist = useCallback(
+    (next: ProjectMeta[]) => {
+      setProjects(next);
+      saveProjects(storageKey, next);
+    },
+    [storageKey],
+  );
 
   const addProject = useCallback(() => {
     if (projects.length >= MAX_PROJECTS) return;
-    const next = [...projects, { name: `${defaultProjectName} ${projects.length + 1}`, uid: crypto.randomUUID() }];
+    const next = [
+      ...projects,
+      { name: `${defaultProjectName} ${projects.length + 1}`, uid: crypto.randomUUID() },
+    ];
     persist(next);
     setActiveIdx(next.length - 1);
   }, [projects, defaultProjectName, persist]);
 
-  const handleRename = useCallback((idx: number) => {
-    setEditingIdx(idx);
-    setEditValue(projects[idx].name);
-    setCtxMenu(null);
-  }, [projects]);
+  const handleRename = useCallback(
+    (idx: number) => {
+      setEditingIdx(idx);
+      setEditValue(projects[idx].name);
+      setCtxMenu(null);
+    },
+    [projects],
+  );
 
   const commitRename = useCallback(() => {
     if (editingIdx === null) return;
@@ -91,23 +165,90 @@ export function ProjectTabsWrapper({ storageKey, defaultProjectName = "Project",
     setEditingIdx(null);
   }, [editingIdx, editValue, projects, persist]);
 
-  const clearProject = useCallback((idx: number) => {
-    // Clearing means removing stored state for this instance — we do this by
-    // dispatching a custom event the child page can listen for to reset itself.
-    window.dispatchEvent(new CustomEvent("project-clear", { detail: { storageKey, instanceId: idx } }));
-    setCtxMenu(null);
-  }, [storageKey]);
+  const handleSaveProject = useCallback(
+    (idx: number) => {
+      setCtxMenu(null);
+      window.dispatchEvent(
+        new CustomEvent("project-save", { detail: { storageKey, instanceId: idx } }),
+      );
+    },
+    [storageKey],
+  );
 
-  const deleteProject = useCallback((idx: number) => {
-    if (projects.length <= 1) return;
-    const next = projects.filter((_, i) => i !== idx);
-    persist(next);
-    if (activeIdx >= next.length) setActiveIdx(next.length - 1);
-    else if (activeIdx > idx) setActiveIdx(activeIdx - 1);
-    // Fire clear so any residual state is wiped
-    window.dispatchEvent(new CustomEvent("project-clear", { detail: { storageKey, instanceId: idx } }));
-    setCtxMenu(null);
-  }, [projects, activeIdx, persist, storageKey]);
+  const handleLoadProject = useCallback(
+    (idx: number) => {
+      setCtxMenu(null);
+      loadTargetRef.current = idx;
+      loadInputRef.current?.click();
+    },
+    [],
+  );
+
+  const onLoadFile = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const data = JSON.parse(reader.result as string);
+          window.dispatchEvent(
+            new CustomEvent("project-load", {
+              detail: { storageKey, instanceId: loadTargetRef.current, data },
+            }),
+          );
+        } catch {
+          alert("Invalid project file.");
+        }
+      };
+      reader.readAsText(file);
+      e.target.value = "";
+    },
+    [storageKey],
+  );
+
+  // Listen for "request-new-project" events to create/switch to an empty project
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.storageKey !== storageKey) return;
+      const { callbackEvent, callbackDetail } = detail;
+
+      // Create a new project and switch to it
+      if (projects.length < MAX_PROJECTS) {
+        const next = [
+          ...projects,
+          { name: `${defaultProjectName} ${projects.length + 1}`, uid: crypto.randomUUID() },
+        ];
+        persist(next);
+        setActiveIdx(next.length - 1);
+      }
+
+      // Re-fire the callback event after a tick so the new instance renders
+      if (callbackEvent) {
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent(callbackEvent, { detail: callbackDetail }));
+        }, 100);
+      }
+    };
+    window.addEventListener("request-new-project", handler);
+    return () => window.removeEventListener("request-new-project", handler);
+  }, [storageKey, projects, defaultProjectName, persist]);
+
+  const removeProject = useCallback(
+    (idx: number) => {
+      if (projects.length <= 1) return;
+      const next = projects.filter((_, i) => i !== idx);
+      persist(next);
+      if (activeIdx >= next.length) setActiveIdx(next.length - 1);
+      else if (activeIdx > idx) setActiveIdx(activeIdx - 1);
+      window.dispatchEvent(
+        new CustomEvent("project-clear", { detail: { storageKey, instanceId: idx } }),
+      );
+      setCtxMenu(null);
+    },
+    [projects, activeIdx, persist, storageKey],
+  );
 
   const handleContextMenu = useCallback((e: React.MouseEvent, idx: number) => {
     e.preventDefault();
@@ -116,6 +257,14 @@ export function ProjectTabsWrapper({ storageKey, defaultProjectName = "Project",
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
+      <input
+        ref={loadInputRef}
+        type="file"
+        accept=".json,.madison"
+        className="hidden"
+        onChange={onLoadFile}
+      />
+
       {/* Project tabs bar */}
       <div
         className="flex items-center shrink-0 gap-0 select-none"
@@ -134,7 +283,9 @@ export function ProjectTabsWrapper({ storageKey, defaultProjectName = "Project",
           return (
             <button
               key={proj.uid ?? idx}
-              onClick={() => { if (!isEditing) setActiveIdx(idx); }}
+              onClick={() => {
+                if (!isEditing) setActiveIdx(idx);
+              }}
               onDoubleClick={() => handleRename(idx)}
               onContextMenu={(e) => handleContextMenu(e, idx)}
               className="relative flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium cursor-pointer transition-colors"
@@ -142,7 +293,9 @@ export function ProjectTabsWrapper({ storageKey, defaultProjectName = "Project",
                 background: isActive ? "var(--color-background)" : "transparent",
                 color: isActive ? "var(--color-text-primary)" : "var(--color-text-muted)",
                 border: "none",
-                borderBottom: isActive ? "2px solid var(--color-accent, #6a6aff)" : "2px solid transparent",
+                borderBottom: isActive
+                  ? "2px solid var(--color-accent, #6a6aff)"
+                  : "2px solid transparent",
                 marginBottom: -1,
               }}
               title={isEditing ? undefined : isActive ? proj.name : `Switch to ${proj.name}`}
@@ -174,7 +327,6 @@ export function ProjectTabsWrapper({ storageKey, defaultProjectName = "Project",
           );
         })}
 
-        {/* Add project button */}
         {projects.length < MAX_PROJECTS && (
           <button
             onClick={addProject}
@@ -191,16 +343,9 @@ export function ProjectTabsWrapper({ storageKey, defaultProjectName = "Project",
             <Plus className="h-3 w-3" />
           </button>
         )}
-
-        <span
-          className="ml-auto text-[10px] shrink-0"
-          style={{ color: "var(--color-text-muted)", opacity: 0.4 }}
-        >
-          double-click to rename {"\u00b7"} right-click for options
-        </span>
       </div>
 
-      {/* Project instances — keep all mounted for state preservation */}
+      {/* Project instances */}
       <div className="flex-1 overflow-hidden min-h-0">
         {projects.map((proj, idx) => (
           <div
@@ -225,41 +370,16 @@ export function ProjectTabsWrapper({ storageKey, defaultProjectName = "Project",
             border: "1px solid var(--color-border)",
           }}
         >
-          <button
-            className="flex items-center w-full px-3 py-1.5 text-[11px] text-left cursor-pointer transition-colors"
-            style={{ background: "transparent", border: "none", color: "var(--color-text-primary)" }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-input-bg)")}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            onClick={() => handleRename(ctxMenu.idx)}
-          >
-            Rename Project
-          </button>
-          <button
-            className="flex items-center w-full px-3 py-1.5 text-[11px] text-left cursor-pointer transition-colors"
-            style={{ background: "transparent", border: "none", color: "var(--color-text-primary)" }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-input-bg)")}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            onClick={() => clearProject(ctxMenu.idx)}
-          >
-            Clear Project
-          </button>
+          <CtxMenuItem label="Rename" onClick={() => handleRename(ctxMenu.idx)} />
+          <CtxMenuItem label="Save Project..." onClick={() => handleSaveProject(ctxMenu.idx)} />
+          <CtxMenuItem label="Load Project..." onClick={() => handleLoadProject(ctxMenu.idx)} />
           <div className="mx-2 my-1" style={{ height: 1, background: "var(--color-border)" }} />
-          <button
-            className="flex items-center w-full px-3 py-1.5 text-[11px] text-left cursor-pointer transition-colors"
-            style={{
-              background: "transparent",
-              border: "none",
-              color: projects.length <= 1 ? "var(--color-text-muted)" : "#e55",
-              opacity: projects.length <= 1 ? 0.4 : 1,
-            }}
+          <CtxMenuItem
+            label="Remove"
+            onClick={() => removeProject(ctxMenu.idx)}
+            danger
             disabled={projects.length <= 1}
-            onMouseEnter={(e) => { if (projects.length > 1) e.currentTarget.style.background = "var(--color-input-bg)"; }}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            onClick={() => deleteProject(ctxMenu.idx)}
-          >
-            <X className="h-3 w-3 mr-1.5 shrink-0" />
-            Delete Project
-          </button>
+          />
         </div>
       )}
     </div>

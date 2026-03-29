@@ -128,7 +128,6 @@ def _build_image_entry(f: Path) -> dict | None:
         except Exception:
             pass
 
-    # Ensure thumb exists on disk (cheap if cached)
     _ensure_thumb(f)
 
     dims = _read_image_meta(f)
@@ -140,6 +139,7 @@ def _build_image_entry(f: Path) -> dict | None:
         "view": meta.get("view", ""),
         "generation_type": meta.get("generation_type", ""),
         "timestamp": meta.get("timestamp", ""),
+        "prompt": meta.get("description", meta.get("prompt", "")),
     }
 
 
@@ -227,7 +227,16 @@ async def gallery_image(tool: str = Query(...), date: str = Query(...), filename
     try:
         raw = file_path.read_bytes()
         b64 = base64.b64encode(raw).decode()
-        return {"image_b64": b64, "filename": filename}
+
+        meta = {}
+        json_sidecar = file_path.with_suffix(".json")
+        if json_sidecar.is_file():
+            try:
+                meta = json.loads(json_sidecar.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        return {"image_b64": b64, "filename": filename, "meta": meta}
     except Exception as e:
         return {"error": str(e), "image_b64": ""}
 

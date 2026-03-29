@@ -18,10 +18,14 @@ import { useFavorites } from "@/hooks/FavoritesContext";
 import { createHistoryEntry, pushHistory, clearHistory as clearHist, createImageRecord } from "@/lib/imageHistory";
 import type { HistoryEntry, ImageRecord, HistorySettings } from "@/lib/imageHistory";
 import { XmlModal } from "@/components/shared/XmlModal";
-import { GripVertical, ChevronDown, ChevronRight, Save, Lock, Unlock, Pencil } from "lucide-react";
+import { ArtDirectorWidget } from "@/components/shared/ArtDirectorWidget";
+import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
+import { useArtDirector } from "@/hooks/ArtDirectorContext";
+import { DeepSearchPanel } from "@/components/shared/DeepSearchPanel";
+import type { SearchResult } from "@/components/shared/DeepSearchPanel";
+import { useArtboard } from "@/hooks/ArtboardContext";
+import { GripVertical, ChevronDown, ChevronRight, Save, Lock, Unlock } from "lucide-react";
 import { useShortcuts } from "@/hooks/useShortcuts";
-import { usePromptOverrides } from "@/hooks/PromptOverridesContext";
-import { EditPromptModal } from "@/components/shared/EditPromptModal";
 import { useCustomSections } from "@/hooks/CustomSectionsContext";
 import { useCustomSectionState } from "@/hooks/useCustomSectionState";
 import { CustomSectionRenderer } from "@/components/shared/CustomSectionRenderer";
@@ -32,11 +36,18 @@ import { CustomSectionRenderer } from "@/components/shared/CustomSectionRenderer
 
 const BUILTIN_TABS: TabDef[] = [
   { id: "main", label: "Main Stage", group: "stage", prompt: "Three-quarter hero shot showing the character's full design, head to toe, from a dramatic 3/4 angle." },
-  { id: "3/4", label: "3/4", group: "views", prompt: "True 3/4 angle view of the character, full body visible." },
+  {
+    id: "3/4",
+    label: "3/4",
+    group: "views",
+    prompt:
+      "Same character as the main-stage reference — keep face, hair, features, and costume identical. True 3/4 angle, full body visible.",
+  },
   { id: "front", label: "Front", group: "views", prompt: "Front view" },
   { id: "back", label: "Back", group: "views", prompt: "Back view" },
   { id: "side", label: "Side", group: "views", prompt: "Side view" },
   { id: "artboard", label: "Art Table", group: "artboard" },
+  { id: "deepSearch", label: "Deep Search", group: "search" },
   { id: "refA", label: "Ref A", group: "refs" },
   { id: "refB", label: "Ref B", group: "refs" },
   { id: "refC", label: "Ref C", group: "refs" },
@@ -69,6 +80,25 @@ const ATTRIBUTE_FIELDS = [
   "Headwear", "Outerwear", "Top", "Legwear", "Footwear",
   "Gloves", "FaceGear", "UtilityRig", "BackCarry", "HandProp",
   "Accessories", "ColorAccents", "Detailing", "Pose",
+];
+
+const GRID_VARIATIONS = [
+  "Show the character in a dynamic action pose with dramatic lighting",
+  "Render a calm, neutral standing pose with soft ambient lighting",
+  "Depict a three-quarter view with moody, cinematic lighting",
+  "Show a close-up portrait focusing on facial detail and expression",
+  "Render in a painterly, concept art style with loose brushwork",
+  "Show the character in a crouched or low stance, ready for action",
+  "Depict with strong rim lighting and a dark, atmospheric background",
+  "Render a profile view with elegant, studio-quality lighting",
+  "Show the character mid-motion with flowing elements and energy",
+  "Depict in a stylized, graphic art style with bold shadows",
+  "Show a full-body shot from a slightly low camera angle, heroic pose",
+  "Render with warm golden-hour lighting and natural environment",
+  "Depict in a high-contrast noir style with sharp shadows",
+  "Show the character in a relaxed, casual pose showing personality",
+  "Render from a high camera angle looking down, bird's eye perspective",
+  "Depict with cool blue/teal lighting in a futuristic or tech setting",
 ];
 
 // ---------------------------------------------------------------------------
@@ -491,12 +521,15 @@ const SECTION_TIPS: Record<SectionId, string> = {
 };
 const NON_COLLAPSIBLE: Set<SectionId> = new Set(["generate"]);
 const TOGGLEABLE_SECTIONS: Set<SectionId> = new Set(["identity", "attributes", "bible", "costume", "styleFusion", "envPlacement", "preservation"]);
-const PROMPT_EDITABLE_SECTIONS: Set<SectionId> = new Set(["attributes", "bible", "costume", "styleFusion", "envPlacement", "preservation"]);
 
 const TAKE_OPTIONS = [
   "overall vibe", "silhouette", "material & texture", "color palette",
   "detail work & hardware", "cultural reference", "attitude & energy",
 ];
+
+/** Edit instruction for dedicated Style Fusion runs (paired with fusion_context + fusion images on /character/edit). */
+const STYLE_FUSION_EDIT_PROMPT =
+  "Restyle this character image using the Style Fusion references and directions in the prompt context. Match palette, lighting, surface treatment, and overall mood from those references while preserving the character's identity, pose, and full-body readability unless the fusion text explicitly asks otherwise.";
 
 interface LayoutState {
   order: SectionId[];
@@ -541,6 +574,8 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
 
   const [description, setDescription] = useState("");
+  const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
+  const { setCurrentImage, setAttributesContext } = useArtDirector();
   const [editPrompt, setEditPrompt] = useState("");
   const [age, setAge] = useState("");
   const [race, setRace] = useState("");
@@ -584,18 +619,19 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
   const [gridEditBusy, setGridEditBusy] = useState<Record<string, boolean>>({});
   const [viewGenCount, setViewGenCount] = useState(1);
   const [modelId, setModelId] = useState("");
+  /** Gemini model for Apply Changes / style-fusion edit pipeline (multimodal list from /system/models). */
+  const [editModel, setEditModel] = useState("");
+  /** Model used only for Generate All Views / Generate Selected View. */
+  const [multiviewModel, setMultiviewModel] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
+  /** Which tab button shows the generation pulse (Main Stage, 3/4, Front, etc.). */
+  const [generatingTab, setGeneratingTab] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { addToast } = useToastContext();
   const { addFavorite, removeFavorite, isFavorited, getFavoriteId } = useFavorites();
-  const promptOverrides = usePromptOverrides();
-  const { getSectionColor, setSectionColor } = useCustomSections();
+  const artboard = useArtboard();
+  const { getSectionColor } = useCustomSections();
   const customSections = useCustomSectionState("character");
-
-  // Prompt editing — right-click context menu + modal
-  const TOOL_ID = "character";
-  const [promptEditSection, setPromptEditSection] = useState<SectionId | null>(null);
-  const [promptCtxMenu, setPromptCtxMenu] = useState<{ x: number; y: number; section: SectionId } | null>(null);
 
   // Layout ordering + collapse state
   const [layout, setLayout] = useState<LayoutState>(() => loadDefaultLayout(layoutStorageKey));
@@ -607,7 +643,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
   const [extractTargets, setExtractTargets] = useState<Record<ExtractTarget, boolean>>({ identity: true, attributes: true, bible: false, costume: false, environment: false });
 
   // Extract mode — controls whether generation uses the source image as visual reference
-  const [extractMode, setExtractMode] = useState<"inspiration" | "recreate">("inspiration");
+  const [extractMode, setExtractMode] = useState<"inspiration" | "recreate">("recreate");
 
   // AI Upscale & Restore state
   const [urMode, setUrMode] = useState<"upscale" | "restore">("upscale");
@@ -729,6 +765,9 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     setGridResults([]);
     setGridEditBusy({});
     setViewGenCount(1);
+    setEditModel("");
+    setMultiviewModel("");
+    setGeneratingTab(null);
     setUrMode("upscale");
     setUrScale("x2");
     setUrContext("");
@@ -744,15 +783,75 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
   }, [addToast, customSections]);
 
   useEffect(() => {
-    const handler = (e: Event) => {
+    const clearHandler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.storageKey === "madison-charlab-projects" && detail?.instanceId === instanceId) {
         clearAllState();
       }
     };
-    window.addEventListener("project-clear", handler);
-    return () => window.removeEventListener("project-clear", handler);
-  }, [instanceId, clearAllState]);
+    const saveHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.storageKey === "madison-charlab-projects" && detail?.instanceId === instanceId) {
+        const state = {
+          tabs, activeTab, description, editPrompt,
+          age, race, gender, build, attributes, bible, costume,
+          prodStylePresets, tonePresets, costumeStylePresets, materialPresets, hwDetailPresets, originPresets,
+          sectionsOpen, lockedSections, sectionEnabled, extractTargets, extractMode,           styleFusion, envPlacement, styleLibraryFolder, genCount, viewGenCount, modelId, editModel, multiviewModel,
+        };
+        const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `character_project_${instanceId + 1}.json`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+    };
+    const loadHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.storageKey === "madison-charlab-projects" && detail?.instanceId === instanceId && detail?.data) {
+        const d = detail.data as Record<string, unknown>;
+        if (d.tabs) setTabs(d.tabs as TabDef[]);
+        if (typeof d.activeTab === "string") setActiveTab(d.activeTab);
+        if (typeof d.description === "string") setDescription(d.description);
+        if (typeof d.editPrompt === "string") setEditPrompt(d.editPrompt);
+        if (typeof d.age === "string") setAge(d.age);
+        if (typeof d.race === "string") setRace(d.race);
+        if (typeof d.gender === "string") setGender(d.gender);
+        if (typeof d.build === "string") setBuild(d.build);
+        if (d.attributes) setAttributes(d.attributes as typeof attributes);
+        if (d.bible) setBible(d.bible as typeof bible);
+        if (d.costume) setCostume(d.costume as typeof costume);
+        if (d.prodStylePresets) setProdStylePresets(d.prodStylePresets as TagItem[]);
+        if (d.tonePresets) setTonePresets(d.tonePresets as TagItem[]);
+        if (d.costumeStylePresets) setCostumeStylePresets(d.costumeStylePresets as TagItem[]);
+        if (d.materialPresets) setMaterialPresets(d.materialPresets as TagItem[]);
+        if (d.hwDetailPresets) setHwDetailPresets(d.hwDetailPresets as TagItem[]);
+        if (d.originPresets) setOriginPresets(d.originPresets as TagItem[]);
+        if (d.sectionsOpen) setSectionsOpen(d.sectionsOpen as typeof sectionsOpen);
+        if (d.lockedSections) setLockedSections(d.lockedSections as typeof lockedSections);
+        if (d.sectionEnabled) setSectionEnabled(d.sectionEnabled as typeof sectionEnabled);
+        if (d.extractTargets) setExtractTargets(d.extractTargets as typeof extractTargets);
+        if (typeof d.extractMode === "string") setExtractMode(d.extractMode as "inspiration" | "recreate");
+        if (d.styleFusion) setStyleFusion(d.styleFusion as StyleFusionState);
+        if (d.envPlacement) setEnvPlacement(d.envPlacement as EnvironmentPlacementState);
+        if (typeof d.styleLibraryFolder === "string") setStyleLibraryFolder(d.styleLibraryFolder);
+        if (typeof d.genCount === "number") setGenCount(d.genCount);
+        if (typeof d.viewGenCount === "number") setViewGenCount(d.viewGenCount);
+        if (typeof d.modelId === "string") setModelId(d.modelId);
+        if (typeof d.editModel === "string") setEditModel(d.editModel);
+        if (typeof d.multiviewModel === "string") setMultiviewModel(d.multiviewModel);
+        addToast("Project loaded", "success");
+      }
+    };
+    window.addEventListener("project-clear", clearHandler);
+    window.addEventListener("project-save", saveHandler);
+    window.addEventListener("project-load", loadHandler);
+    return () => {
+      window.removeEventListener("project-clear", clearHandler);
+      window.removeEventListener("project-save", saveHandler);
+      window.removeEventListener("project-load", loadHandler);
+    };
+  }, [instanceId, clearAllState, tabs, activeTab, description, editPrompt, age, race, gender, build, attributes, bible, costume, prodStylePresets, tonePresets, costumeStylePresets, materialPresets, hwDetailPresets, originPresets, sectionsOpen, lockedSections, sectionEnabled, extractTargets, extractMode, styleFusion, envPlacement, styleLibraryFolder, genCount, viewGenCount, modelId, editModel, multiviewModel, addToast]);
 
   useEffect(() => {
     apiFetch<{ models: ModelInfo[]; current: string }>("/system/models").then((r) => {
@@ -763,6 +862,24 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
       setStyleLibraryFolders(folders);
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (models.length === 0) return;
+    setEditModel((em) => {
+      if (em && models.some((m) => m.id === em)) return em;
+      if (modelId && models.some((m) => m.id === modelId)) return modelId;
+      return models[0].id;
+    });
+  }, [models, modelId]);
+
+  useEffect(() => {
+    if (models.length === 0) return;
+    setMultiviewModel((mm) => {
+      if (mm && models.some((m) => m.id === mm)) return mm;
+      if (modelId && models.some((m) => m.id === modelId)) return modelId;
+      return models[0].id;
+    });
+  }, [models, modelId]);
 
   // --- Helpers ---
 
@@ -823,6 +940,28 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
 
 
 
+  const handleSendSearchToArtboard = useCallback((images: SearchResult[]) => {
+    const existing = artboard.items;
+    let maxX = 0;
+    let maxY = 0;
+    for (const it of existing) { if (it.x + it.w > maxX) maxX = it.x + it.w; if (it.y + it.h > maxY) maxY = it.y + it.h; }
+    const GAP = 20;
+    const COLS = Math.ceil(Math.sqrt(images.length));
+    let startX = existing.length > 0 ? maxX + GAP * 3 : 0;
+    const startY = 0;
+    const newItems = images.map((img, i) => ({
+      type: "image" as const,
+      x: startX + (i % COLS) * (img.width + GAP),
+      y: startY + Math.floor(i / COLS) * (img.height + GAP),
+      w: img.width,
+      h: img.height,
+      rotation: 0,
+      content: `data:image/png;base64,${img.b64}`,
+    }));
+    artboard.addItems(newItems);
+    setActiveTab("artboard");
+  }, [artboard, setActiveTab]);
+
   const handleAddRef = useCallback(() => {
     refCounter.current++;
     const letter = String.fromCharCode(68 + refCounter.current - 1); // D, E, F...
@@ -842,9 +981,6 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     setImageIdx((prev) => { const n = { ...prev }; delete n[tabId]; return n; });
   }, []);
 
-  const handleEditTabPrompt = useCallback((tabId: string, newPrompt: string) => {
-    setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, prompt: newPrompt } : t));
-  }, []);
 
   // --- Apply helpers (respect lock) ---
 
@@ -970,10 +1106,8 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
 
   const resolveSection = useCallback((sectionId: SectionId): string => {
     if (!isSectionEnabled(sectionId)) return "";
-    const override = promptOverrides.getOverride(TOOL_ID, sectionId);
-    if (override !== null) return override;
     return getDefaultSectionPrompt(sectionId);
-  }, [isSectionEnabled, promptOverrides, getDefaultSectionPrompt]);
+  }, [isSectionEnabled, getDefaultSectionPrompt]);
 
   // --- Generation helpers ---
 
@@ -1067,56 +1201,61 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     if (!desc) return;
     setLastSentPrompt(buildPromptPreview());
     busy.start("generate");
-    const total = genCount;
-    const bibleCtx = resolveSection("bible");
-    const costumeCtx = resolveSection("costume");
-    const lockCtx = resolveSection("preservation");
-    const mainRef = extractMode === "recreate" ? getMainImageB64() : null;
-    const customCtx = customSections.getPromptContributions() || undefined;
-    const customImgs = customSections.getImageAttachments().map((img) => img.replace(/^data:image\/\w+;base64,/, "")).filter(Boolean);
-    setGenText((p) => ({ ...p, generate: total > 1 ? `Generating ${total} images...` : "Generating character..." }));
-    const promises = Array.from({ length: total }, (_, i) =>
-      apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
-        "/character/generate", {
-          method: "POST",
-          body: JSON.stringify({
-            description: desc,
-            age: identityOn ? age : "", race: identityOn ? race : "",
-            gender: identityOn ? gender : "", build: identityOn ? build : "",
-            view_type: "main", mode: "quality",
-            model_id: modelId || undefined,
-            bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
-            fusion_context: extra.fusionCtx || undefined,
-            fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
-            fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
-            style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
-            lock_constraints: lockCtx || undefined,
-            reference_image_b64: mainRef || undefined,
-            recreate_mode: extractMode === "recreate",
-            custom_sections_context: customCtx,
-            custom_section_images: customImgs.length ? customImgs : undefined,
-          }),
-        },
-      ).then((resp) => ({ ok: true as const, resp, idx: i }))
-       .catch((e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e), idx: i })),
-    );
-    const results = await Promise.all(promises);
-    let successCount = 0;
-    for (const r of results.sort((a, b) => a.idx - b.idx)) {
-      if (r.ok && r.resp.image_b64) {
-        successCount++;
-        const src = `data:image/png;base64,${r.resp.image_b64}`;
-        if (r.idx === 0) setTabImage("main", src, "Initial generation");
-        else appendToGallery("main", src, `Generation ${r.idx + 1}`);
-      } else if (r.ok && r.resp.error) { addToast(r.resp.error, "error"); }
-      else if (!r.ok) { addToast(r.error, "error"); }
+    setGeneratingTab("main");
+    try {
+      const total = genCount;
+      const bibleCtx = resolveSection("bible");
+      const costumeCtx = resolveSection("costume");
+      const lockCtx = resolveSection("preservation");
+      const mainRef = extractMode === "recreate" ? getMainImageB64() : null;
+      const customCtx = customSections.getPromptContributions() || undefined;
+      const customImgs = customSections.getImageAttachments().map((img) => img.replace(/^data:image\/\w+;base64,/, "")).filter(Boolean);
+      setGenText((p) => ({ ...p, generate: total > 1 ? `Generating ${total} images...` : "Generating character..." }));
+      const promises = Array.from({ length: total }, (_, i) =>
+        apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
+          "/character/generate", {
+            method: "POST",
+            body: JSON.stringify({
+              description: desc,
+              age: identityOn ? age : "", race: identityOn ? race : "",
+              gender: identityOn ? gender : "", build: identityOn ? build : "",
+              view_type: "main", mode: "quality",
+              model_id: modelId || undefined,
+              bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+              fusion_context: extra.fusionCtx || undefined,
+              fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+              fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+              style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+              lock_constraints: lockCtx || undefined,
+              reference_image_b64: mainRef || undefined,
+              recreate_mode: extractMode === "recreate",
+              custom_sections_context: customCtx,
+              custom_section_images: customImgs.length ? customImgs : undefined,
+            }),
+          },
+        ).then((resp) => ({ ok: true as const, resp, idx: i }))
+         .catch((e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e), idx: i })),
+      );
+      const results = await Promise.all(promises);
+      let successCount = 0;
+      for (const r of results.sort((a, b) => a.idx - b.idx)) {
+        if (r.ok && r.resp.image_b64) {
+          successCount++;
+          const src = `data:image/png;base64,${r.resp.image_b64}`;
+          if (r.idx === 0) setTabImage("main", src, "Initial generation");
+          else appendToGallery("main", src, `Generation ${r.idx + 1}`);
+        } else if (r.ok && r.resp.error) { addToast(r.resp.error, "error"); }
+        else if (!r.ok) { addToast(r.error, "error"); }
+      }
+      if (successCount > 0) {
+        addToast(successCount > 1 ? `Generated ${successCount} images` : "Character generated", "success");
+      } else if (results.length > 0) {
+        addToast("All generation attempts failed", "error");
+      }
+    } finally {
+      busy.end("generate");
+      setGeneratingTab(null);
     }
-    if (successCount > 0) {
-      addToast(successCount > 1 ? `Generated ${successCount} images` : "Character generated", "success");
-    } else if (results.length > 0) {
-      addToast("All generation attempts failed", "error");
-    }
-    busy.end("generate");
   }, [description, age, race, gender, build, genCount, modelId, bible, costume, preservation, attributes, extractMode, isSectionEnabled, getExtraContext, buildAttrBrief, buildPromptPreview, getMainImageB64, setTabImage, appendToGallery, addToast, busy, styleFusion]);
 
   const handleApplyEdit = useCallback(async () => {
@@ -1142,7 +1281,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
             gender: identityOn ? gender : "", build: identityOn ? build : "",
             edit_prompt: editPrompt, reference_image_b64: mainB64,
             ref_a_b64: getImageB64("refA"), ref_b_b64: getImageB64("refB"), ref_c_b64: getImageB64("refC"),
-            mode: "quality", model_id: modelId || undefined,
+            mode: "quality", model_id: editModel || modelId || undefined,
             bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
             fusion_context: extra.fusionCtx || undefined,
             fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
@@ -1157,7 +1296,52 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
       } else if (resp.error) addToast(resp.error, "error");
     } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
     busy.end("apply");
-  }, [editPrompt, description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, getImageB64, modelId, setTabImage, addToast, busy, styleFusion]);
+  }, [editPrompt, description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, getImageB64, editModel, modelId, setTabImage, addToast, busy, styleFusion]);
+
+  const handleGenerateStyleFusion = useCallback(async () => {
+    const mainB64 = getMainImageB64();
+    const hasFusionRefs = !!(styleFusion.slots[0].image || styleFusion.slots[1].image);
+    if (!mainB64 || !hasFusionRefs) return;
+    const fusionCtx = buildFusionBrief(styleFusion);
+    if (!fusionCtx.trim()) return;
+    busy.start("styleFusionGen");
+    setGenText((p) => ({ ...p, styleFusionGen: "Applying style fusion..." }));
+    const identityOn = isSectionEnabled("identity");
+    const attrText = resolveSection("attributes");
+    const attrBrief = attrText ? `\n\n${attrText}` : "";
+    const bibleCtx = resolveSection("bible");
+    const costumeCtx = resolveSection("costume");
+    const lockCtx = resolveSection("preservation");
+    const extra = getExtraContext();
+    try {
+      const resp = await apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
+        "/character/edit", {
+          method: "POST",
+          body: JSON.stringify({
+            description: ((identityOn ? description : "") + attrBrief).trim(),
+            age: identityOn ? age : "", race: identityOn ? race : "",
+            gender: identityOn ? gender : "", build: identityOn ? build : "",
+            edit_prompt: STYLE_FUSION_EDIT_PROMPT,
+            reference_image_b64: mainB64,
+            ref_a_b64: getImageB64("refA"), ref_b_b64: getImageB64("refB"), ref_c_b64: getImageB64("refC"),
+            mode: "quality", model_id: editModel || modelId || undefined,
+            bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+            fusion_context: fusionCtx,
+            fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+            lock_constraints: lockCtx || undefined,
+          }),
+        },
+      );
+      if (resp.image_b64) {
+        setTabImage("main", `data:image/png;base64,${resp.image_b64}`, "Style fusion");
+        addToast("Style fusion applied", "success");
+      } else if (resp.error) addToast(resp.error, "error");
+    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
+    busy.end("styleFusionGen");
+    setGenText((p) => { const next = { ...p }; delete next.styleFusionGen; return next; });
+  }, [description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, getMainImageB64, getImageB64, editModel, modelId, setTabImage, addToast, busy, styleFusion, resolveSection]);
 
   const handleExtractAttributes = useCallback(async () => {
     const imgB64 = getMainImageB64();
@@ -1310,34 +1494,46 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     const costumeCtx = resolveSection("costume");
     const lockCtx = resolveSection("preservation");
     const extra = getExtraContext();
-    const views = ["3/4", "front", "back", "side"];
+    const views = ["3/4", "front", "back", "side"] as const;
+    const mvModel = multiviewModel || modelId;
     setGenText((p) => ({ ...p, allviews: "Generating all views..." }));
-    const promises = views.map((view) =>
-      apiFetch<{ image_b64: string | null; width: number; height: number }>("/character/generate", {
-        method: "POST",
-        body: JSON.stringify({
-          description: desc, age: identityOn ? age : "", race: identityOn ? race : "",
-          gender: identityOn ? gender : "", build: identityOn ? build : "",
-          view_type: VIEW_TYPE_MAP[view] || view, reference_image_b64: mainB64,
-          mode: "quality", model_id: modelId || undefined,
-          bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
-          fusion_context: extra.fusionCtx || undefined,
-          fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
-          fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
-          style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
-          lock_constraints: lockCtx || undefined,
-          custom_sections_context: customSections.getPromptContributions() || undefined,
-          custom_section_images: customSections.getImageAttachments(),
-        }),
-      }).then((resp) => ({ ok: true as const, resp, view }))
-        .catch(() => ({ ok: false as const, resp: null, view })),
-    );
-    const results = await Promise.all(promises);
-    for (const r of results) {
-      if (r.ok && r.resp?.image_b64) setTabImage(r.view, `data:image/png;base64,${r.resp.image_b64}`, `${r.view} view`);
+    try {
+      for (const view of views) {
+        setGeneratingTab(view);
+        try {
+          const viewTab = BUILTIN_TABS.find((t) => t.id === view);
+          const viewPromptExtra =
+            viewTab?.prompt && viewTab.group === "views" ? ` Specifically: ${viewTab.prompt}` : "";
+          const resp = await apiFetch<{ image_b64: string | null; width: number; height: number; error?: string | null }>(
+            "/character/generate", {
+              method: "POST",
+              body: JSON.stringify({
+                description: (desc + viewPromptExtra).trim(), age: identityOn ? age : "", race: identityOn ? race : "",
+                gender: identityOn ? gender : "", build: identityOn ? build : "",
+                view_type: VIEW_TYPE_MAP[view] || view, reference_image_b64: mainB64,
+                mode: "quality", model_id: mvModel || undefined,
+                bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+                fusion_context: extra.fusionCtx || undefined,
+                fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+                fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+                style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+                lock_constraints: lockCtx || undefined,
+                custom_sections_context: customSections.getPromptContributions() || undefined,
+                custom_section_images: customSections.getImageAttachments(),
+              }),
+            },
+          );
+          if (resp.image_b64) setTabImage(view, `data:image/png;base64,${resp.image_b64}`, `${view} view`);
+          else if (resp.error) addToast(resp.error, "error");
+        } catch (e) {
+          addToast(e instanceof Error ? e.message : String(e), "error");
+        }
+      }
+    } finally {
+      setGeneratingTab(null);
+      busy.end("allviews");
     }
-    busy.end("allviews");
-  }, [description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, modelId, setTabImage, busy, styleFusion]);
+  }, [description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, modelId, multiviewModel, setTabImage, busy, styleFusion, addToast, customSections]);
 
   const handleGenerateSelectedView = useCallback(async () => {
     const mainB64 = getMainImageB64();
@@ -1348,7 +1544,9 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     const desc = (baseDesc + attrBrief).trim();
     if (!mainB64 || !desc || !activeTabDef) return;
     const viewType = VIEW_TYPE_MAP[activeTab] || activeTab;
+    const mvModel = multiviewModel || modelId;
     busy.start("selview");
+    setGeneratingTab(activeTab);
     const bibleCtx = resolveSection("bible");
     const costumeCtx = resolveSection("costume");
     const lockCtx = resolveSection("preservation");
@@ -1356,37 +1554,41 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     const total = viewGenCount;
     const promptOverride = activeTabDef.prompt ? ` Specifically: ${activeTabDef.prompt}` : "";
     setGenText((p) => ({ ...p, selview: total > 1 ? `Generating ${total} ${activeTabDef.label} views...` : `Generating ${activeTabDef.label}...` }));
-    const promises = Array.from({ length: total }, (_, i) =>
-      apiFetch<{ image_b64: string | null; width: number; height: number }>("/character/generate", {
-        method: "POST",
-        body: JSON.stringify({
-          description: desc + promptOverride,
-          age: identityOn ? age : "", race: identityOn ? race : "",
-          gender: identityOn ? gender : "", build: identityOn ? build : "",
-          view_type: viewType, reference_image_b64: mainB64,
-          mode: "quality", model_id: modelId || undefined,
-          bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
-          fusion_context: extra.fusionCtx || undefined,
-          fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
-          fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
-          style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
-          lock_constraints: lockCtx || undefined,
-          custom_sections_context: customSections.getPromptContributions() || undefined,
-          custom_section_images: customSections.getImageAttachments(),
-        }),
-      }).then((resp) => ({ ok: true as const, resp, idx: i }))
-        .catch(() => ({ ok: false as const, resp: null, idx: i })),
-    );
-    const results = await Promise.all(promises);
-    for (const r of results.sort((a, b) => a.idx - b.idx)) {
-      if (r.ok && r.resp?.image_b64) {
-        const src = `data:image/png;base64,${r.resp.image_b64}`;
-        if (r.idx === 0) setTabImage(activeTab, src, `${activeTabDef.label} view`);
-        else appendToGallery(activeTab, src, `${activeTabDef.label} #${r.idx + 1}`);
+    try {
+      const promises = Array.from({ length: total }, (_, i) =>
+        apiFetch<{ image_b64: string | null; width: number; height: number; error?: string | null }>("/character/generate", {
+          method: "POST",
+          body: JSON.stringify({
+            description: desc + promptOverride,
+            age: identityOn ? age : "", race: identityOn ? race : "",
+            gender: identityOn ? gender : "", build: identityOn ? build : "",
+            view_type: viewType, reference_image_b64: mainB64,
+            mode: "quality", model_id: mvModel || undefined,
+            bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+            fusion_context: extra.fusionCtx || undefined,
+            fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+            lock_constraints: lockCtx || undefined,
+            custom_sections_context: customSections.getPromptContributions() || undefined,
+            custom_section_images: customSections.getImageAttachments(),
+          }),
+        }).then((resp) => ({ ok: true as const, resp, idx: i }))
+          .catch(() => ({ ok: false as const, resp: null, idx: i })),
+      );
+      const results = await Promise.all(promises);
+      for (const r of results.sort((a, b) => a.idx - b.idx)) {
+        if (r.ok && r.resp?.image_b64) {
+          const src = `data:image/png;base64,${r.resp.image_b64}`;
+          if (r.idx === 0) setTabImage(activeTab, src, `${activeTabDef.label} view`);
+          else appendToGallery(activeTab, src, `${activeTabDef.label} #${r.idx + 1}`);
+        } else if (r.ok && r.resp?.error) addToast(r.resp.error, "error");
       }
+    } finally {
+      setGeneratingTab(null);
+      busy.end("selview");
     }
-    busy.end("selview");
-  }, [description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, modelId, activeTab, activeTabDef, viewGenCount, setTabImage, appendToGallery, busy, styleFusion]);
+  }, [description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, modelId, multiviewModel, activeTab, activeTabDef, viewGenCount, setTabImage, appendToGallery, busy, styleFusion, addToast, customSections]);
 
   // --- Editor context for inpainting tools (ref images + style) ---
 
@@ -1449,6 +1651,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
   const handleCancel = useCallback(async () => {
     cancelAllRequests();
     busy.endAll();
+    setGeneratingTab(null);
     try { await fetch(`${window.location.protocol === "file:" ? "http://127.0.0.1:8420" : ""}/api/system/cancel`, { method: "POST" }); } catch { /* */ }
   }, [busy]);
 
@@ -1461,57 +1664,64 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     const extra = getExtraContext();
     if (!desc) return;
     busy.start("generate");
-    const bibleCtx = resolveSection("bible");
-    const costumeCtx = resolveSection("costume");
-    const lockCtx = resolveSection("preservation");
-    const mainRef = extractMode === "recreate" ? getMainImageB64() : null;
-    setGenText((p) => ({ ...p, generate: "Generating 16 images..." }));
-    const promises = Array.from({ length: 16 }, (_, i) =>
-      apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
-        "/character/generate", {
-          method: "POST",
-          body: JSON.stringify({
-            description: desc,
-            age: identityOn ? age : "", race: identityOn ? race : "",
-            gender: identityOn ? gender : "", build: identityOn ? build : "",
-            view_type: "main", mode: "quality",
-            model_id: modelId || undefined,
-            bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
-            fusion_context: extra.fusionCtx || undefined,
-            fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
-            fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
-            style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
-            lock_constraints: lockCtx || undefined,
-            reference_image_b64: mainRef || undefined,
-            recreate_mode: extractMode === "recreate",
-            custom_sections_context: customSections.getPromptContributions() || undefined,
-            custom_section_images: customSections.getImageAttachments(),
-          }),
-        },
-      ).then((resp) => ({ ok: true as const, resp, idx: i }))
-       .catch((e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e), idx: i })),
-    );
-    const results = await Promise.all(promises);
-    const newResults: GridGalleryResult[] = [];
-    for (const r of results.sort((a, b) => a.idx - b.idx)) {
-      if (r.ok && r.resp.image_b64) {
-        newResults.push({
-          id: `grid_${Date.now()}_${r.idx}`,
-          image_b64: r.resp.image_b64,
-          width: r.resp.width || 1024,
-          height: r.resp.height || 1024,
-        });
-      } else if (r.ok && r.resp.error) { addToast(r.resp.error, "error"); }
-      else if (!r.ok) { addToast(r.error, "error"); }
+    setGeneratingTab("main");
+    try {
+      const bibleCtx = resolveSection("bible");
+      const costumeCtx = resolveSection("costume");
+      const lockCtx = resolveSection("preservation");
+      const mainRef = extractMode === "recreate" ? getMainImageB64() : null;
+      setGenText((p) => ({ ...p, generate: "Generating 16 images..." }));
+      const promises = Array.from({ length: 16 }, (_, i) =>
+        apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
+          "/character/generate", {
+            method: "POST",
+            body: JSON.stringify({
+              description: desc,
+              age: identityOn ? age : "", race: identityOn ? race : "",
+              gender: identityOn ? gender : "", build: identityOn ? build : "",
+              view_type: "main", mode: "quality",
+              model_id: modelId || undefined,
+              bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+              fusion_context: extra.fusionCtx || undefined,
+              fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+              fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+              style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+              lock_constraints: lockCtx || undefined,
+              reference_image_b64: mainRef || undefined,
+              recreate_mode: extractMode === "recreate",
+              custom_sections_context: customSections.getPromptContributions() || undefined,
+              custom_section_images: customSections.getImageAttachments(),
+              variation_hint: GRID_VARIATIONS[i],
+            }),
+          },
+        ).then((resp) => ({ ok: true as const, resp, idx: i }))
+         .catch((e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e), idx: i })),
+      );
+      const results = await Promise.all(promises);
+      const newResults: GridGalleryResult[] = [];
+      for (const r of results.sort((a, b) => a.idx - b.idx)) {
+        if (r.ok && r.resp.image_b64) {
+          newResults.push({
+            id: `grid_${Date.now()}_${r.idx}`,
+            image_b64: r.resp.image_b64,
+            width: r.resp.width || 1024,
+            height: r.resp.height || 1024,
+            label: `${String.fromCharCode(65 + Math.floor(r.idx / 4))}${(r.idx % 4) + 1}`,
+          });
+        } else if (r.ok && r.resp.error) { addToast(r.resp.error, "error"); }
+        else if (!r.ok) { addToast(r.error, "error"); }
+      }
+      setGridResults((prev) => [...prev, ...newResults]);
+      if (newResults.length > 0) {
+        addToast(`Generated ${newResults.length} images`, "success");
+      } else {
+        addToast("All grid generation attempts failed", "error");
+      }
+    } finally {
+      busy.end("generate");
+      setGeneratingTab(null);
     }
-    setGridResults((prev) => [...prev, ...newResults]);
-    if (newResults.length > 0) {
-      addToast(`Generated ${newResults.length} images`, "success");
-    } else {
-      addToast("All grid generation attempts failed", "error");
-    }
-    busy.end("generate");
-  }, [description, age, race, gender, build, modelId, bible, costume, preservation, attributes, extractMode, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, addToast, busy, styleFusion]);
+  }, [description, age, race, gender, build, modelId, bible, costume, preservation, attributes, extractMode, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, addToast, busy, styleFusion, customSections]);
 
   const handleGridDelete = useCallback((id: string) => {
     setGridResults((prev) => prev.filter((r) => r.id !== id));
@@ -1556,6 +1766,18 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     } catch (e) { addToast(e instanceof Error ? e.message : "Edit failed", "error"); }
     setGridEditBusy((prev) => ({ ...prev, [id]: false }));
   }, [gridResults, modelId, addToast]);
+
+  const handleGridSendToMainstage = useCallback(
+    (id: string) => {
+      const result = gridResults.find((r) => r.id === id);
+      if (!result) return;
+      const src = `data:image/png;base64,${result.image_b64}`;
+      const histLabel = result.label ? `Grid ${result.label}` : "From grid";
+      setTabImage("main", src, histLabel);
+      addToast("Sent to main stage", "success");
+    },
+    [gridResults, setTabImage, addToast],
+  );
 
   const handleOpenImage = useCallback(() => fileInputRef.current?.click(), []);
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1799,6 +2021,134 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     };
   }, [active, regCharAction, unregCharAction]);
 
+  // --- Voice Director command listener ---
+  const voiceCmdRef = useRef({
+    generate: handleGenerate,
+    edit_image: (params: Record<string, unknown>) => { if (params.edit_prompt) setEditPrompt(String(params.edit_prompt)); setTimeout(() => handleApplyEdit(), 100); },
+    extract_attributes: handleExtractAttributes,
+    enhance_description: handleEnhance,
+    randomize: handleRandomize,
+    quick_generate: handleQuickGenerate,
+    generate_all_views: handleGenerateAllViews,
+    generate_selected_view: handleGenerateSelectedView,
+    set_field: (params: Record<string, unknown>) => {
+      const f = String(params.field || "").toLowerCase();
+      const v = String(params.value || "");
+      if (f === "description") setDescription(v);
+      else if (f === "age") setAge(v);
+      else if (f === "race") setRace(v);
+      else if (f === "gender") setGender(v);
+      else if (f === "build") setBuild(v);
+    },
+    show_xml: () => setShowXml(true),
+    send_to_photoshop: handleSendToPS,
+    save_image: handleSaveImage,
+    reset: handleReset,
+  });
+  voiceCmdRef.current = {
+    generate: handleGenerate,
+    edit_image: (params: Record<string, unknown>) => { if (params.edit_prompt) setEditPrompt(String(params.edit_prompt)); setTimeout(() => handleApplyEdit(), 100); },
+    extract_attributes: handleExtractAttributes,
+    enhance_description: handleEnhance,
+    randomize: handleRandomize,
+    quick_generate: handleQuickGenerate,
+    generate_all_views: handleGenerateAllViews,
+    generate_selected_view: handleGenerateSelectedView,
+    set_field: (params: Record<string, unknown>) => {
+      const f = String(params.field || "").toLowerCase();
+      const v = String(params.value || "");
+      if (f === "description") setDescription(v);
+      else if (f === "age") setAge(v);
+      else if (f === "race") setRace(v);
+      else if (f === "gender") setGender(v);
+      else if (f === "build") setBuild(v);
+    },
+    show_xml: () => setShowXml(true),
+    send_to_photoshop: handleSendToPS,
+    save_image: handleSaveImage,
+    reset: handleReset,
+  };
+
+  useEffect(() => {
+    if (!active) return;
+    const handler = (e: Event) => {
+      const { action, params } = (e as CustomEvent).detail as { action: string; params: Record<string, unknown> };
+      const cmds = voiceCmdRef.current as Record<string, unknown>;
+      if (action in cmds) {
+        const fn = cmds[action];
+        if (typeof fn === "function") fn(params);
+      }
+    };
+    window.addEventListener("voice-command", handler);
+    return () => window.removeEventListener("voice-command", handler);
+  }, [active]);
+
+  // --- Gallery restore listener ---
+  useEffect(() => {
+    if (!active) return;
+    const handler = (e: Event) => {
+      const d = (e as CustomEvent).detail as Record<string, unknown>;
+      if (d._source_tool !== "character") return;
+
+      if (typeof d.description === "string") setDescription(d.description);
+      if (typeof d.age === "string") setAge(d.age);
+      if (typeof d.race === "string") setRace(d.race);
+      if (typeof d.gender === "string") setGender(d.gender);
+      if (typeof d.build === "string") setBuild(d.build);
+      if (typeof d.model === "string") setModelId(d.model);
+      if (d.attributes) setAttributes(d.attributes as typeof attributes);
+      if (d.bible) setBible(d.bible as typeof bible);
+      if (d.costume) setCostume(d.costume as typeof costume);
+
+      if (typeof d._image_b64 === "string") {
+        const src = (d._image_b64 as string).startsWith("data:") ? d._image_b64 as string : `data:image/png;base64,${d._image_b64}`;
+        setGallery((prev) => ({ ...prev, main: [src] }));
+        setImageIdx((prev) => ({ ...prev, main: 0 }));
+        setActiveTab("main");
+      }
+    };
+    window.addEventListener("gallery-restore", handler);
+    return () => window.removeEventListener("gallery-restore", handler);
+  }, [active]);
+
+  // --- Send-to-charlab listener (from Generated Images) ---
+  useEffect(() => {
+    if (!active) return;
+    const handler = (e: Event) => {
+      const { image } = (e as CustomEvent).detail as { image: string };
+      if (!image) return;
+      const src = image.startsWith("data:") ? image : `data:image/png;base64,${image}`;
+      const mainImages = gallery.main || [];
+      if (mainImages.length === 0) {
+        setGallery((prev) => ({ ...prev, main: [src] }));
+        setImageIdx((prev) => ({ ...prev, main: 0 }));
+        setActiveTab("main");
+      } else {
+        window.dispatchEvent(new CustomEvent("request-new-project", {
+          detail: {
+            storageKey: "madison-charlab-projects",
+            callbackEvent: "send-to-charlab",
+            callbackDetail: { image: src },
+          },
+        }));
+      }
+    };
+    window.addEventListener("send-to-charlab", handler);
+    return () => window.removeEventListener("send-to-charlab", handler);
+  }, [active, gallery.main]);
+
+  useEffect(() => {
+    if (active) {
+      setCurrentImage(currentSrc || null);
+    }
+  }, [active, currentSrc, setCurrentImage]);
+
+  useEffect(() => {
+    if (active) {
+      setAttributesContext(description || "");
+    }
+  }, [active, description, setAttributesContext]);
+
   // --- Session save/load ---
   useSessionRegister(
     sessionKey,
@@ -1806,7 +2156,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
       tabs, activeTab, gallery, imageIdx, description, editPrompt,
       age, race, gender, build, attributes, bible, costume,
       prodStylePresets, tonePresets, costumeStylePresets, materialPresets, hwDetailPresets, originPresets,
-      sectionsOpen, lockedSections, sectionEnabled, extractTargets, extractMode, styleFusion, envPlacement, styleLibraryFolder, genCount, viewGenCount, modelId, urMode, urScale, urContext, urModelId,
+      sectionsOpen, lockedSections, sectionEnabled, extractTargets, extractMode, styleFusion, envPlacement, styleLibraryFolder, genCount, viewGenCount, modelId, editModel, multiviewModel, urMode, urScale, urContext, urModelId,
     }),
     (s: unknown) => {
       if (s === null) {
@@ -1857,6 +2207,8 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
       if (typeof d.genCount === "number") setGenCount(d.genCount);
       if (typeof d.viewGenCount === "number") setViewGenCount(d.viewGenCount);
       if (typeof d.modelId === "string") setModelId(d.modelId);
+      if (typeof d.editModel === "string") setEditModel(d.editModel);
+      if (typeof d.multiviewModel === "string") setMultiviewModel(d.multiviewModel);
       if (typeof d.urMode === "string") setUrMode(d.urMode as "upscale" | "restore");
       if (typeof d.urScale === "string") setUrScale(d.urScale as "x2" | "x3" | "x4");
       if (typeof d.urContext === "string") setUrContext(d.urContext);
@@ -1876,9 +2228,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
           const canToggle = TOGGLEABLE_SECTIONS.has(sectionId);
           const enabled = isSectionEnabled(sectionId);
           const label = SECTION_LABELS[sectionId];
-          const isPromptEditable = PROMPT_EDITABLE_SECTIONS.has(sectionId);
-          const sectionHasOverride = isPromptEditable && promptOverrides.hasOverride(TOOL_ID, sectionId);
-          const sectionColor = getSectionColor(TOOL_ID, sectionId);
+          const sectionColor = getSectionColor("character", sectionId);
 
           const wrapSection = (children: React.ReactNode) => (
             <div
@@ -1890,19 +2240,13 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
               onDragEnd={handleDragEnd}
               onDragLeave={() => { if (dragOverId === sectionId) setDragOverId(null); }}
               onMouseDown={(e) => { if (e.button === 1 && canToggle) { e.preventDefault(); toggleSectionEnabled(sectionId); } }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setPromptCtxMenu({ x: e.clientX, y: e.clientY, section: sectionId });
-              }}
               className="section-card-hover"
               style={{
                 border: dragOverId === sectionId && dragItemRef.current !== sectionId
                   ? "1px solid var(--color-accent, #6a6aff)"
                   : sectionColor
                     ? `1px solid ${sectionColor}`
-                    : sectionHasOverride
-                      ? "1px solid var(--color-accent)"
-                      : "1px solid var(--color-border)",
+                    : "1px solid var(--color-border)",
                 borderRadius: "var(--radius-lg)",
                 background: "var(--color-card)",
                 opacity: enabled ? 1 : 0.4,
@@ -1926,7 +2270,6 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                   >
                     {collapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
                     <span className="text-xs font-semibold uppercase tracking-wider">{label}</span>
-                    {sectionHasOverride && <Pencil className="h-2.5 w-2.5 shrink-0" style={{ color: "var(--color-accent)" }} />}
                   </button>
                 ) : (
                   <span className="flex-1 py-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }} title={SECTION_TIPS[sectionId]}>
@@ -1960,7 +2303,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                       color: enabled ? "var(--color-foreground)" : "var(--color-text-muted)",
                       border: "1px solid var(--color-border)",
                     }}
-                    title={enabled ? "This section is ON — its info will shape your generated images. Middle-click or click here to turn it off." : "This section is OFF — its info won't be used when generating. Middle-click or click here to turn it on."}
+                    title={enabled ? "This panel is ON — its info will shape your generated images. Middle-click or click here to turn it off." : "This panel is OFF — its info won't be used when generating. Middle-click or click here to turn it on."}
                   >
                     {enabled ? "ON" : "OFF"}
                   </button>
@@ -1986,7 +2329,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
 
           if (sectionId === "generate") return wrapSection(
             <>
-              <Button className="w-full" generating={busy.is("extract")} generatingText="Extracting..." onClick={handleExtractAttributes} title="Reads the image and/or description and fills in the sections you have checked below">Extract Attributes</Button>
+              <Button className="w-full" generating={busy.is("extract")} generatingText="Extracting..." onClick={handleExtractAttributes} title="Reads the image and/or description and fills in the panels you have checked below">Extract Attributes</Button>
               <div>
                 <select
                   className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
@@ -2017,7 +2360,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                       border: "1px solid var(--color-border)",
                       fontWeight: extractTargets[key] ? 600 : 400,
                     }}
-                    title={`When active, Extract / Enhance / Randomize will fill in the ${label} section`}
+                    title={`When active, Extract / Enhance / Randomize will fill in the ${label} panel`}
                   >{label}</button>
                 ))}
               </div>
@@ -2156,14 +2499,32 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
             </div>
           );
 
-          if (sectionId === "styleFusion") return wrapSection(
-            <StyleFusionPanel
-              fusion={styleFusion}
-              onChange={setStyleFusion}
-              takeOptions={TAKE_OPTIONS}
-              disabled={textBusy}
-            />
-          );
+          if (sectionId === "styleFusion") {
+            const hasFusionRefImages = !!(styleFusion.slots[0].image || styleFusion.slots[1].image);
+            const canStyleFusionGen = !!getMainImageB64() && hasFusionRefImages && !busy.any;
+            return wrapSection(
+              <div className="space-y-3">
+                <StyleFusionPanel
+                  fusion={styleFusion}
+                  onChange={setStyleFusion}
+                  takeOptions={TAKE_OPTIONS}
+                  disabled={textBusy}
+                />
+                <Button
+                  variant="primary"
+                  className="w-full"
+                  size="sm"
+                  generating={busy.is("styleFusionGen")}
+                  generatingText={genText.styleFusionGen || "Applying style fusion..."}
+                  disabled={!canStyleFusionGen}
+                  onClick={handleGenerateStyleFusion}
+                  title="Send the current Main Stage image through the edit pipeline with your style fusion references — no need to use Apply Changes or Generate Character"
+                >
+                  Generate Style Fusion
+                </Button>
+              </div>,
+            );
+          }
 
           if (sectionId === "envPlacement") return wrapSection(
             <div className="space-y-2.5">
@@ -2372,7 +2733,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                 <span className="text-[10px] font-semibold uppercase tracking-wider block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Output Format</span>
                 <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
                   value={envPlacement.outputFormat}
-                  title="The aspect ratio of the generated image. When this section is ON, this format will be used instead of the default."
+                  title="The aspect ratio of the generated image. When this panel is ON, this format will be used instead of the default."
                   onChange={(e) => setEnvPlacement((p) => ({ ...p, outputFormat: e.target.value }))}>
                   {ENV_FORMAT_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
                 </select>
@@ -2644,6 +3005,21 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
             <div className="space-y-1.5">
               <Button className="w-full" size="sm" generating={busy.is("allviews")} generatingText={genText.allviews || "Generating views..."} onClick={handleGenerateAllViews} title="Generate front, back, and side views of your character all at once">Generate All Views</Button>
               <Button className="w-full" size="sm" generating={busy.is("selview")} generatingText={genText.selview || "Generating..."} onClick={handleGenerateSelectedView} title="Generate only the view you currently have selected (front, back, side, etc.)">Generate Selected View</Button>
+              {modelOptions.length > 0 && (
+                <div>
+                  <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Gemini model (multi-view)</label>
+                  <select
+                    className="w-full px-2 py-1 text-[10px] rounded-[var(--radius-sm)] truncate"
+                    style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
+                    value={multiviewModel || modelId}
+                    onChange={(e) => setMultiviewModel(e.target.value)}
+                    disabled={busy.is("allviews") || busy.is("selview")}
+                    title="Model used for Generate All Views and Generate Selected View. Same options as main character generation."
+                  >
+                    {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </div>
+              )}
               <NumberStepper value={viewGenCount} onChange={setViewGenCount} min={1} max={5} label="Count:" />
             </div>
           );
@@ -2704,14 +3080,10 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
         {customSections.sections.map((cs) => {
           const csCollapsed = customSections.isCollapsed(cs.id);
           const csEnabled = customSections.isEnabled(cs.id);
-          const csColor = cs.color || getSectionColor(TOOL_ID, `custom:${cs.id}`);
+          const csColor = cs.color || getSectionColor("character", `custom:${cs.id}`);
           return (
             <div
               key={`custom:${cs.id}`}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setPromptCtxMenu({ x: e.clientX, y: e.clientY, section: `custom:${cs.id}` as SectionId });
-              }}
               className="section-card-hover"
               style={{
                 border: csColor ? `1px solid ${csColor}` : "1px solid var(--color-border)",
@@ -2779,6 +3151,21 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
             <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>Describe changes to apply:</p>
             <Textarea value={editPrompt} onChange={(e) => setEditPrompt(e.target.value)} rows={14} placeholder="Tell the AI what to change — e.g. Add a red scarf, change the boots to brown leather, make the cloak longer..." disabled={busy.is("apply")} />
             <Button variant="primary" className="w-full" generating={busy.is("apply")} generatingText="Applying..." onClick={handleApplyEdit} title="Send your edit instructions to the AI — it will modify the current image based on what you wrote above">Apply Changes</Button>
+            {modelOptions.length > 0 && (
+              <div>
+                <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Gemini model (edit)</label>
+                <select
+                  className="w-full px-2 py-1 text-[10px] rounded-[var(--radius-sm)] truncate"
+                  style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
+                  value={editModel || modelId}
+                  onChange={(e) => setEditModel(e.target.value)}
+                  disabled={busy.is("apply")}
+                  title="Model used for Apply Changes and style-fusion edits. Same multimodal options as image generation."
+                >
+                  {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
+            )}
             {!isRefTab && (
               <EditHistory
                 entries={currentHistory}
@@ -2838,8 +3225,8 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
               onSelect={setActiveTab}
               onAddRef={handleAddRef}
               onRemoveTab={handleRemoveRef}
-              onEditTabPrompt={handleEditTabPrompt}
               noBorder
+              generatingTabId={generatingTab}
             />
           </div>
           <div className="flex items-center gap-2 px-2 shrink-0" style={{ paddingBottom: 5 }}>
@@ -2847,153 +3234,77 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
             <Button size="sm" generating={busy.is("quickgen")} generatingText={genText.quickgen || "Generating..."} onClick={handleQuickGenerate} title="Quickly re-generate the current view using your existing settings — great for getting a new variation">Quick Generate</Button>
           </div>
         </div>
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
         {activeTab === "artboard" ? (
           <ArtboardCanvas />
-        ) : generationMode === "grid" && activeTab === "main" && gridResults.length > 0 ? (
-          <GridGallery
-            results={gridResults}
-            title="Character Variations"
-            toolLabel="character"
-            generating={busy.is("generate")}
-            emptyMessage="No grid results yet. Switch to grid mode and generate."
-            onDelete={handleGridDelete}
-            onCopy={handleGridCopy}
-            onEditSubmit={handleGridEdit}
-            editBusy={gridEditBusy}
-            isFavorited={(b64) => isFavorited(b64)}
-            onToggleFavorite={(id, b64, w, h) => {
-              if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); }
-              else addFavorite({ image_b64: b64, tool: "character", label: `grid-${id}`, prompt: "", source: "grid", width: w, height: h });
-            }}
-          />
-        ) : (
-          <ImageViewer
-            src={currentSrc}
-            placeholder={`No ${activeTabDef?.label.toLowerCase() || "image"} loaded`}
-            locked={busy.any}
-            onSaveImage={handleSaveImage}
-            onCopyImage={handleCopyImage}
-            onPasteImage={handlePasteImage}
-            onOpenImage={handleOpenImage}
-            onClearImage={handleClearImage}
-            onClearAllImages={handleClearAllImages}
-            onImageEdited={handleImageEdited}
-            imageCount={currentImages.length}
-            imageIndex={currentIdx}
-            onPrevImage={handlePrevImage}
-            onNextImage={handleNextImage}
-            refImages={editorRefImages}
-            styleContext={editorStyleContext}
-            isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
-            onToggleFavorite={currentSrc ? () => {
-              const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, "");
-              if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); }
-              else addFavorite({ image_b64: b64, tool: "character", label: activeTab || "main", source: "viewer" });
-            } : undefined}
-          />
-        )}
+        ) : activeTab === "deepSearch" ? (
+          <DeepSearchPanel onSendToArtboard={handleSendSearchToArtboard} />
+        ) : (() => {
+              const mainStageViewer = (
+                <div className="relative flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
+                  <ImageViewer
+                    src={currentSrc}
+                    placeholder={`No ${activeTabDef?.label.toLowerCase() || "image"} loaded`}
+                    locked={busy.any}
+                    onSaveImage={handleSaveImage}
+                    onCopyImage={handleCopyImage}
+                    onPasteImage={handlePasteImage}
+                    onOpenImage={handleOpenImage}
+                    onClearImage={handleClearImage}
+                    onClearAllImages={handleClearAllImages}
+                    onImageEdited={handleImageEdited}
+                    imageCount={currentImages.length}
+                    imageIndex={currentIdx}
+                    onPrevImage={handlePrevImage}
+                    onNextImage={handleNextImage}
+                    refImages={editorRefImages}
+                    styleContext={editorStyleContext}
+                    isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
+                    onToggleFavorite={currentSrc ? () => {
+                      const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, "");
+                      if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); }
+                      else addFavorite({ image_b64: b64, tool: "character", label: activeTab || "main", source: "viewer" });
+                    } : undefined}
+                  />
+                  <ArtDirectorWidget onOpenConfig={() => setArtDirectorConfigOpen(true)} />
+                </div>
+              );
+              if (generationMode === "grid" && activeTab === "main" && gridResults.length > 0) {
+                return (
+                  <div className="flex flex-1 min-h-0 overflow-hidden">
+                    <div className="flex-1 min-w-0 min-h-0 flex flex-col">{mainStageViewer}</div>
+                    <div className="flex-1 min-w-0 min-h-0 flex flex-col" style={{ borderLeft: "1px solid var(--color-border)" }}>
+                      <GridGallery
+                        results={gridResults}
+                        title="Character Variations"
+                        toolLabel="character"
+                        generating={busy.is("generate")}
+                        emptyMessage="No grid results yet. Switch to grid mode and generate."
+                        onDelete={handleGridDelete}
+                        onCopy={handleGridCopy}
+                        onEditSubmit={handleGridEdit}
+                        onSendToMainstage={handleGridSendToMainstage}
+                        editBusy={gridEditBusy}
+                        isFavorited={(b64) => isFavorited(b64)}
+                        onToggleFavorite={(id, b64, w, h) => {
+                          if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); }
+                          else {
+                            const cell = gridResults.find((r) => r.id === id);
+                            const favLabel = cell?.label ? `Grid ${cell.label}` : `grid-${id}`;
+                            addFavorite({ image_b64: b64, tool: "character", label: favLabel, prompt: "", source: "grid", width: w, height: h });
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
+                );
+              }
+              return mainStageViewer;
+            })()}
+        </div>
       </div>
       {showXml && <XmlModal xml={buildCharacterXml()} title="Character XML" onClose={() => setShowXml(false)} />}
-
-      {/* Section context menu (prompt edit + color) */}
-      {promptCtxMenu && (() => {
-        const isCustom = promptCtxMenu.section.startsWith("custom:");
-        const isEditable = !isCustom && PROMPT_EDITABLE_SECTIONS.has(promptCtxMenu.section);
-        const colorKey = isCustom ? promptCtxMenu.section : promptCtxMenu.section;
-        const currentColor = getSectionColor(TOOL_ID, colorKey);
-        return (
-          <div className="fixed inset-0 z-[55]" onClick={() => setPromptCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setPromptCtxMenu(null); }}>
-            <div
-              className="absolute py-1 rounded-md shadow-lg"
-              style={{
-                left: promptCtxMenu.x, top: promptCtxMenu.y,
-                background: "var(--color-card)", border: "1px solid var(--color-border)",
-                minWidth: 200, zIndex: 56,
-              }}
-            >
-              {isEditable && (
-                <>
-                  <button
-                    className="w-full text-left px-3 py-1.5 text-xs cursor-pointer"
-                    style={{ background: "transparent", border: "none", color: "var(--color-text-primary)" }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-hover)")}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                    onClick={() => { setPromptEditSection(promptCtxMenu.section); setPromptCtxMenu(null); }}
-                  >
-                    <Pencil className="h-3 w-3 inline mr-2" style={{ verticalAlign: "-2px" }} />
-                    Edit Prompt
-                  </button>
-                  {promptOverrides.hasOverride(TOOL_ID, promptCtxMenu.section) && (
-                    <button
-                      className="w-full text-left px-3 py-1.5 text-xs cursor-pointer"
-                      style={{ background: "transparent", border: "none", color: "var(--color-text-primary)" }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-hover)")}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                      onClick={() => { promptOverrides.clearOverride(TOOL_ID, promptCtxMenu.section); setPromptCtxMenu(null); addToast("Prompt reset to default", "info"); }}
-                    >
-                      Reset Prompt to Default
-                    </button>
-                  )}
-                  <div className="my-1" style={{ borderTop: "1px solid var(--color-border)" }} />
-                </>
-              )}
-              <div className="px-3 py-1">
-                <div className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--color-text-muted)" }}>
-                  Section Color
-                </div>
-                <div className="flex items-center gap-1 flex-wrap">
-                  {["#808080", "#e05050", "#e09040", "#d0c040", "#50b060", "#40a0d0", "#6070e0", "#a060d0", "#d060a0"].map((c) => (
-                    <button
-                      key={c}
-                      onClick={() => { setSectionColor(TOOL_ID, colorKey, c); setPromptCtxMenu(null); }}
-                      className="w-4 h-4 rounded-full cursor-pointer shrink-0"
-                      style={{ background: c, border: currentColor === c ? "2px solid white" : "1px solid var(--color-border)" }}
-                    />
-                  ))}
-                  <input
-                    type="color"
-                    value={currentColor || "#808080"}
-                    onChange={(e) => { setSectionColor(TOOL_ID, colorKey, e.target.value); }}
-                    className="w-4 h-4 rounded cursor-pointer border-0 p-0"
-                    title="Custom color"
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                  {currentColor && (
-                    <button
-                      onClick={() => { setSectionColor(TOOL_ID, colorKey, undefined); setPromptCtxMenu(null); }}
-                      className="text-[9px] px-1.5 py-0.5 rounded cursor-pointer"
-                      style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-muted)" }}
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Edit prompt modal */}
-      {promptEditSection && (
-        <EditPromptModal
-          open
-          sectionLabel={SECTION_LABELS[promptEditSection]}
-          defaultText={getDefaultSectionPrompt(promptEditSection)}
-          currentText={promptOverrides.getOverride(TOOL_ID, promptEditSection) ?? getDefaultSectionPrompt(promptEditSection)}
-          hasOverride={promptOverrides.hasOverride(TOOL_ID, promptEditSection)}
-          onSave={(text) => {
-            promptOverrides.setOverride(TOOL_ID, promptEditSection, text);
-            setPromptEditSection(null);
-            addToast("Prompt saved", "success");
-          }}
-          onReset={() => {
-            promptOverrides.clearOverride(TOOL_ID, promptEditSection);
-            addToast("Prompt reset to default", "info");
-          }}
-          onClose={() => setPromptEditSection(null)}
-        />
-      )}
+      <ArtDirectorConfigModal open={artDirectorConfigOpen} onClose={() => setArtDirectorConfigOpen(false)} />
     </div>
   );
 }

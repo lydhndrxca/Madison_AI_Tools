@@ -45,6 +45,7 @@ class CharacterGenerateRequest(BaseModel):
     recreate_mode: bool = False
     custom_sections_context: Optional[str] = None
     custom_section_images: Optional[list[str]] = None
+    variation_hint: Optional[str] = None
 
 
 class CharacterResponse(BaseModel):
@@ -247,6 +248,9 @@ def _build_character_prompt(req: CharacterGenerateRequest) -> str:
             f"{req.lock_constraints}"
         )
 
+    if req.variation_hint:
+        prompt += f"\n\n--- Creative Direction ---\n{req.variation_hint}"
+
     return prompt
 
 
@@ -324,8 +328,20 @@ def _do_generate(req: CharacterGenerateRequest) -> CharacterResponse:
         )
     elif req.view_type != "main" and req.reference_image_b64:
         view_label = req.view_type.replace("_", " ")
+        # Main stage is often already a 3/4 hero shot; without an explicit identity lock, models may
+        # "re-interpret" instead of matching. Other views (front/back/side) read as clear rotations.
+        identity_lock = ""
+        if req.view_type == "three_quarter":
+            identity_lock = (
+                "CRITICAL — SAME CHARACTER AS REFERENCE: The first image is the canonical main-stage design. "
+                "Output must be the SAME individual — identical face, hairstyle, hair color, skin tone, "
+                "body type, costume, materials, colors, and accessories. Do not substitute or redesign a "
+                "different character. Only adjust camera to a clear standard three-quarter (3/4) view "
+                "(full body, neutral pose per rules below); preserve every identity detail from the reference.\n\n"
+            )
         contents.append(
             f"{style_rules}{pose_rule}\n\n"
+            f"{identity_lock}"
             f"Using the reference character image, generate a {view_label} view of this character. "
             f"Match the exact same character, outfit, and proportions.\n{prompt}"
         )

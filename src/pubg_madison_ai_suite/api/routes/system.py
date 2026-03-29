@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import subprocess
 import tempfile
@@ -267,12 +268,258 @@ async def send_to_ps(body: SendToPsRequest):
 # AI Review (Prompt Builder gut-check)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Voice Director — function-calling command endpoint
+# ---------------------------------------------------------------------------
+
+class VoiceCommandRequest(BaseModel):
+    audio_b64: str
+    mime_type: str = "audio/webm"
+    lang: str = "en-US"
+    active_page: str = ""
+    has_image: bool = False
+    active_tab: str = "main"
+
+
+_GLOBAL_TOOLS: list[dict] = [
+    {
+        "name": "navigate",
+        "description": "Switch to a different tool page in the application.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "page": {
+                    "type": "STRING",
+                    "description": "Target page id",
+                    "enum": ["character", "prop", "environment", "uilab", "gemini", "multiview", "weapon", "style-library", "generated-images", "favorites", "prompt-builder", "history"],
+                }
+            },
+            "required": ["page"],
+        },
+    },
+    {
+        "name": "cancel",
+        "description": "Cancel the currently running generation or operation.",
+        "parameters": {"type": "OBJECT", "properties": {}},
+    },
+    {
+        "name": "none",
+        "description": "The user is not giving a command — they are thinking aloud, making a comment, or saying something unrelated to the tool. Use this when no action is needed.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "transcript": {"type": "STRING", "description": "What the user said"},
+            },
+        },
+    },
+]
+
+_CHARACTER_TOOLS: list[dict] = [
+    {"name": "generate", "description": "Generate a character image based on current settings.", "parameters": {"type": "OBJECT", "properties": {"description": {"type": "STRING", "description": "Optional override for the character description"}, "count": {"type": "INTEGER", "description": "Number of images to generate (1-5)"}}}},
+    {"name": "edit_image", "description": "Apply an edit to the currently displayed image using a text prompt.", "parameters": {"type": "OBJECT", "properties": {"edit_prompt": {"type": "STRING", "description": "What to change in the image"}}, "required": ["edit_prompt"]}},
+    {"name": "extract_attributes", "description": "Extract character attributes from the current image or description.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "enhance_description", "description": "Enhance and expand the current character description with more detail.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "randomize", "description": "Randomize all character fields to create a new random character.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "quick_generate", "description": "Randomize a character and immediately generate an image.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "generate_all_views", "description": "Generate front, back, side, and 3/4 views of the character.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "generate_selected_view", "description": "Generate only the currently selected view tab or a named view.", "parameters": {"type": "OBJECT", "properties": {"view": {"type": "STRING", "description": "View name: front, back, side, or 3/4"}}}},
+    {"name": "set_field", "description": "Set a character form field to a specific value without generating.", "parameters": {"type": "OBJECT", "properties": {"field": {"type": "STRING", "description": "Field name: description, age, race, gender, or build"}, "value": {"type": "STRING", "description": "Value to set"}}, "required": ["field", "value"]}},
+    {"name": "show_xml", "description": "Show the XML data for the current character.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "send_to_photoshop", "description": "Send the current image to Adobe Photoshop.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "save_image", "description": "Save the current image to disk.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "reset", "description": "Clear and reset the entire session.", "parameters": {"type": "OBJECT", "properties": {}}},
+]
+
+_PROP_TOOLS: list[dict] = [
+    {"name": "generate", "description": "Generate a prop image based on current settings.", "parameters": {"type": "OBJECT", "properties": {"description": {"type": "STRING", "description": "Optional override for the prop description"}}}},
+    {"name": "extract_attributes", "description": "Extract prop attributes from the current image or description.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "enhance_description", "description": "Enhance the current prop description.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "randomize", "description": "Randomize all prop fields.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "generate_all_views", "description": "Generate all views of the prop.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "generate_selected_view", "description": "Generate only the currently selected view.", "parameters": {"type": "OBJECT", "properties": {"view": {"type": "STRING", "description": "View name"}}}},
+    {"name": "set_field", "description": "Set a prop form field.", "parameters": {"type": "OBJECT", "properties": {"field": {"type": "STRING", "description": "Field: description, prop_name, prop_type, setting, condition, or scale"}, "value": {"type": "STRING", "description": "Value"}}, "required": ["field", "value"]}},
+    {"name": "show_xml", "description": "Show XML data.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "send_to_photoshop", "description": "Send current image to Photoshop.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "save_image", "description": "Save current image.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "reset", "description": "Clear and reset session.", "parameters": {"type": "OBJECT", "properties": {}}},
+]
+
+_ENV_TOOLS: list[dict] = [
+    {"name": "generate", "description": "Generate an environment image based on current settings.", "parameters": {"type": "OBJECT", "properties": {"description": {"type": "STRING", "description": "Optional override for the environment description"}}}},
+    {"name": "extract_attributes", "description": "Extract environment attributes.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "enhance_description", "description": "Enhance the current environment description.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "randomize", "description": "Randomize all environment fields.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "reimagine", "description": "Reimagine the environment from screenshots with a new style.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "generate_all_views", "description": "Generate all environment views.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "generate_selected_view", "description": "Generate only the selected view.", "parameters": {"type": "OBJECT", "properties": {"view": {"type": "STRING", "description": "View name"}}}},
+    {"name": "set_field", "description": "Set an environment form field.", "parameters": {"type": "OBJECT", "properties": {"field": {"type": "STRING", "description": "Field: description, env_name, biome, game_context, time_of_day, season_weather, or env_scale"}, "value": {"type": "STRING", "description": "Value"}}, "required": ["field", "value"]}},
+    {"name": "show_xml", "description": "Show XML data.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "send_to_photoshop", "description": "Send current image to Photoshop.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "save_image", "description": "Save current image.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "reset", "description": "Clear and reset session.", "parameters": {"type": "OBJECT", "properties": {}}},
+]
+
+_UILAB_TOOLS: list[dict] = [
+    {"name": "generate", "description": "Generate UI elements based on current settings.", "parameters": {"type": "OBJECT", "properties": {"prompt": {"type": "STRING", "description": "Optional prompt override"}, "element_type": {"type": "STRING", "description": "Element type: icon, button, panel, scrollbar, font, number, avatar, emote"}}}},
+    {"name": "clear_gallery", "description": "Clear all generated results in the gallery.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "reset", "description": "Clear and reset session.", "parameters": {"type": "OBJECT", "properties": {}}},
+]
+
+_GEMINI_TOOLS: list[dict] = [
+    {"name": "generate", "description": "Generate an image from a prompt.", "parameters": {"type": "OBJECT", "properties": {"prompt": {"type": "STRING", "description": "Image description prompt"}}}},
+]
+
+_MULTIVIEW_TOOLS: list[dict] = [
+    {"name": "generate", "description": "Generate an image from a prompt.", "parameters": {"type": "OBJECT", "properties": {"prompt": {"type": "STRING", "description": "Image description prompt"}}}},
+    {"name": "generate_all_views", "description": "Generate all views at once.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "generate_selected_view", "description": "Generate only the currently selected view.", "parameters": {"type": "OBJECT", "properties": {}}},
+]
+
+_WEAPON_TOOLS: list[dict] = [
+    {"name": "generate", "description": "Generate a weapon image.", "parameters": {"type": "OBJECT", "properties": {"description": {"type": "STRING", "description": "Optional weapon description override"}}}},
+    {"name": "extract_attributes", "description": "Extract weapon attributes.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "enhance_description", "description": "Enhance the weapon description.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "generate_all_views", "description": "Generate all weapon views.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "send_to_photoshop", "description": "Send current image to Photoshop.", "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "save_image", "description": "Save current image.", "parameters": {"type": "OBJECT", "properties": {}}},
+]
+
+_EDITOR_TOOLS: list[dict] = [
+    {"name": "inpaint", "description": "Edit or modify the current image using a text prompt. Use for changes like 'make the armor more weathered' or 'add a scar'.", "parameters": {"type": "OBJECT", "properties": {"prompt": {"type": "STRING", "description": "What to change or add in the image"}}, "required": ["prompt"]}},
+    {"name": "remove_background", "description": "Remove the background from the current image.", "parameters": {"type": "OBJECT", "properties": {"replacement": {"type": "STRING", "description": "What to replace the background with (default: transparent)"}}}},
+    {"name": "style_transfer", "description": "Apply an artistic style to the current image.", "parameters": {"type": "OBJECT", "properties": {"style": {"type": "STRING", "description": "Style to apply, e.g. 'oil painting', 'watercolor', 'pixel art', 'anime'"}}, "required": ["style"]}},
+    {"name": "outpaint", "description": "Extend the canvas in a direction to show more of the scene.", "parameters": {"type": "OBJECT", "properties": {"direction": {"type": "STRING", "description": "Direction to extend: left, right, top, bottom, or all", "enum": ["left", "right", "top", "bottom", "all"]}, "prompt": {"type": "STRING", "description": "Optional description of what should fill the extended area"}}, "required": ["direction"]}},
+    {"name": "smart_select", "description": "Select a specific object or region in the image by name.", "parameters": {"type": "OBJECT", "properties": {"subject": {"type": "STRING", "description": "What to select, e.g. 'the helmet', 'the left hand', 'the background'"}}, "required": ["subject"]}},
+]
+
+_PAGE_TOOLS: dict[str, list[dict]] = {
+    "character": _CHARACTER_TOOLS,
+    "prop": _PROP_TOOLS,
+    "environment": _ENV_TOOLS,
+    "uilab": _UILAB_TOOLS,
+    "gemini": _GEMINI_TOOLS,
+    "multiview": _MULTIVIEW_TOOLS,
+    "weapon": _WEAPON_TOOLS,
+}
+
+
+@router.post("/voice-command")
+async def voice_command(body: VoiceCommandRequest):
+    api_key = core.get_api_key()
+    if not api_key:
+        return {"action": "none", "params": {}, "spoken_text": "", "error": "No API key configured"}
+
+    try:
+        audio_bytes = base64.b64decode(body.audio_b64)
+    except Exception:
+        return {"action": "none", "params": {}, "spoken_text": "", "error": "Invalid audio data"}
+
+    tools = list(_GLOBAL_TOOLS)
+    page_tools = _PAGE_TOOLS.get(body.active_page, [])
+    tools.extend(page_tools)
+    if body.has_image:
+        tools.extend(_EDITOR_TOOLS)
+
+    context = (
+        f"You are a Voice Director for an AI concept art application. "
+        f"The user is on the '{body.active_page}' tool page, viewing the '{body.active_tab}' tab. "
+        f"{'An image is currently loaded.' if body.has_image else 'No image is loaded yet.'} "
+        f"Listen to the audio and determine the user's intent. "
+        f"Call the most appropriate function. If the user is just talking, thinking aloud, "
+        f"or saying something that is not a command, call the 'none' function with a transcript."
+    )
+
+    audio_part = {
+        "inlineData": {
+            "mimeType": body.mime_type,
+            "data": base64.b64encode(audio_bytes).decode() if isinstance(audio_bytes, bytes) else body.audio_b64,
+        }
+    }
+
+    try:
+        result = core.rest_generate_with_tools(
+            api_key,
+            "gemini-2.0-flash",
+            [audio_part, context],
+            tools,
+            timeout=30,
+        )
+    except Exception as exc:
+        return {"action": "none", "params": {}, "spoken_text": "", "error": str(exc)}
+
+    if "functionCall" in result:
+        fc = result["functionCall"]
+        return {
+            "action": fc.get("name", "none"),
+            "params": fc.get("args", {}),
+            "spoken_text": fc.get("args", {}).get("transcript", ""),
+        }
+    return {
+        "action": "none",
+        "params": {},
+        "spoken_text": result.get("text", ""),
+        "message": result.get("text", ""),
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI Review (Prompt Builder)
+# ---------------------------------------------------------------------------
+
 class AiReviewRequest(BaseModel):
     section_name: str = ""
     block_count: int = 0
     block_types: list[str] = []
     prompt_output: str = ""
     tools: list[str] = []
+
+
+# ---------------------------------------------------------------------------
+# User settings backup / restore
+# ---------------------------------------------------------------------------
+
+_BACKUP_PRIMARY = core.CONFIG_ROOT / "user_settings_backup.json"
+_BACKUP_FALLBACK = Path.home() / ".madison_ai" / "settings_backup.json"
+
+
+def _write_backup(data: dict) -> None:
+    for p in (_BACKUP_PRIMARY, _BACKUP_FALLBACK):
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+
+def _read_backup() -> dict | None:
+    for p in (_BACKUP_PRIMARY, _BACKUP_FALLBACK):
+        try:
+            if p.is_file():
+                return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+    return None
+
+
+class SettingsBackupRequest(BaseModel):
+    data: dict
+
+
+@router.get("/settings-backup")
+async def get_settings_backup():
+    backup = _read_backup()
+    if backup is None:
+        return {"ok": False, "data": {}}
+    return {"ok": True, "data": backup}
+
+
+@router.post("/settings-backup")
+async def save_settings_backup(body: SettingsBackupRequest):
+    try:
+        _write_backup(body.data)
+        return {"ok": True}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 @router.post("/ai-review")
@@ -287,11 +534,11 @@ async def ai_review(body: AiReviewRequest):
         model = genai.GenerativeModel("gemini-2.0-flash")
 
         prompt = (
-            "You are reviewing a user-created prompt section for an AI concept art tool.\n"
-            f"Section name: {body.section_name}\n"
+            "You are reviewing a user-created sidebar panel for an AI concept art tool.\n"
+            f"Panel name: {body.section_name}\n"
             f"Target tools: {', '.join(body.tools)}\n"
             f"Block count: {body.block_count}, types: {', '.join(body.block_types)}\n\n"
-            f"The prompt text this section produces:\n---\n{body.prompt_output}\n---\n\n"
+            f"The prompt text this panel produces:\n---\n{body.prompt_output}\n---\n\n"
             "Give a brief, friendly gut-check (3-5 sentences):\n"
             "- Is the prompt clear and likely to produce good results?\n"
             "- Any suggestions for improvement?\n"
