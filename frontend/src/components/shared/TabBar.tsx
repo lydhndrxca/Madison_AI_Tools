@@ -40,7 +40,7 @@ export function TabBar({ tabs, active, onSelect }: TabBarProps) {
 export interface TabDef {
   id: string;
   label: string;
-  group: "stage" | "views" | "refs";
+  group: "stage" | "views" | "refs" | "library";
   prompt?: string;
   isCustom?: boolean;
 }
@@ -58,11 +58,12 @@ interface GroupedTabBarProps {
 const GROUP_BG: Record<string, string> = {
   stage: "rgba(255,255,255,0.04)",
   views: "transparent",
+  library: "rgba(255,255,255,0.02)",
   refs: "rgba(0,0,0,0.08)",
 };
 
 export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, onEditTabPrompt, noBorder }: GroupedTabBarProps) {
-  const groups: ("stage" | "views" | "refs")[] = ["stage", "views", "refs"];
+  const groups: ("stage" | "views" | "library" | "refs")[] = ["stage", "views", "library", "refs"];
 
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
   const [editingTab, setEditingTab] = useState<{ id: string; label: string; prompt: string } | null>(null);
@@ -105,7 +106,7 @@ export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, o
   return (
     <>
       <div
-        className="flex items-end gap-0 shrink-0 overflow-x-auto"
+        className="flex items-end gap-0 shrink-0 no-scrollbar"
         style={{ background: noBorder ? "transparent" : "var(--color-background)", borderBottom: noBorder ? "none" : "1px solid var(--color-border)", paddingTop: noBorder ? 0 : 4 }}
       >
         {groups.map((group, gi) => {

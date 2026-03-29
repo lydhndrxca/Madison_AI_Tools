@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Card, Button, Input } from "@/components/ui";
+import { Button, Input } from "@/components/ui";
 import { apiFetch } from "@/hooks/useApi";
 import { X, RotateCcw } from "lucide-react";
 import { useShortcuts, CATEGORY_LABELS, eventToComboString } from "@/hooks/useShortcuts";
@@ -8,15 +8,6 @@ import type { ShortcutDef } from "@/hooks/useShortcuts";
 interface SettingsPanelProps {
   open: boolean;
   onClose: () => void;
-}
-
-interface ModelInfo {
-  id: string;
-  label: string;
-  resolution: string;
-  time_estimate: string;
-  multimodal: boolean;
-  description: string;
 }
 
 /* ── Kbd tag ─────────────────────────────────────────────────── */
@@ -110,8 +101,6 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [apiKey, setApiKey] = useState("");
   const [hasKey, setHasKey] = useState(false);
   const [keyMasked, setKeyMasked] = useState("");
-  const [models, setModels] = useState<ModelInfo[]>([]);
-  const [currentModel, setCurrentModel] = useState("");
   const [saving, setSaving] = useState(false);
 
   const { shortcuts, updateShortcut, resetShortcut, resetAll, findConflict } = useShortcuts();
@@ -123,9 +112,6 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     if (!open) return;
     apiFetch<{ has_key: boolean; key_masked: string }>("/system/api-key")
       .then((d) => { setHasKey(d.has_key); setKeyMasked(d.key_masked); })
-      .catch(() => {});
-    apiFetch<{ models: ModelInfo[]; current: string }>("/system/models")
-      .then((d) => { setModels(d.models); setCurrentModel(d.current); })
       .catch(() => {});
   }, [open]);
 
@@ -173,13 +159,6 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     setSaving(false);
   };
 
-  const changeModel = async (modelId: string) => {
-    setCurrentModel(modelId);
-    try {
-      await apiFetch("/system/model", { method: "POST", body: JSON.stringify({ model_id: modelId }) });
-    } catch { /* ignore */ }
-  };
-
   const handleStartRebind = useCallback((id: string) => {
     setRebindingId((prev) => prev === id ? null : id);
   }, []);
@@ -188,7 +167,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     resetShortcut(id);
   }, [resetShortcut]);
 
-  const categories: ShortcutDef["category"][] = ["global", "navigation", "characterLab", "imageViewer"];
+  const categories: ShortcutDef["category"][] = ["global", "navigation", "characterLab", "propLab", "envLab", "uilab", "imageViewer"];
 
   if (!open) return null;
 
@@ -239,56 +218,6 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               <Button onClick={saveKey} loading={saving}>
                 Save
               </Button>
-            </div>
-          </div>
-
-          {/* Image Model */}
-          <div className="space-y-3">
-            <h3 className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
-              Image Generation Model
-            </h3>
-            <div className="space-y-1.5">
-              {models.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => changeModel(m.id)}
-                  className="flex w-full items-start gap-3 px-3 py-2.5 rounded-lg text-left transition-all cursor-pointer"
-                  style={{
-                    background: currentModel === m.id ? "var(--color-hover)" : "transparent",
-                    border: currentModel === m.id ? "1px solid var(--color-border-hover)" : "1px solid transparent",
-                  }}
-                >
-                  <div
-                    className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border-2"
-                    style={{
-                      borderColor: currentModel === m.id ? "var(--color-text-secondary)" : "var(--color-border)",
-                      background: currentModel === m.id ? "var(--color-text-secondary)" : "transparent",
-                    }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-                        {m.label}
-                      </span>
-                      <span
-                        className="text-[10px] px-1.5 py-0.5 rounded"
-                        style={{
-                          background: m.multimodal ? "rgba(52,211,153,0.15)" : "rgba(251,191,36,0.15)",
-                          color: m.multimodal ? "var(--color-success)" : "var(--color-warning)",
-                        }}
-                      >
-                        {m.multimodal ? "Multimodal" : "Imagen"}
-                      </span>
-                    </div>
-                    <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-                      {m.resolution} &middot; {m.time_estimate}
-                    </p>
-                    <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                      {m.description}
-                    </p>
-                  </div>
-                </button>
-              ))}
             </div>
           </div>
 

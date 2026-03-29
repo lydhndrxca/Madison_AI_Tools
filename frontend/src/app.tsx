@@ -2,8 +2,11 @@ import { useState, useCallback } from "react";
 import { AppShell } from "./components/shell/AppShell";
 import { GeminiPage } from "./components/tools/gemini/GeminiPage";
 import { MultiviewPage } from "./components/tools/multiview/MultiviewPage";
-import { CharacterPage } from "./components/tools/character/CharacterPage";
+import { CharacterLabWrapper } from "./components/tools/character/CharacterLabWrapper";
 import { WeaponPage } from "./components/tools/weapon/WeaponPage";
+import { PropPage } from "./components/tools/prop/PropPage";
+import { EnvironmentPage } from "./components/tools/environment/EnvironmentPage";
+import { UILabPage } from "./components/tools/uilab/UILabPage";
 import { StyleLibraryPage } from "./components/tools/style-library/StyleLibraryPage";
 import { GeneratedImagesPage } from "./components/tools/generated-images/GeneratedImagesPage";
 import { ToastProvider, useToastContext } from "./hooks/ToastContext";
@@ -11,7 +14,7 @@ import { SessionProvider } from "./hooks/SessionContext";
 import { ShortcutsProvider } from "./hooks/useShortcuts";
 import { VoiceToTextProvider } from "./hooks/useVoiceToText";
 
-export type PageId = "style-library" | "generated-images" | "gemini" | "multiview" | "character" | "weapon" | "3d";
+export type PageId = "style-library" | "generated-images" | "gemini" | "multiview" | "character" | "weapon" | "prop" | "environment" | "uilab" | "3d";
 
 function AppInner() {
   const [activePage, setActivePage] = useState<PageId>("character");
@@ -25,8 +28,11 @@ function AppInner() {
         <div className="h-full" style={{ display: activePage === "generated-images" ? "contents" : "none" }}><GeneratedImagesPage /></div>
         <div className="h-full" style={{ display: activePage === "gemini" ? "contents" : "none" }}><GeminiPage /></div>
         <div className="h-full" style={{ display: activePage === "multiview" ? "contents" : "none" }}><MultiviewPage /></div>
-        <div className="h-full" style={{ display: activePage === "character" ? "contents" : "none" }}><CharacterPage /></div>
+        <div className="h-full" style={{ display: activePage === "character" ? "contents" : "none" }}><CharacterLabWrapper /></div>
         <div className="h-full" style={{ display: activePage === "weapon" ? "contents" : "none" }}><WeaponPage /></div>
+        <div className="h-full" style={{ display: activePage === "prop" ? "contents" : "none" }}><PropPage /></div>
+        <div className="h-full" style={{ display: activePage === "environment" ? "contents" : "none" }}><EnvironmentPage /></div>
+        <div className="h-full" style={{ display: activePage === "uilab" ? "contents" : "none" }}><UILabPage /></div>
         {activePage === "3d" && (
           <div className="flex items-center justify-center h-full">
             <p style={{ color: "var(--color-text-muted)" }}>3D GEN AI — Coming Soon</p>

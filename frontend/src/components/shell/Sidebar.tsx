@@ -4,6 +4,9 @@ import {
   User,
   Crosshair,
   Box,
+  Package,
+  Mountain,
+  Layout,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -34,6 +37,9 @@ const TOOL_ITEMS: NavItem[] = [
   { id: "multiview", label: "Multiview", icon: Image },
   { id: "character", label: "AI CharacterLab", icon: User },
   { id: "weapon", label: "AI WeaponLab", icon: Crosshair },
+  { id: "prop", label: "AI PropLab", icon: Package },
+  { id: "environment", label: "AI Environment Lab", icon: Mountain },
+  { id: "uilab", label: "AI UI Lab", icon: Layout },
   { id: "3d", label: "3D GEN AI", icon: Box, disabled: true },
 ];
 
@@ -56,6 +62,19 @@ export function Sidebar({ activePage, onNavigate, onSettingsClick, collapsed, se
           </div>
 
           <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-2">
+            <button
+              onClick={onSettingsClick}
+              className="flex items-center gap-2.5 rounded px-3 py-2 text-[13px] font-medium transition-all w-full text-left cursor-pointer mb-1"
+              style={{
+                border: "none",
+                background: "transparent",
+                color: "var(--color-text-secondary)",
+              }}
+            >
+              <Settings className="h-4 w-4 shrink-0" />
+              Settings
+            </button>
+
             <p
               className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-widest"
               style={{ color: "var(--color-text-muted)" }}
@@ -142,18 +161,6 @@ export function Sidebar({ activePage, onNavigate, onSettingsClick, collapsed, se
             className="border-t px-2 py-2 flex flex-col gap-0.5"
             style={{ borderColor: "var(--color-border)" }}
           >
-            <button
-              onClick={onSettingsClick}
-              className="flex items-center gap-2.5 rounded px-3 py-1.5 text-[13px] font-medium transition-all w-full text-left cursor-pointer"
-              style={{
-                border: "none",
-                background: "transparent",
-                color: "var(--color-text-secondary)",
-              }}
-            >
-              <Settings className="h-4 w-4 shrink-0" />
-              Settings
-            </button>
             <a
               href="mailto:shawn@bluehole.net?subject=PUBG%20Madison%20AI%20Suite%20Bug"
               className="flex items-center gap-2.5 rounded px-3 py-1 text-[11px] transition-colors no-underline"

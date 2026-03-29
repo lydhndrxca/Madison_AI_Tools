@@ -2,6 +2,8 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { Card, Button, Select, Textarea, NumberStepper, PanelSection, TagPicker, ColorField } from "@/components/ui";
 import type { TagItem } from "@/components/ui";
 import { ImageViewer } from "@/components/shared/ImageViewer";
+import { GridGallery } from "@/components/shared/GridGallery";
+import type { GridGalleryResult } from "@/components/shared/GridGallery";
 import { EditHistory } from "@/components/shared/EditHistory";
 import { GroupedTabBar } from "@/components/shared/TabBar";
 import type { TabDef } from "@/components/shared/TabBar";
@@ -521,16 +523,14 @@ function buildFusionBrief(fusion: StyleFusionState): string {
   return `Fashion style: "${slot.label}" — ${slot.takeFrom}`;
 }
 
-const LAYOUT_STORAGE_KEY = "madison-character-layout";
-
 interface LayoutState {
   order: SectionId[];
   collapsed: Partial<Record<SectionId, boolean>>;
 }
 
-function loadDefaultLayout(): LayoutState {
+function loadDefaultLayout(storageKey: string): LayoutState {
   try {
-    const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (raw) {
       const parsed = JSON.parse(raw) as LayoutState;
       const allIds = new Set<SectionId>(DEFAULT_SECTION_ORDER);
@@ -544,7 +544,14 @@ function loadDefaultLayout(): LayoutState {
   return { order: [...DEFAULT_SECTION_ORDER], collapsed: { styleFusion: true, envPlacement: true, preservation: true, upscaleRestore: true, multiview: true, saveOptions: true } };
 }
 
-export function CharacterPage() {
+interface CharacterPageProps {
+  instanceId?: number;
+  active?: boolean;
+}
+
+export function CharacterPage({ instanceId = 0, active = true }: CharacterPageProps) {
+  const layoutStorageKey = `madison-character-layout${instanceId ? `-${instanceId}` : ""}`;
+  const sessionKey = `character${instanceId ? `-${instanceId}` : ""}`;
   const [tabs, setTabs] = useState<TabDef[]>(BUILTIN_TABS);
   const [activeTab, setActiveTab] = useState("main");
   const busy = useBusySet();
@@ -597,6 +604,9 @@ export function CharacterPage() {
   }, []);
 
   const [genCount, setGenCount] = useState(1);
+  const [generationMode, setGenerationMode] = useState<"single" | "grid">("single");
+  const [gridResults, setGridResults] = useState<GridGalleryResult[]>([]);
+  const [gridEditBusy, setGridEditBusy] = useState<Record<string, boolean>>({});
   const [viewGenCount, setViewGenCount] = useState(1);
   const [modelId, setModelId] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -604,7 +614,7 @@ export function CharacterPage() {
   const { addToast } = useToastContext();
 
   // Layout ordering + collapse state
-  const [layout, setLayout] = useState<LayoutState>(loadDefaultLayout);
+  const [layout, setLayout] = useState<LayoutState>(() => loadDefaultLayout(layoutStorageKey));
   const [dragOverId, setDragOverId] = useState<SectionId | null>(null);
   const dragItemRef = useRef<SectionId | null>(null);
 
@@ -702,7 +712,7 @@ export function CharacterPage() {
       collapsed[id] = isSectionCollapsed(id);
     }
     const state: LayoutState = { order: layout.order, collapsed };
-    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(layoutStorageKey, JSON.stringify(state));
     addToast("Layout saved as default", "success");
   }, [layout.order, isSectionCollapsed, addToast]);
 
@@ -713,7 +723,7 @@ export function CharacterPage() {
       setModels(r.models.filter((m) => m.multimodal));
       if (!modelId) setModelId(r.current);
     }).catch(() => {});
-    apiFetch<{ name: string; guidance_text: string }[]>("/styles/folders").then((folders) => {
+    apiFetch<{ name: string; guidance_text: string }[]>("/styles/folders?category=general").then((folders) => {
       setStyleLibraryFolders(folders);
     }).catch(() => {});
   }, []);
@@ -1344,6 +1354,101 @@ export function CharacterPage() {
     try { await fetch(`${window.location.protocol === "file:" ? "http://127.0.0.1:8420" : ""}/api/system/cancel`, { method: "POST" }); } catch { /* */ }
   }, [busy]);
 
+  const handleGridGenerate = useCallback(async () => {
+    const identityOn = isSectionEnabled("identity");
+    const baseDesc = identityOn ? description : "";
+    const attrBrief = buildAttrBrief();
+    const desc = (baseDesc + attrBrief).trim();
+    const extra = getExtraContext();
+    if (!desc) return;
+    busy.start("generate");
+    const bibleCtx = isSectionEnabled("bible") ? bibleToCostumeContext(bible) : "";
+    const costumeCtx = isSectionEnabled("costume") ? costumeToContext(costume) : "";
+    const lockCtx = isSectionEnabled("preservation") ? preservationToConstraints(preservation) : "";
+    const mainRef = extractMode === "recreate" ? getMainImageB64() : null;
+    setGenText((p) => ({ ...p, generate: "Generating 16 images..." }));
+    const promises = Array.from({ length: 16 }, (_, i) =>
+      apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
+        "/character/generate", {
+          method: "POST",
+          body: JSON.stringify({
+            description: desc,
+            age: identityOn ? age : "", race: identityOn ? race : "",
+            gender: identityOn ? gender : "", build: identityOn ? build : "",
+            view_type: "main", mode: "quality",
+            model_id: modelId || undefined,
+            bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+            fusion_context: extra.fusionCtx || undefined, style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+            lock_constraints: lockCtx || undefined,
+            reference_image_b64: mainRef || undefined,
+            recreate_mode: extractMode === "recreate",
+          }),
+        },
+      ).then((resp) => ({ ok: true as const, resp, idx: i }))
+       .catch((e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e), idx: i })),
+    );
+    const results = await Promise.all(promises);
+    const newResults: GridGalleryResult[] = [];
+    for (const r of results.sort((a, b) => a.idx - b.idx)) {
+      if (r.ok && r.resp.image_b64) {
+        newResults.push({
+          id: `grid_${Date.now()}_${r.idx}`,
+          image_b64: r.resp.image_b64,
+          width: r.resp.width || 1024,
+          height: r.resp.height || 1024,
+        });
+      } else if (r.ok && r.resp.error) { addToast(r.resp.error, "error"); }
+      else if (!r.ok) { addToast(r.error, "error"); }
+    }
+    setGridResults((prev) => [...prev, ...newResults]);
+    addToast(`Generated ${newResults.length} images`, "success");
+    busy.end("generate");
+  }, [description, age, race, gender, build, modelId, bible, costume, preservation, attributes, extractMode, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, addToast, busy]);
+
+  const handleGridDelete = useCallback((id: string) => {
+    setGridResults((prev) => prev.filter((r) => r.id !== id));
+  }, []);
+
+  const handleGridCopy = useCallback(async (id: string) => {
+    const result = gridResults.find((r) => r.id === id);
+    if (!result) return;
+    try {
+      const resp = await fetch(`data:image/png;base64,${result.image_b64}`);
+      const blob = await resp.blob();
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      addToast("Copied to clipboard", "success");
+    } catch { addToast("Copy failed", "error"); }
+  }, [gridResults, addToast]);
+
+  const handleGridEdit = useCallback(async (id: string, editText: string) => {
+    const result = gridResults.find((r) => r.id === id);
+    if (!result) return;
+    setGridEditBusy((prev) => ({ ...prev, [id]: true }));
+    try {
+      const res = await apiFetch<{ image_b64?: string; width?: number; height?: number; error?: string }>(
+        "/character/generate",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            description: editText,
+            reference_image_b64: result.image_b64,
+            edit_prompt: editText,
+            model_id: modelId || undefined,
+            view_type: "main",
+          }),
+        },
+      );
+      if (res.error) { addToast(res.error, "error"); }
+      else if (res.image_b64) {
+        setGridResults((prev) =>
+          prev.map((r) => r.id === id ? { ...r, image_b64: res.image_b64!, width: res.width || r.width, height: res.height || r.height } : r),
+        );
+        addToast("Cell updated", "success");
+      }
+    } catch (e) { addToast(e instanceof Error ? e.message : "Edit failed", "error"); }
+    setGridEditBusy((prev) => ({ ...prev, [id]: false }));
+  }, [gridResults, modelId, addToast]);
+
   const handleOpenImage = useCallback(() => fileInputRef.current?.click(), []);
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
@@ -1570,6 +1675,7 @@ export function CharacterPage() {
   };
 
   useEffect(() => {
+    if (!active) return;
     regCharAction("charGenerate", () => charHandlersRef.current.generate());
     regCharAction("charQuickGen", () => charHandlersRef.current.quickGen());
     regCharAction("charAllViews", () => charHandlersRef.current.allViews());
@@ -1583,11 +1689,11 @@ export function CharacterPage() {
         unregCharAction(id);
       }
     };
-  }, [regCharAction, unregCharAction]);
+  }, [active, regCharAction, unregCharAction]);
 
   // --- Session save/load ---
   useSessionRegister(
-    "character",
+    sessionKey,
     () => ({
       tabs, activeTab, gallery, imageIdx, description, editPrompt,
       age, race, gender, build, attributes, bible, costume,
@@ -1814,7 +1920,7 @@ export function CharacterPage() {
                 <Button size="sm" className="w-full" onClick={handleReset} title="Clear everything and start fresh with a blank character">Reset Character</Button>
               </div>
               <div className="pt-1">
-                <Button variant="primary" className="w-full" size="lg" generating={busy.is("generate")} generatingText={genText.generate || "Generating..."} onClick={handleGenerate} title="Generate a new character image using all the details you've set up">
+                <Button variant="primary" className="w-full" size="lg" generating={busy.is("generate")} generatingText={genText.generate || "Generating..."} onClick={generationMode === "grid" ? handleGridGenerate : handleGenerate} title="Generate a new character image using all the details you've set up">
                   Generate Character Image
                 </Button>
               </div>
@@ -1825,6 +1931,19 @@ export function CharacterPage() {
                     {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
                 )}
+              </div>
+              <div>
+                <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Generation View</label>
+                <select
+                  className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
+                  style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
+                  value={generationMode}
+                  onChange={(e) => setGenerationMode(e.target.value as "single" | "grid")}
+                  disabled={busy.any}
+                >
+                  <option value="single">Single Image</option>
+                  <option value="grid">4×4 Grid (16 images)</option>
+                </select>
               </div>
             </>
           );
@@ -2544,7 +2663,7 @@ export function CharacterPage() {
       {/* Right Column - Image Viewer */}
       <div className="flex-1 flex flex-col min-w-0 relative">
         <div className="flex items-end shrink-0 relative" style={{ background: "var(--color-background)", borderBottom: "1px solid var(--color-border)", paddingTop: 4 }}>
-          <div className="flex-1 min-w-0 overflow-x-auto flex items-end">
+          <div className="flex-1 min-w-0 flex items-end overflow-hidden">
             <GroupedTabBar
               tabs={tabs}
               active={activeTab}
@@ -2560,24 +2679,38 @@ export function CharacterPage() {
             <Button size="sm" generating={busy.is("quickgen")} generatingText={genText.quickgen || "Generating..."} onClick={handleQuickGenerate} title="Quickly re-generate the current view using your existing settings — great for getting a new variation">Quick Generate</Button>
           </div>
         </div>
-        <ImageViewer
-          src={currentSrc}
-          placeholder={`No ${activeTabDef?.label.toLowerCase() || "image"} loaded`}
-          locked={busy.any}
-          onSaveImage={handleSaveImage}
-          onCopyImage={handleCopyImage}
-          onPasteImage={handlePasteImage}
-          onOpenImage={handleOpenImage}
-          onClearImage={handleClearImage}
-          onClearAllImages={handleClearAllImages}
-          onImageEdited={handleImageEdited}
-          imageCount={currentImages.length}
-          imageIndex={currentIdx}
-          onPrevImage={handlePrevImage}
-          onNextImage={handleNextImage}
-          refImages={editorRefImages}
-          styleContext={editorStyleContext}
-        />
+        {generationMode === "grid" && activeTab === "main" && gridResults.length > 0 ? (
+          <GridGallery
+            results={gridResults}
+            title="Character Variations"
+            toolLabel="character"
+            generating={busy.is("generate")}
+            emptyMessage="No grid results yet. Switch to grid mode and generate."
+            onDelete={handleGridDelete}
+            onCopy={handleGridCopy}
+            onEditSubmit={handleGridEdit}
+            editBusy={gridEditBusy}
+          />
+        ) : (
+          <ImageViewer
+            src={currentSrc}
+            placeholder={`No ${activeTabDef?.label.toLowerCase() || "image"} loaded`}
+            locked={busy.any}
+            onSaveImage={handleSaveImage}
+            onCopyImage={handleCopyImage}
+            onPasteImage={handlePasteImage}
+            onOpenImage={handleOpenImage}
+            onClearImage={handleClearImage}
+            onClearAllImages={handleClearAllImages}
+            onImageEdited={handleImageEdited}
+            imageCount={currentImages.length}
+            imageIndex={currentIdx}
+            onPrevImage={handlePrevImage}
+            onNextImage={handleNextImage}
+            refImages={editorRefImages}
+            styleContext={editorStyleContext}
+          />
+        )}
       </div>
       {showXml && <XmlModal xml={buildCharacterXml()} title="Character XML" onClose={() => setShowXml(false)} />}
     </div>

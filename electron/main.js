@@ -3,6 +3,15 @@ const path = require("path");
 const { spawn } = require("child_process");
 const fs = require("fs");
 
+// Prevent GPU cache "Access is denied" errors when another instance locked the dir
+app.commandLine.appendSwitch("disable-gpu-shader-disk-cache");
+app.commandLine.appendSwitch("disk-cache-size", "0");
+
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+}
+
 let mainWindow = null;
 let pythonProcess = null;
 let consoleWindow = null;
@@ -334,9 +343,9 @@ function createWindow() {
     mainWindow.webContents.openDevTools({ mode: "detach" });
   }
 
-  mainWindow.webContents.on("console-message", (_e, level, message) => {
-    const lvl = level >= 2 ? "error" : "info";
-    pushConsoleLog(lvl, `[Renderer] ${message}`);
+  mainWindow.webContents.on("console-message", (event) => {
+    const lvl = event.level >= 2 ? "error" : "info";
+    pushConsoleLog(lvl, `[Renderer] ${event.message}`);
   });
 
   mainWindow.on("closed", () => {
@@ -428,6 +437,13 @@ ipcMain.handle("session:save", async (_event, jsonData) => {
   } catch (err) {
     console.error("[Session] Failed to write file:", err);
     return false;
+  }
+});
+
+app.on("second-instance", () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
   }
 });
 

@@ -1,7 +1,7 @@
-"""Style Library API routes.
+"""User Library API routes.
 
-Manages a folder-based style library on disk.
-Each style is a directory with meta.json + up to 16 reference images.
+Personal reference library for organizing UI assets.
+Each folder is a directory with images — no guidance text or trained subfolders.
 """
 
 from __future__ import annotations
@@ -13,13 +13,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, UploadFile, File, Form
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 router = APIRouter()
 
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
-MAX_IMAGES_PER_FOLDER = 16
+MAX_IMAGES_PER_FOLDER = 50
 META_FILENAME = "meta.json"
 
 _LIBRARY_DIR: Optional[Path] = None
@@ -28,7 +28,7 @@ _LIBRARY_DIR: Optional[Path] = None
 def _lib_dir() -> Path:
     global _LIBRARY_DIR
     if _LIBRARY_DIR is None:
-        _LIBRARY_DIR = Path(__file__).resolve().parents[4] / "STYLE_LIBRARY"
+        _LIBRARY_DIR = Path(__file__).resolve().parents[4] / "USER_LIBRARY"
         _LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
     return _LIBRARY_DIR
 
@@ -51,7 +51,7 @@ def _read_meta(folder: str) -> Dict[str, Any]:
         except (json.JSONDecodeError, OSError):
             pass
     now = datetime.now(timezone.utc).isoformat()
-    return {"name": folder, "guidance_text": "", "created_at": now, "updated_at": now}
+    return {"name": folder, "created_at": now, "updated_at": now}
 
 
 def _write_meta(folder: str, meta: Dict[str, Any]) -> None:
@@ -66,32 +66,25 @@ def _get_thumbnail_b64(folder: str) -> Optional[str]:
     images = _image_files(_lib_dir() / folder)
     if not images:
         return None
-    import base64 as b64mod
     data = images[0].read_bytes()
     ext = images[0].suffix.lower()
     mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
             "bmp": "image/bmp", "webp": "image/webp"}.get(ext.lstrip("."), "image/png")
-    return f"data:{mime};base64,{b64mod.b64encode(data).decode()}"
+    return f"data:{mime};base64,{base64.b64encode(data).decode()}"
 
 
 # ── List all folders ──────────────────────────────────────────────
 
 class FolderInfo(BaseModel):
     name: str
-    guidance_text: str
     image_count: int
     thumbnail: Optional[str] = None
-    created_at: str
-    updated_at: str
-    category: str = "general"
+    created_at: str = ""
+    updated_at: str = ""
 
 
 @router.get("/folders")
-def list_folders(category: Optional[str] = None) -> List[FolderInfo]:
-    """List style folders, optionally filtered by category.
-
-    category values: "general" (non-UI styles), "ui" (UI element styles), or None (all).
-    """
+def list_folders() -> List[FolderInfo]:
     base = _lib_dir()
     if not base.is_dir():
         return []
@@ -102,22 +95,14 @@ def list_folders(category: Optional[str] = None) -> List[FolderInfo]:
     result = []
     for name in folders:
         meta = _read_meta(name)
-        folder_cat = meta.get("category", "general")
-        if category is not None:
-            if category == "general" and folder_cat == "ui":
-                continue
-            if category == "ui" and folder_cat != "ui":
-                continue
         count = len(_image_files(base / name))
         thumb = _get_thumbnail_b64(name)
         result.append(FolderInfo(
             name=name,
-            guidance_text=meta.get("guidance_text", ""),
             image_count=count,
             thumbnail=thumb,
             created_at=meta.get("created_at", ""),
             updated_at=meta.get("updated_at", ""),
-            category=folder_cat,
         ))
     return result
 
@@ -126,7 +111,7 @@ def list_folders(category: Optional[str] = None) -> List[FolderInfo]:
 
 class CreateFolderReq(BaseModel):
     name: str
-    category: str = "general"
+
 
 @router.post("/folders")
 def create_folder(req: CreateFolderReq) -> FolderInfo:
@@ -136,21 +121,13 @@ def create_folder(req: CreateFolderReq) -> FolderInfo:
     meta_path = folder / META_FILENAME
     if not meta_path.exists():
         now = datetime.now(timezone.utc).isoformat()
-        _write_meta(name, {
-            "name": name,
-            "guidance_text": "",
-            "category": req.category,
-            "created_at": now,
-            "updated_at": now,
-        })
+        _write_meta(name, {"name": name, "created_at": now, "updated_at": now})
     meta = _read_meta(name)
     return FolderInfo(
         name=name,
-        guidance_text=meta.get("guidance_text", ""),
         image_count=0,
         created_at=meta.get("created_at", ""),
         updated_at=meta.get("updated_at", ""),
-        category=meta.get("category", "general"),
     )
 
 
@@ -169,6 +146,7 @@ def delete_folder(folder_name: str) -> dict:
 class RenameFolderReq(BaseModel):
     new_name: str
 
+
 @router.patch("/folders/{folder_name}")
 def rename_folder(folder_name: str, req: RenameFolderReq) -> FolderInfo:
     old_path = _lib_dir() / folder_name
@@ -184,38 +162,10 @@ def rename_folder(folder_name: str, req: RenameFolderReq) -> FolderInfo:
     count = len(_image_files(_lib_dir() / new_name))
     return FolderInfo(
         name=new_name,
-        guidance_text=meta.get("guidance_text", ""),
         image_count=count,
         created_at=meta.get("created_at", ""),
         updated_at=meta.get("updated_at", ""),
-        category=meta.get("category", "general"),
     )
-
-
-# ── Update guidance text ──────────────────────────────────────────
-
-class SetCategoryReq(BaseModel):
-    category: str
-
-@router.put("/folders/{folder_name}/category")
-def set_category(folder_name: str, req: SetCategoryReq) -> dict:
-    meta = _read_meta(folder_name)
-    meta["category"] = req.category
-    meta["updated_at"] = datetime.now(timezone.utc).isoformat()
-    _write_meta(folder_name, meta)
-    return {"ok": True}
-
-
-class GuidanceReq(BaseModel):
-    guidance_text: str
-
-@router.put("/folders/{folder_name}/guidance")
-def set_guidance(folder_name: str, req: GuidanceReq) -> dict:
-    meta = _read_meta(folder_name)
-    meta["guidance_text"] = req.guidance_text
-    meta["updated_at"] = datetime.now(timezone.utc).isoformat()
-    _write_meta(folder_name, meta)
-    return {"ok": True}
 
 
 # ── List images in folder ─────────────────────────────────────────
@@ -223,19 +173,11 @@ def set_guidance(folder_name: str, req: GuidanceReq) -> dict:
 class ImageInfo(BaseModel):
     filename: str
     data_url: str
-    disabled: bool = False
 
 
 @router.get("/folders/{folder_name}/images")
-def list_images(folder_name: str, subfolder: str = "") -> List[ImageInfo]:
+def list_images(folder_name: str) -> List[ImageInfo]:
     base = _lib_dir() / folder_name
-    if subfolder:
-        base = base / subfolder
-    meta = _read_meta(folder_name)
-    disabled_bucket = meta.get("disabled_images", {})
-    disabled_key = subfolder or "__root__"
-    disabled_set = set(disabled_bucket.get(disabled_key, []))
-
     result = []
     for p in _image_files(base):
         data = p.read_bytes()
@@ -243,26 +185,7 @@ def list_images(folder_name: str, subfolder: str = "") -> List[ImageInfo]:
         mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
                 "bmp": "image/bmp", "webp": "image/webp"}.get(ext, "image/png")
         data_url = f"data:{mime};base64,{base64.b64encode(data).decode()}"
-        result.append(ImageInfo(
-            filename=p.name,
-            data_url=data_url,
-            disabled=p.name in disabled_set,
-        ))
-    return result
-
-
-# ── List trained element subfolders ───────────────────────────────
-
-@router.get("/folders/{folder_name}/subfolders")
-def list_subfolders(folder_name: str) -> List[str]:
-    folder_path = _lib_dir() / folder_name
-    if not folder_path.is_dir():
-        return []
-    result = []
-    for sub in sorted(folder_path.iterdir()):
-        if sub.is_dir() and sub.name.endswith("_styles"):
-            if _image_files(sub):
-                result.append(sub.name)
+        result.append(ImageInfo(filename=p.name, data_url=data_url))
     return result
 
 
@@ -270,7 +193,8 @@ def list_subfolders(folder_name: str) -> List[str]:
 
 class AddImageReq(BaseModel):
     filename: str
-    data_url: str  # data:image/...;base64,...
+    data_url: str
+
 
 @router.post("/folders/{folder_name}/images")
 def add_images(folder_name: str, images: List[AddImageReq]) -> dict:
@@ -301,34 +225,8 @@ def add_images(folder_name: str, images: List[AddImageReq]) -> dict:
 # ── Remove image ──────────────────────────────────────────────────
 
 @router.delete("/folders/{folder_name}/images/{filename}")
-def remove_image(folder_name: str, filename: str, subfolder: str = "") -> dict:
-    base = _lib_dir() / folder_name
-    if subfolder:
-        base = base / subfolder
-    path = base / filename
+def remove_image(folder_name: str, filename: str) -> dict:
+    path = _lib_dir() / folder_name / filename
     if path.is_file():
         path.unlink()
     return {"ok": True}
-
-
-# ── Toggle disabled state ─────────────────────────────────────────
-
-class ToggleDisabledReq(BaseModel):
-    filename: str
-    subfolder: str = ""
-
-@router.post("/folders/{folder_name}/toggle-disabled")
-def toggle_disabled(folder_name: str, req: ToggleDisabledReq) -> dict:
-    meta = _read_meta(folder_name)
-    bucket = meta.setdefault("disabled_images", {})
-    key = req.subfolder or "__root__"
-    disabled = set(bucket.get(key, []))
-    now_disabled = req.filename not in disabled
-    if now_disabled:
-        disabled.add(req.filename)
-    else:
-        disabled.discard(req.filename)
-    bucket[key] = sorted(disabled)
-    meta["updated_at"] = datetime.now(timezone.utc).isoformat()
-    _write_meta(folder_name, meta)
-    return {"ok": True, "disabled": now_disabled}

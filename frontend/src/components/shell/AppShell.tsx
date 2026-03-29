@@ -173,8 +173,11 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
     registerAction("navMultiview", () => onNavigate("multiview"));
     registerAction("navCharacter", () => onNavigate("character"));
     registerAction("navWeapon", () => onNavigate("weapon"));
+    registerAction("navPropLab", () => onNavigate("prop"));
+    registerAction("navEnvLab", () => onNavigate("environment"));
+    registerAction("navUILab", () => onNavigate("uilab"));
     return () => {
-      for (const id of ["openSettings", "toggleConsole", "saveSession", "openSession", "navGenerate", "navMultiview", "navCharacter", "navWeapon"]) {
+      for (const id of ["openSettings", "toggleConsole", "saveSession", "openSession", "navGenerate", "navMultiview", "navCharacter", "navWeapon", "navPropLab", "navEnvLab", "navUILab"]) {
         unregisterAction(id);
       }
     };

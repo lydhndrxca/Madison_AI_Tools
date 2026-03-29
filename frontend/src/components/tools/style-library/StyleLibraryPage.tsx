@@ -21,6 +21,7 @@ interface FolderInfo {
   thumbnail: string | null;
   created_at: string;
   updated_at: string;
+  category: string;
 }
 
 interface ImageInfo {
@@ -40,6 +41,7 @@ export function StyleLibraryPage() {
   const [guidance, setGuidance] = useState("");
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [categoryFilter, setCategoryFilter] = useState<"all" | "general" | "ui">("all");
 
   const guidanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -97,18 +99,30 @@ export function StyleLibraryPage() {
 
   /* ── Folder CRUD ───────────────────────────────────────────── */
 
-  const handleNewFolder = useCallback(async () => {
+  const handleNewFolder = useCallback(async (forceCategory?: string) => {
     const name = prompt("New style folder name:");
     if (!name?.trim()) return;
+    const cat = forceCategory ?? (categoryFilter === "all" ? "general" : categoryFilter);
     try {
-      await apiFetch("/styles/folders", { method: "POST", body: JSON.stringify({ name: name.trim() }) });
+      await apiFetch("/styles/folders", { method: "POST", body: JSON.stringify({ name: name.trim(), category: cat }) });
       await loadFolders();
       setSelectedFolder(name.trim());
       setGuidance("");
       setImages([]);
       setSubfolders([]);
     } catch (e) { console.error(e); }
-  }, [loadFolders]);
+  }, [loadFolders, categoryFilter]);
+
+  const handleSetCategory = useCallback(async (cat: string) => {
+    if (!selectedFolder) return;
+    try {
+      await apiFetch(`/styles/folders/${encodeURIComponent(selectedFolder)}/category`, {
+        method: "PUT",
+        body: JSON.stringify({ category: cat }),
+      });
+      await loadFolders();
+    } catch (e) { console.error(e); }
+  }, [selectedFolder, loadFolders]);
 
   const handleDeleteFolder = useCallback(async () => {
     if (!selectedFolder) return;
@@ -206,6 +220,9 @@ export function StyleLibraryPage() {
 
   /* ── Render ────────────────────────────────────────────────── */
 
+  const filteredFolders = categoryFilter === "all"
+    ? folders
+    : folders.filter((f) => f.category === categoryFilter);
   const currentFolder = folders.find((f) => f.name === selectedFolder);
 
   return (
@@ -224,8 +241,27 @@ export function StyleLibraryPage() {
           </span>
         </div>
 
+        {/* Category filter tabs */}
+        <div className="flex shrink-0" style={{ borderBottom: "1px solid var(--color-border)" }}>
+          {(["all", "general", "ui"] as const).map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setCategoryFilter(cat)}
+              className="flex-1 py-1.5 text-[10px] font-medium uppercase tracking-wider cursor-pointer transition-colors"
+              style={{
+                background: categoryFilter === cat ? "var(--color-hover)" : "transparent",
+                color: categoryFilter === cat ? "var(--color-foreground)" : "var(--color-text-muted)",
+                border: "none",
+                borderBottom: categoryFilter === cat ? "2px solid var(--color-accent)" : "2px solid transparent",
+              }}
+            >
+              {cat === "all" ? "All" : cat === "ui" ? "UI" : "General"}
+            </button>
+          ))}
+        </div>
+
         <div className="flex-1 overflow-y-auto">
-          {folders.map((f) => (
+          {filteredFolders.map((f) => (
             <button
               key={f.name}
               onClick={() => handleSelectFolder(f.name)}
@@ -248,14 +284,26 @@ export function StyleLibraryPage() {
                 </div>
               )}
               <div className="min-w-0 flex-1">
-                <div className="text-[12px] font-medium truncate">{f.name}</div>
+                <div className="flex items-center gap-1">
+                  <span className="text-[12px] font-medium truncate">{f.name}</span>
+                  <span
+                    className="shrink-0 px-1 py-0 rounded text-[8px] font-bold uppercase"
+                    style={{
+                      background: f.category === "ui" ? "rgba(94,156,224,0.15)" : "rgba(78,201,160,0.15)",
+                      color: f.category === "ui" ? "#5e9ce0" : "#4ec9a0",
+                      border: `1px solid ${f.category === "ui" ? "rgba(94,156,224,0.3)" : "rgba(78,201,160,0.3)"}`,
+                    }}
+                  >
+                    {f.category === "ui" ? "UI" : "GEN"}
+                  </span>
+                </div>
                 <div className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
                   {f.image_count} image{f.image_count !== 1 ? "s" : ""}
                 </div>
               </div>
             </button>
           ))}
-          {folders.length === 0 && (
+          {filteredFolders.length === 0 && (
             <div className="px-3 py-6 text-center text-[11px]" style={{ color: "var(--color-text-muted)" }}>
               No style folders yet
             </div>
@@ -267,7 +315,7 @@ export function StyleLibraryPage() {
           style={{ borderTop: "1px solid var(--color-border)" }}
         >
           <button
-            onClick={handleNewFolder}
+            onClick={() => handleNewFolder()}
             className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-[11px] font-medium transition-colors cursor-pointer"
             style={{ background: "var(--color-accent)", color: "var(--color-foreground)", border: "none" }}
             title="New Folder"
@@ -291,6 +339,19 @@ export function StyleLibraryPage() {
             title="Delete"
           >
             <Trash2 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => handleSetCategory(currentFolder?.category === "ui" ? "general" : "ui")}
+            disabled={!selectedFolder}
+            className="px-2 py-1.5 rounded text-[10px] font-bold transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+            style={{
+              background: currentFolder?.category === "ui" ? "rgba(94,156,224,0.15)" : "var(--color-hover)",
+              color: currentFolder?.category === "ui" ? "#5e9ce0" : "var(--color-text-secondary)",
+              border: currentFolder?.category === "ui" ? "1px solid rgba(94,156,224,0.3)" : "none",
+            }}
+            title={currentFolder?.category === "ui" ? "Switch to General category" : "Switch to UI category"}
+          >
+            {currentFolder?.category === "ui" ? "UI" : "GEN"}
           </button>
         </div>
       </div>

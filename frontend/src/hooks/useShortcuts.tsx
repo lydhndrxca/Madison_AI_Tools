@@ -5,7 +5,7 @@ import React, { createContext, useContext, useState, useCallback, useEffect, use
 export interface ShortcutDef {
   id: string;
   label: string;
-  category: "global" | "navigation" | "characterLab" | "imageViewer";
+  category: "global" | "navigation" | "characterLab" | "propLab" | "envLab" | "uilab" | "imageViewer";
   defaultKeys: string;
   currentKeys: string;
   /** Single-key shortcuts (no modifier) are skipped when user is typing in an input */
@@ -42,6 +42,9 @@ const CATEGORY_LABELS: Record<ShortcutDef["category"], string> = {
   global: "Global",
   navigation: "Navigation",
   characterLab: "Character Lab",
+  propLab: "Prop Lab",
+  envLab: "Environment Lab",
+  uilab: "UI Lab",
   imageViewer: "Image Viewer",
 };
 export { CATEGORY_LABELS };
@@ -61,6 +64,9 @@ const DEFAULT_SHORTCUTS: ShortcutDef[] = [
   { id: "navMultiview", label: "Go to Multiview", category: "navigation", defaultKeys: "Ctrl+2", currentKeys: "Ctrl+2" },
   { id: "navCharacter", label: "Go to AI CharacterLab", category: "navigation", defaultKeys: "Ctrl+3", currentKeys: "Ctrl+3" },
   { id: "navWeapon", label: "Go to AI WeaponLab", category: "navigation", defaultKeys: "Ctrl+4", currentKeys: "Ctrl+4" },
+  { id: "navPropLab", label: "Go to AI PropLab", category: "navigation", defaultKeys: "Ctrl+5", currentKeys: "Ctrl+5" },
+  { id: "navEnvLab", label: "Go to AI Environment Lab", category: "navigation", defaultKeys: "Ctrl+6", currentKeys: "Ctrl+6" },
+  { id: "navUILab", label: "Go to AI UI Lab", category: "navigation", defaultKeys: "Ctrl+7", currentKeys: "Ctrl+7" },
 
   // Character Lab
   { id: "charGenerate", label: "Generate Character Image", category: "characterLab", defaultKeys: "Ctrl+G", currentKeys: "Ctrl+G" },
@@ -71,6 +77,29 @@ const DEFAULT_SHORTCUTS: ShortcutDef[] = [
   { id: "charRandomize", label: "Randomize Full Character", category: "characterLab", defaultKeys: "Ctrl+Shift+R", currentKeys: "Ctrl+Shift+R" },
   { id: "charShowXml", label: "Show XML", category: "characterLab", defaultKeys: "Ctrl+Shift+X", currentKeys: "Ctrl+Shift+X" },
   { id: "charSendPS", label: "Send to Photoshop", category: "characterLab", defaultKeys: "Ctrl+Shift+P", currentKeys: "Ctrl+Shift+P" },
+
+  // Prop Lab
+  { id: "propGenerate", label: "Generate Prop Image", category: "propLab", defaultKeys: "Ctrl+G", currentKeys: "Ctrl+G" },
+  { id: "propExtract", label: "Extract Attributes", category: "propLab", defaultKeys: "Ctrl+E", currentKeys: "Ctrl+E" },
+  { id: "propEnhance", label: "Enhance Description", category: "propLab", defaultKeys: "Ctrl+Shift+E", currentKeys: "Ctrl+Shift+E" },
+  { id: "propRandomize", label: "Randomize Full Prop", category: "propLab", defaultKeys: "Ctrl+Shift+R", currentKeys: "Ctrl+Shift+R" },
+  { id: "propAllViews", label: "Generate All Views", category: "propLab", defaultKeys: "Ctrl+Shift+A", currentKeys: "Ctrl+Shift+A" },
+  { id: "propShowXml", label: "Show XML", category: "propLab", defaultKeys: "Ctrl+Shift+X", currentKeys: "Ctrl+Shift+X" },
+  { id: "propSendPS", label: "Send to Photoshop", category: "propLab", defaultKeys: "Ctrl+Shift+P", currentKeys: "Ctrl+Shift+P" },
+
+  // Environment Lab
+  { id: "envGenerate", label: "Generate Environment", category: "envLab", defaultKeys: "Ctrl+G", currentKeys: "Ctrl+G" },
+  { id: "envExtract", label: "Extract Attributes", category: "envLab", defaultKeys: "Ctrl+E", currentKeys: "Ctrl+E" },
+  { id: "envEnhance", label: "Enhance Description", category: "envLab", defaultKeys: "Ctrl+Shift+E", currentKeys: "Ctrl+Shift+E" },
+  { id: "envRandomize", label: "Randomize Environment", category: "envLab", defaultKeys: "Ctrl+Shift+R", currentKeys: "Ctrl+Shift+R" },
+  { id: "envReimagine", label: "Reimagine Screenshot", category: "envLab", defaultKeys: "Ctrl+Shift+I", currentKeys: "Ctrl+Shift+I" },
+  { id: "envAllViews", label: "Generate All Views", category: "envLab", defaultKeys: "Ctrl+Shift+A", currentKeys: "Ctrl+Shift+A" },
+  { id: "envShowXml", label: "Show XML", category: "envLab", defaultKeys: "Ctrl+Shift+X", currentKeys: "Ctrl+Shift+X" },
+  { id: "envSendPS", label: "Send to Photoshop", category: "envLab", defaultKeys: "Ctrl+Shift+P", currentKeys: "Ctrl+Shift+P" },
+
+  // UI Lab
+  { id: "uiGenerate", label: "Generate UI Elements", category: "uilab", defaultKeys: "Ctrl+G", currentKeys: "Ctrl+G" },
+  { id: "uiShowXml", label: "Show XML", category: "uilab", defaultKeys: "Ctrl+Shift+X", currentKeys: "Ctrl+Shift+X" },
 
   // Image Viewer tools
   { id: "toolBrush", label: "Brush Tool", category: "imageViewer", defaultKeys: "B", currentKeys: "B", singleKey: true },
