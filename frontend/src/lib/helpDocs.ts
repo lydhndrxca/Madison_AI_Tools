@@ -432,7 +432,7 @@ Each folder has an editable guidance text field. This text is sent to the AI as 
 - Color palette, costume details, accessories, overall silhouette
 
 **What stays consistent:**
-- The exact pose specified in attributes (e.g., A-pose)
+- The exact pose specified in attributes (default: relaxed standing, arms at sides)
 - Camera angle / view
 - Background (as specified, or solid grey/green if not specified)
 

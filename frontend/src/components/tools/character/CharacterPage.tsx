@@ -573,7 +573,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
   const [gender, setGender] = useState("");
   const [build, setBuild] = useState("");
   const [attributes, setAttributes] = useState<Record<string, { dropdown: string; custom: string }>>(
-    Object.fromEntries(ATTRIBUTE_FIELDS.map((f) => [f, { dropdown: f === "Pose" ? "A pose" : "", custom: "" }])),
+    Object.fromEntries(ATTRIBUTE_FIELDS.map((f) => [f, { dropdown: f === "Pose" ? "Relaxed standing, arms at sides" : "", custom: "" }])),
   );
 
   const [bible, setBible] = useState<BibleState>({ ...EMPTY_BIBLE });
@@ -749,7 +749,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
     setRace("");
     setGender("");
     setBuild("");
-    setAttributes(Object.fromEntries(ATTRIBUTE_FIELDS.map((f) => [f, { dropdown: f === "Pose" ? "A pose" : "", custom: "" }])));
+    setAttributes(Object.fromEntries(ATTRIBUTE_FIELDS.map((f) => [f, { dropdown: f === "Pose" ? "Relaxed standing, arms at sides" : "", custom: "" }])));
     setBible({ ...EMPTY_BIBLE });
     setCostume({ ...EMPTY_COSTUME });
     setPreservation({ ...EMPTY_PRESERVATION, preserves: DEFAULT_PRESERVES.map((p) => ({ ...p })), negatives: DEFAULT_NEGATIVES.map((n) => ({ ...n })) });
@@ -1177,7 +1177,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
       parts.push("[STYLE RULES] Realistic 3D-rendered. Place in described environment. Full body head to toe.");
     } else {
       parts.push("[STYLE RULES] Realistic 3D-rendered. Solid flat single-color studio backdrop. NO environmental elements. Full body head to toe.");
-      parts.push("\n[POSE RULE] Neutral A-pose unless prompt specifies otherwise.");
+      parts.push("\n[POSE RULE] Relaxed standing pose, arms naturally at sides, unless prompt specifies otherwise.");
     }
 
     if (extractMode === "recreate" && getImageB64("main")) {
@@ -1964,7 +1964,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
 
   const handleReset = useCallback(() => {
     setGallery({}); setImageIdx({}); setImageRecords({}); setDescription(""); setEditPrompt("");
-    setAttributes(Object.fromEntries(ATTRIBUTE_FIELDS.map((f) => [f, { dropdown: f === "Pose" ? "A pose" : "", custom: "" }])));
+    setAttributes(Object.fromEntries(ATTRIBUTE_FIELDS.map((f) => [f, { dropdown: f === "Pose" ? "Relaxed standing, arms at sides" : "", custom: "" }])));
     setBible({ ...EMPTY_BIBLE }); setCostume({ ...EMPTY_COSTUME });
     setSectionsOpen({ attributes: false, bible: false, costume: false });
     setTabs(BUILTIN_TABS);
@@ -2344,7 +2344,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
       if (s === null) {
         setGallery({}); setImageIdx({}); setImageRecords({}); setDescription(""); setEditPrompt("");
         setAge(""); setRace(""); setGender(""); setBuild("");
-        setAttributes(Object.fromEntries(ATTRIBUTE_FIELDS.map((f) => [f, { dropdown: f === "Pose" ? "A pose" : "", custom: "" }])));
+        setAttributes(Object.fromEntries(ATTRIBUTE_FIELDS.map((f) => [f, { dropdown: f === "Pose" ? "Relaxed standing, arms at sides" : "", custom: "" }])));
         setBible({ ...EMPTY_BIBLE }); setCostume({ ...EMPTY_COSTUME });
         setSectionsOpen({ attributes: true, bible: false, costume: false });
         setLockedSections({ identity: false, attributes: false, bible: false, costume: false, styleFusion: false, envPlacement: false, preservation: false });

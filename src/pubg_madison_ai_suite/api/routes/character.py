@@ -315,11 +315,13 @@ def _do_generate(req: CharacterGenerateRequest) -> CharacterResponse:
             "Full body visible head to toe."
         )
         pose_rule = (
-            "\nPOSE RULE: The character MUST be in a neutral A-pose (standing upright, "
-            "arms held slightly away from body at roughly 30 degrees, palms facing forward, "
-            "feet shoulder-width apart, weight evenly distributed) UNLESS the prompt explicitly "
-            "specifies a different pose. Do NOT add any action poses, leaning, crouching, "
-            "or interaction with objects unless the user specifically asked for it."
+            "\nPOSE RULE: The character MUST be in a relaxed standing pose with arms resting "
+            "naturally at their sides (NOT an A-pose, NOT arms spread). Arms hang down loosely, "
+            "hands relaxed by their hips/thighs, shoulders at ease, feet about shoulder-width "
+            "apart, weight evenly distributed — like a person standing casually at rest. "
+            "UNLESS the prompt explicitly specifies a different pose. Do NOT add any action "
+            "poses, leaning, crouching, or interaction with objects unless the user specifically "
+            "asked for it."
         )
 
     if req.edit_prompt and req.reference_image_b64:
@@ -431,7 +433,8 @@ def _do_generate_grid(req: CharacterGenerateRequest) -> CharacterGridResponse:
         "- Every cell should feel like a distinctly different character that fits the same brief.\n\n"
         "WHAT MUST BE IDENTICAL across ALL 16 cells:\n"
         "- The EXACT pose described in the character attributes below. If the attributes say "
-        "'A pose' every character must be in an A pose. Do NOT change the pose per cell.\n"
+        "'relaxed standing, arms at sides' every character must be in a relaxed standing pose "
+        "with arms resting naturally at their sides. Do NOT change the pose per cell.\n"
         "- The same camera angle / view for every cell.\n"
         f"- {bg_instruction}\n\n"
         "Layout rules:\n"
@@ -540,7 +543,7 @@ def _do_extract_attributes(description: str, image_b64: str | None = None) -> At
             '    "Accessories": string (e.g. "silver dog tags, braided leather wristband, ear cuff")\n'
             '    "ColorAccents": string (e.g. "red lining in jacket, orange stitching on boots")\n'
             '    "Detailing": string (e.g. "oil stains on pants, frayed cuffs, brass rivets on jacket")\n'
-            '    "Pose": string \u2014 ALWAYS set to "A pose" (standing upright, arms slightly away from body at ~30 degrees, palms forward, legs shoulder-width apart). Do NOT infer any other pose.\n\n'
+            '    "Pose": string \u2014 ALWAYS set to "Relaxed standing, arms at sides" (standing casually, arms hanging naturally by sides, hands relaxed at hips/thighs, feet shoulder-width apart). Do NOT infer any other pose.\n\n'
             + _BIBLE_COSTUME_PROMPT
             + _ENVIRONMENT_PROMPT +
             "\nReturn ONLY valid JSON. Be as detailed and specific as possible \u2014 "
@@ -633,7 +636,7 @@ def _do_enhance(text: str, ctx: CharacterContextRequest | None = None) -> Random
             '    "Accessories": string (jewelry, wristbands, etc.)\n'
             '    "ColorAccents": string (notable color details)\n'
             '    "Detailing": string (wear, damage, stitching, etc.)\n'
-            '    "Pose": ALWAYS "A pose" \u2014 do NOT change this\n'
+            '    "Pose": ALWAYS "Relaxed standing, arms at sides" \u2014 do NOT change this\n'
             + _BIBLE_COSTUME_PROMPT
             + _ENVIRONMENT_PROMPT
         )
@@ -747,7 +750,7 @@ def _do_randomize_full(ctx: CharacterContextRequest | None = None) -> RandomizeF
             '    "Accessories": string (jewelry, wristbands, etc. \u2014 or empty)\n'
             '    "ColorAccents": string (notable color details \u2014 or empty)\n'
             '    "Detailing": string (wear, damage, stitching, etc. \u2014 or empty)\n'
-            '    "Pose": ALWAYS "A pose" \u2014 do NOT use any other pose\n'
+            '    "Pose": ALWAYS "Relaxed standing, arms at sides" \u2014 do NOT use any other pose\n'
             + _BIBLE_COSTUME_PROMPT
             + _ENVIRONMENT_PROMPT +
             "Return ONLY the JSON, no markdown. "

@@ -387,21 +387,19 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
                 {config.enabled ? (config.mode === "deep" ? "Deep Thinking" : "Fast Mode") : "Off"}
               </div>
             </div>
-            {!config.enabled && (
-              <button
-                onClick={(e) => { e.stopPropagation(); updateConfig({ enabled: true }); }}
-                className="flex items-center gap-1 px-2 py-1 rounded-full cursor-pointer transition-all"
-                style={{
-                  background: "rgba(34,197,94,0.2)",
-                  border: "1px solid rgba(34,197,94,0.5)",
-                  color: "#4ade80",
-                }}
-                title="Turn on Art Director"
-              >
-                <Power className="h-3 w-3" />
-                <span className="text-[9px] font-bold tracking-wide">ON</span>
-              </button>
-            )}
+            <button
+              onClick={(e) => { e.stopPropagation(); updateConfig({ enabled: !config.enabled }); }}
+              className="flex items-center gap-1 px-2 py-1 rounded-full cursor-pointer transition-all"
+              style={{
+                background: config.enabled ? "rgba(34,197,94,0.2)" : "rgba(148,163,184,0.12)",
+                border: config.enabled ? "1px solid rgba(34,197,94,0.5)" : "1px solid rgba(148,163,184,0.3)",
+                color: config.enabled ? "#4ade80" : "var(--color-text-muted)",
+              }}
+              title={config.enabled ? "Art Director is ON — click to turn OFF" : "Art Director is OFF — click to turn ON"}
+            >
+              <Power className="h-3 w-3" />
+              <span className="text-[9px] font-bold tracking-wide">{config.enabled ? "ON" : "OFF"}</span>
+            </button>
           </div>
           <button
             ref={dsButtonRef}
