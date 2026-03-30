@@ -62,17 +62,33 @@ if not exist "frontend\node_modules" (
     echo.
 )
 
-rem --- Verify backend can import before launching Electron ---
+rem --- Verify backend can import ---
 cd /d "%~dp0"
 set "PYTHONPATH=%~dp0src"
 python -c "from pubg_madison_ai_suite.api.server import app; print('[CHECK] Backend modules OK')" 2>&1
 if !ERRORLEVEL! neq 0 (
     echo.
-    echo [ERROR] Backend failed to load. A Python dependency may be missing.
-    echo         Try running: python -m pip install -r requirements.txt
-    echo         Then try again.
-    pause
-    exit /b 1
+    echo [REPAIR] Backend check failed - reinstalling Python dependencies...
+    echo.
+    if exist ".python_deps_installed" del ".python_deps_installed"
+    python -m pip install -r requirements.txt
+    if !ERRORLEVEL! neq 0 (
+        echo.
+        echo [ERROR] Failed to install Python dependencies.
+        echo         Try running manually: python -m pip install -r requirements.txt
+        pause
+        exit /b 1
+    )
+    echo. > .python_deps_installed
+    echo.
+    python -c "from pubg_madison_ai_suite.api.server import app; print('[CHECK] Backend modules OK after repair')" 2>&1
+    if !ERRORLEVEL! neq 0 (
+        echo.
+        echo [ERROR] Backend still cannot load after reinstalling dependencies.
+        echo         Check the error above for details.
+        pause
+        exit /b 1
+    )
 )
 
 rem --- Launch ---
