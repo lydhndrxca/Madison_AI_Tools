@@ -7,6 +7,7 @@ import * as Mask from "./editor/maskEngine";
 import { apiFetch } from "@/hooks/useApi";
 import { useImageEnhance } from "@/hooks/useImageEnhance";
 import { useShortcuts } from "@/hooks/useShortcuts";
+import { useModels } from "@/hooks/ModelsContext";
 import { AnnotationToolbar, AnnotationCanvas, exportWithAnnotations, type Annotation, type AnnotationType } from "./AnnotationLayer";
 
 interface ContextMenuAction {
@@ -88,6 +89,14 @@ export function ImageViewer({
   const [brushCursor, setBrushCursor] = useState<{ x: number; y: number } | null>(null);
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
   const mainImageRef = useRef<HTMLImageElement>(null);
+
+  // Model + multi-generation state
+  const { models, defaultModelId } = useModels();
+  const [editorModelId, setEditorModelId] = useState("");
+  useEffect(() => { if (defaultModelId && !editorModelId) setEditorModelId(defaultModelId); }, [defaultModelId]);
+  const [generationCount, setGenerationCount] = useState(1);
+  const [editorResults, setEditorResults] = useState<string[]>([]);
+  const [editorResultIdx, setEditorResultIdx] = useState(0);
   /** After swapping `src`, skip one `fitToContainer` when dimensions go 0 → loaded (tab switch). */
   const suppressNextNaturalFitRef = useRef(false);
   const drawingRef = useRef(false);
@@ -183,6 +192,8 @@ export function ImageViewer({
     }
     setEditorTool("select");
     setInpaintMode(false);
+    setEditorResults([]);
+    setEditorResultIdx(0);
   }, [src]);
 
   // Register image viewer tool shortcuts via the shortcuts system
@@ -451,22 +462,67 @@ export function ImageViewer({
     return src.replace(/^data:image\/\w+;base64,/, "");
   }, [src]);
 
+  const runEditorMulti = useCallback(async (
+    endpoint: string,
+    buildBody: () => Record<string, unknown>,
+    label: string,
+    opts?: { clearMask?: boolean; clearOutpaint?: boolean },
+  ) => {
+    if (!src) return;
+    setEditorBusy(true);
+    setEditorResults([]);
+    setEditorResultIdx(0);
+    if (opts?.clearOutpaint) setOutpaintPreview(null);
+
+    const body = buildBody();
+    const modelId = editorModelId || undefined;
+
+    const promises = Array.from({ length: generationCount }, () =>
+      apiFetch<{ image_b64: string | null; error?: string }>(endpoint, {
+        method: "POST",
+        body: JSON.stringify({ ...body, model_id: modelId }),
+      }).catch(() => ({ image_b64: null as string | null })),
+    );
+
+    const results = await Promise.all(promises);
+    const images = results.map((r) => r.image_b64).filter((b): b is string => !!b);
+
+    if (images.length > 0 && onImageEdited) {
+      if (images.length === 1) {
+        onImageEdited(`data:image/png;base64,${images[0]}`, label);
+        setEditorResults([]);
+      } else {
+        setEditorResults(images);
+        setEditorResultIdx(0);
+        onImageEdited(`data:image/png;base64,${images[0]}`, `${label} (1/${images.length})`);
+      }
+      if (opts?.clearMask && maskCanvasRef.current) {
+        Mask.clearMask(maskCanvasRef.current); setHasMask(false);
+      }
+      setInpaintMode(false);
+    }
+    if (opts?.clearOutpaint) setOutpaintPreview(null);
+    setEditorBusy(false);
+  }, [src, generationCount, editorModelId, onImageEdited]);
+
+  const handleEditorResultNav = useCallback((dir: -1 | 1) => {
+    if (editorResults.length < 2) return;
+    const next = editorResultIdx + dir;
+    if (next < 0 || next >= editorResults.length) return;
+    setEditorResultIdx(next);
+    if (onImageEdited) {
+      onImageEdited(`data:image/png;base64,${editorResults[next]}`, `Variant ${next + 1}/${editorResults.length}`);
+    }
+  }, [editorResults, editorResultIdx, onImageEdited]);
+
   const handleApplyInpaint = useCallback(async (prompt: string) => {
     if (!src || !maskCanvasRef.current || !Mask.maskHasContent(maskCanvasRef.current)) return;
-    setEditorBusy(true);
-    try {
-      const compositeB64 = await Mask.exportMaskComposite(maskCanvasRef.current, src);
-      const resp = await apiFetch<{ image_b64: string | null; error?: string }>("/editor/inpaint", {
-        method: "POST", body: JSON.stringify({ image_b64: getImageB64(), mask_composite_b64: compositeB64, prompt, ref_images: refImages, style_context: styleContext }),
-      });
-      if (resp.image_b64 && onImageEdited) {
-        onImageEdited(`data:image/png;base64,${resp.image_b64}`, `Inpaint: ${prompt.slice(0, 40)}`);
-        Mask.clearMask(maskCanvasRef.current); setHasMask(false);
-        setInpaintMode(false);
-      }
-    } catch { /* toast handled by apiFetch */ }
-    setEditorBusy(false);
-  }, [src, getImageB64, onImageEdited, refImages, styleContext]);
+    const compositeB64 = await Mask.exportMaskComposite(maskCanvasRef.current, src);
+    await runEditorMulti("/editor/inpaint", () => ({
+      image_b64: getImageB64(), mask_composite_b64: compositeB64, prompt,
+      ref_images: refImages, style_context: styleContext,
+    }), `Inpaint: ${prompt.slice(0, 40)}`, { clearMask: true });
+  }, [src, getImageB64, runEditorMulti, refImages, styleContext]);
 
   const handleSmartSelect = useCallback(async (subject: string) => {
     if (!src) { console.warn("[SmartSelect] No image loaded"); return; }
@@ -474,7 +530,7 @@ export function ImageViewer({
     setEditorBusy(true);
     try {
       const resp = await apiFetch<{ mask_b64?: string; error?: string }>("/editor/smart-select", {
-        method: "POST", body: JSON.stringify({ image_b64: getImageB64(), subject }),
+        method: "POST", body: JSON.stringify({ image_b64: getImageB64(), subject, model_id: editorModelId || undefined }),
       });
       if (resp.mask_b64 && maskCanvasRef.current) {
         const imgEl = mainImageRef.current;
@@ -501,77 +557,40 @@ export function ImageViewer({
     } finally {
       setEditorBusy(false);
     }
-  }, [src, getImageB64, naturalSize.w, naturalSize.h]);
+  }, [src, getImageB64, naturalSize.w, naturalSize.h, editorModelId]);
 
   const handleSmartErase = useCallback(async () => {
     if (!src || !maskCanvasRef.current || !Mask.maskHasContent(maskCanvasRef.current)) return;
-    setEditorBusy(true);
-    try {
-      const compositeB64 = await Mask.exportMaskComposite(maskCanvasRef.current, src);
-      const resp = await apiFetch<{ image_b64: string | null; error?: string }>("/editor/smart-erase", {
-        method: "POST", body: JSON.stringify({ image_b64: getImageB64(), mask_composite_b64: compositeB64, ref_images: refImages, style_context: styleContext }),
-      });
-      if (resp.image_b64 && onImageEdited) {
-        onImageEdited(`data:image/png;base64,${resp.image_b64}`, "Smart erase");
-        Mask.clearMask(maskCanvasRef.current); setHasMask(false);
-        setInpaintMode(false);
-      }
-    } catch { /* */ }
-    setEditorBusy(false);
-  }, [src, getImageB64, onImageEdited, refImages, styleContext]);
+    const compositeB64 = await Mask.exportMaskComposite(maskCanvasRef.current, src);
+    await runEditorMulti("/editor/smart-erase", () => ({
+      image_b64: getImageB64(), mask_composite_b64: compositeB64,
+      ref_images: refImages, style_context: styleContext,
+    }), "Smart erase", { clearMask: true });
+  }, [src, getImageB64, runEditorMulti, refImages, styleContext]);
 
   const handleOutpaint = useCallback(async (dir: OutpaintDir, px: number, prompt: string) => {
     if (!src) return;
-    setEditorBusy(true);
     setOutpaintPreview({ dir, px });
-    try {
-      const resp = await apiFetch<{ image_b64: string | null; error?: string }>("/editor/outpaint", {
-        method: "POST", body: JSON.stringify({ image_b64: getImageB64(), direction: dir, expand_px: px, prompt, ref_images: refImages, style_context: styleContext }),
-      });
-      if (resp.image_b64 && onImageEdited) {
-        onImageEdited(`data:image/png;base64,${resp.image_b64}`, `Outpaint ${dir} +${px}px`);
-        setInpaintMode(false);
-      }
-    } catch { /* */ }
-    setOutpaintPreview(null);
-    setEditorBusy(false);
-  }, [src, getImageB64, onImageEdited, refImages, styleContext]);
+    await runEditorMulti("/editor/outpaint", () => ({
+      image_b64: getImageB64(), direction: dir, expand_px: px, prompt,
+      ref_images: refImages, style_context: styleContext,
+    }), `Outpaint ${dir} +${px}px`, { clearOutpaint: true });
+  }, [src, getImageB64, runEditorMulti, refImages, styleContext]);
 
   const handleRemoveBg = useCallback(async (replacement: string) => {
-    if (!src) return;
-    setEditorBusy(true);
-    try {
-      const resp = await apiFetch<{ image_b64: string | null; error?: string }>("/editor/remove-bg", {
-        method: "POST", body: JSON.stringify({ image_b64: getImageB64(), replacement }),
-      });
-      if (resp.image_b64 && onImageEdited) {
-        onImageEdited(`data:image/png;base64,${resp.image_b64}`, "Remove background");
-        setInpaintMode(false);
-      }
-    } catch { /* */ }
-    setEditorBusy(false);
-  }, [src, getImageB64, onImageEdited, refImages, styleContext]);
+    await runEditorMulti("/editor/remove-bg", () => ({
+      image_b64: getImageB64(), replacement,
+    }), "Remove background");
+  }, [getImageB64, runEditorMulti]);
 
   const handleStyleTransfer = useCallback(async (presetId: string, custom: string) => {
-    if (!src) return;
-    setEditorBusy(true);
-    try {
-      const preset = STYLE_PRESETS.find((s) => s.id === presetId);
-      const resp = await apiFetch<{ image_b64: string | null; error?: string }>("/editor/style-transfer", {
-        method: "POST", body: JSON.stringify({
-          image_b64: getImageB64(),
-          style_preset: presetId,
-          custom_prompt: presetId === "custom" ? custom : (preset?.prompt || ""),
-          ref_images: refImages, style_context: styleContext,
-        }),
-      });
-      if (resp.image_b64 && onImageEdited) {
-        onImageEdited(`data:image/png;base64,${resp.image_b64}`, `Style: ${preset?.label || custom.slice(0, 30)}`);
-        setInpaintMode(false);
-      }
-    } catch { /* */ }
-    setEditorBusy(false);
-  }, [src, getImageB64, onImageEdited, refImages, styleContext]);
+    const preset = STYLE_PRESETS.find((s) => s.id === presetId);
+    await runEditorMulti("/editor/style-transfer", () => ({
+      image_b64: getImageB64(), style_preset: presetId,
+      custom_prompt: presetId === "custom" ? custom : (preset?.prompt || ""),
+      ref_images: refImages, style_context: styleContext,
+    }), `Style: ${preset?.label || custom.slice(0, 30)}`);
+  }, [getImageB64, runEditorMulti, refImages, styleContext]);
 
   const handleClearMask = useCallback(() => {
     if (maskCanvasRef.current) { Mask.clearMask(maskCanvasRef.current); setHasMask(false); }
@@ -742,6 +761,11 @@ export function ImageViewer({
         busy={editorBusy}
         locked={locked}
         annotationActive={!!annotationTool}
+        models={models}
+        selectedModelId={editorModelId}
+        onModelChange={setEditorModelId}
+        generationCount={generationCount}
+        onGenerationCountChange={setGenerationCount}
       />
 
       <AnnotationToolbar
@@ -901,7 +925,28 @@ export function ImageViewer({
           </div>
         )}
 
-        {imageCount > 1 && onPrevImage && onNextImage && (
+        {/* Editor multi-generation carousel */}
+        {editorResults.length > 1 && (
+          <>
+            <button className="absolute left-2 top-1/2 -translate-y-1/2 z-20 p-1.5 rounded-full cursor-pointer transition-all hover:scale-110"
+              style={{ background: "rgba(106,27,154,0.7)", color: "#E0E0E0", border: "1px solid rgba(186,104,255,0.4)", opacity: editorResultIdx > 0 ? 1 : 0.3 }}
+              onClick={(e) => { e.stopPropagation(); handleEditorResultNav(-1); }} disabled={editorResultIdx <= 0}>
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            <button className="absolute right-2 top-1/2 -translate-y-1/2 z-20 p-1.5 rounded-full cursor-pointer transition-all hover:scale-110"
+              style={{ background: "rgba(106,27,154,0.7)", color: "#E0E0E0", border: "1px solid rgba(186,104,255,0.4)", opacity: editorResultIdx < editorResults.length - 1 ? 1 : 0.3 }}
+              onClick={(e) => { e.stopPropagation(); handleEditorResultNav(1); }} disabled={editorResultIdx >= editorResults.length - 1}>
+              <ChevronRight className="h-5 w-5" />
+            </button>
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 px-3 py-1 rounded-full text-[10px] font-bold"
+              style={{ background: "rgba(106,27,154,0.8)", color: "#fff", border: "1px solid rgba(186,104,255,0.4)" }}>
+              Variant {editorResultIdx + 1} / {editorResults.length}
+            </div>
+          </>
+        )}
+
+        {/* Main image set carousel (only when no editor results active) */}
+        {editorResults.length <= 1 && imageCount > 1 && onPrevImage && onNextImage && (
           <>
             <button className="absolute left-2 top-1/2 -translate-y-1/2 z-20 p-1.5 rounded-full cursor-pointer transition-all hover:scale-110"
               style={{ background: "rgba(0,0,0,0.6)", color: "#E0E0E0", border: "none", opacity: imageIndex > 0 ? 1 : 0.3 }}

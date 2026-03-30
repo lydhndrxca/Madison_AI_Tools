@@ -3,6 +3,7 @@ import {
   MousePointer2, Paintbrush, Eraser, Square, Lasso, ScanSearch, Wand2,
   Expand, ImageMinus, Palette, Trash2,
 } from "lucide-react";
+import type { ModelInfo } from "@/hooks/ModelsContext";
 
 export type EditorTool =
   | "select"
@@ -48,6 +49,11 @@ interface EditorToolbarProps {
   locked?: boolean;
   /** When true, hide the tool-specific options row (annotation is active) */
   annotationActive?: boolean;
+  models?: ModelInfo[];
+  selectedModelId?: string;
+  onModelChange?: (id: string) => void;
+  generationCount?: number;
+  onGenerationCountChange?: (n: number) => void;
 }
 
 const TOOLS: { id: EditorTool; label: string; shortcut: string; Icon: React.ComponentType<{ className?: string }>; tip: string }[] = [
@@ -95,6 +101,7 @@ export function EditorToolbar({
   hasMask, onClearMask, onApplyInpaint,
   onSmartSelect, onSmartErase, onOutpaint, onRemoveBg, onStyleTransfer,
   busy, locked = false, annotationActive = false,
+  models = [], selectedModelId = "", onModelChange, generationCount = 1, onGenerationCountChange,
 }: EditorToolbarProps) {
   const [inpaintPrompt, setInpaintPrompt] = useState("");
   const [smartSubject, setSmartSubject] = useState("");
@@ -115,6 +122,45 @@ export function EditorToolbar({
 
   return (
     <div className="shrink-0" style={{ borderBottom: "1px solid var(--color-border)", background: "var(--color-card)" }}>
+      {/* Model + generation count row */}
+      <div className="flex items-center gap-2 px-2 py-1 flex-wrap" style={{ borderBottom: "1px solid var(--color-border)" }}>
+        <span className="text-[10px] font-medium" style={{ color: "var(--color-text-secondary)" }}>Model</span>
+        <select
+          className="px-1.5 py-0.5 text-[10px] rounded"
+          style={inputStyle}
+          disabled={locked || busy}
+          value={selectedModelId}
+          onChange={(e) => onModelChange?.(e.target.value)}
+          title="Gemini model for editor tools"
+        >
+          {models.length === 0 && <option value="">Loading…</option>}
+          {models.map((m) => (
+            <option key={m.id} value={m.id}>{m.label} ({m.resolution})</option>
+          ))}
+        </select>
+        <div className="w-px h-4" style={{ background: "var(--color-border)" }} />
+        <span className="text-[10px] font-medium" style={{ color: "var(--color-text-secondary)" }}>Generations</span>
+        <div className="flex items-center gap-1">
+          {[1, 2, 3, 4].map((n) => (
+            <button
+              key={n}
+              disabled={locked || busy}
+              onClick={() => onGenerationCountChange?.(n)}
+              className="px-1.5 py-0.5 text-[10px] rounded cursor-pointer transition-colors font-medium disabled:opacity-40"
+              style={{
+                background: generationCount === n ? "var(--color-accent)" : "var(--color-input-bg)",
+                color: generationCount === n ? "var(--color-foreground)" : "var(--color-text-secondary)",
+                border: generationCount === n ? "1px solid var(--color-accent)" : "1px solid var(--color-border)",
+              }}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+        <span className="text-[9px]" style={{ color: "var(--color-text-muted)" }}>
+          {generationCount > 1 ? `${generationCount} images in parallel` : "single image"}
+        </span>
+      </div>
       {/* Tool buttons row */}
       <div className="flex items-center gap-1 px-2 py-1 flex-wrap">
         {TOOLS.map((t) => {

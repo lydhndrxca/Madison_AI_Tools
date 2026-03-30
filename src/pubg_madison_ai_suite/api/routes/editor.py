@@ -415,16 +415,39 @@ async def style_transfer(req: StyleTransferRequest):
             return ImageResponse(error="No API key configured")
         def _do():
             original = _decode(req.image_b64)
+
+            w, h = original.size
+            ratio = w / h if h else 1.0
+            if ratio >= 1.7:
+                aspect = "16:9"
+            elif ratio >= 1.3:
+                aspect = "3:2"
+            elif ratio >= 1.1:
+                aspect = "4:3"
+            elif ratio >= 0.9:
+                aspect = "1:1"
+            elif ratio >= 0.7:
+                aspect = "3:4"
+            elif ratio >= 0.55:
+                aspect = "2:3"
+            else:
+                aspect = "9:16"
+
             style_desc = req.custom_prompt or req.style_preset
             prompt = (
                 f"Transform this image into the following visual style: {style_desc}. "
-                f"Maintain the exact same composition, pose, and subject placement. "
-                f"Only change the visual rendering style. Return a single image, no text."
+                f"CRITICAL POSE RULE: You MUST preserve the EXACT pose, body position, limb placement, "
+                f"and posture of every subject in the image. Do NOT change, adjust, or reinterpret the pose "
+                f"in any way — arms, legs, head angle, hand positions, weight distribution, lean, and stance "
+                f"must remain IDENTICAL to the source image. "
+                f"Maintain the exact same composition, framing, camera angle, and subject placement. "
+                f"Only change the visual rendering style, textures, and artistic treatment. "
+                f"Return a single image, no text."
                 f"{_style_suffix(req.style_context)}"
             )
             refs = _ref_images(req.ref_images)
             contents: list = [original] + refs + [prompt]
-            return core.gemini_generate_image(api_key, contents, cancel_event=cancel, model_id=req.model_id)
+            return core.gemini_generate_image(api_key, contents, aspect_ratio=aspect, cancel_event=cancel, model_id=req.model_id)
         import asyncio
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(_pool, _do)
