@@ -27,6 +27,30 @@ if !ERRORLEVEL! neq 0 (
     exit /b 1
 )
 
+rem --- Ensure pip is available ---
+python -m pip --version >nul 2>&1
+if !ERRORLEVEL! neq 0 (
+    echo [SETUP] pip not found - bootstrapping pip...
+    python -m ensurepip --upgrade 2>&1
+    if !ERRORLEVEL! neq 0 (
+        echo [SETUP] ensurepip failed - trying get-pip.py...
+        python -c "import urllib.request; urllib.request.urlretrieve('https://bootstrap.pypa.io/get-pip.py', 'get-pip.py')" 2>&1
+        python get-pip.py 2>&1
+        if exist "get-pip.py" del "get-pip.py"
+    )
+    python -m pip --version >nul 2>&1
+    if !ERRORLEVEL! neq 0 (
+        echo.
+        echo [ERROR] Could not install pip. Please reinstall Python from
+        echo         https://www.python.org/downloads/ and make sure to check
+        echo         "Add Python to PATH" and do NOT uncheck "Install pip".
+        pause
+        exit /b 1
+    )
+    echo [SETUP] pip is ready.
+    echo.
+)
+
 rem --- Install Python dependencies if needed ---
 if not exist ".python_deps_installed" (
     echo [SETUP] Installing Python dependencies - first time setup...
