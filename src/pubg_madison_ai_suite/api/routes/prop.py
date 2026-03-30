@@ -783,13 +783,28 @@ def _do_upscale(req: UpscaleRequest) -> PropResponse:
     cancel = reset_cancel_event()
     try:
         source = core.b64_to_image(req.image_b64)
+        ar = core.detect_aspect_ratio(source.width, source.height)
         factor_hint = {"x4": "maximum", "x3": "high"}.get(req.scale_factor, "moderate")
-        prompt = (
-            f"Reproduce this exact image at {factor_hint} resolution. "
-            f"Preserve every detail, color, texture, and composition exactly as-is."
-        )
+
+        if req.context.strip():
+            prompt = (
+                f"Reproduce this exact image at higher resolution. "
+                f"CONTEXT: These are \"{req.context.strip()}\". "
+                f"Preserve the original art style, pixel density, and visual characteristics exactly — "
+                f"only increase clarity and detail fidelity. Do not smooth, blur, or anti-alias stylistic "
+                f"features that are intentional. "
+                f"Preserve every detail, color, texture, and composition exactly as-is."
+            )
+        else:
+            prompt = (
+                f"Reproduce this exact image at {factor_hint} resolution. "
+                f"Preserve every detail, color, texture, and composition exactly as-is. "
+                f"Do not alter the content, style, or framing in any way. "
+                f"Only increase clarity, sharpness, and detail fidelity."
+            )
+
         contents: list = [source, prompt]
-        result = core.gemini_generate_image(api_key, contents, cancel_event=cancel, model_id=req.model_id)
+        result = core.gemini_generate_image(api_key, contents, aspect_ratio=ar, cancel_event=cancel, model_id=req.model_id)
         if result is None:
             return PropResponse(error="Upscale failed")
         core.save_generated_image(result, "AI PropLab", view_name="upscale", generation_type="upscale")
@@ -808,22 +823,48 @@ def _do_restore(req: RestoreRequest) -> PropResponse:
     cancel = reset_cancel_event()
     try:
         source = core.b64_to_image(req.image_b64)
+        ar = core.detect_aspect_ratio(source.width, source.height)
+
         description = core.rest_generate_text_multimodal(
             api_key, "gemini-2.0-flash", [source, _DESCRIBE_FOR_RESTORE_PROMPT],
             cancel_event=cancel, cost_category="editing",
         )
         if not description:
             return PropResponse(error="Restore failed — could not analyze image")
+
+        user_context = req.context.strip() if req.context else ""
+        context_block = ""
+        if user_context:
+            context_block = (
+                f"\nIMPORTANT CONTEXT: The source is \"{user_context}\". You MUST preserve this art style exactly — "
+                "if these are pixel art, keep hard pixel edges and limited palette; if these are game UI icons, keep flat colors "
+                "and sharp silhouettes. Do NOT smooth, anti-alias, or photorealize stylistic features that are intentional.\n\n"
+            )
+
         restore_prompt = (
-            "QUALITY RESTORATION — Recreate this prop image at maximum quality.\n\n"
-            "WHAT MUST STAY IDENTICAL: Object identity, proportions, composition, "
-            "camera angle, color palette, background.\n\n"
-            "WHAT MUST BE FRESHLY RENDERED: Crisp edges, clean material textures, "
-            "precise details.\n\n"
-            f"DETAILED DESCRIPTION:\n{description}"
+            "QUALITY RESTORATION — RECREATE THIS EXACT IMAGE AT MAXIMUM FIDELITY.\n\n"
+            "The reference image has suffered quality degradation (blur, artifacts, noise, compression). "
+            "Your job: recreate this SAME EXACT prop in the SAME EXACT composition — but rendered fresh "
+            "with full resolution detail.\n\n"
+            f"{context_block}"
+            "WHAT MUST STAY IDENTICAL:\n"
+            "- Object identity, form, silhouette, and proportions\n"
+            "- Camera angle, framing, composition, and all spatial relationships\n"
+            "- Color palette and lighting direction\n"
+            "- Background content and depth\n"
+            "- All surface details, wear patterns, and decorative elements\n\n"
+            "WHAT MUST BE FRESHLY RENDERED:\n"
+            "- Crisp edges on every surface and silhouette\n"
+            "- Clean material textures (metal grain, wood grain, leather, fabric weave)\n"
+            "- Precise functional details (hinges, locks, handles, mechanisms)\n"
+            "- Sharp decorative details (engravings, stamps, inlays, patterns)\n"
+            "- Clean background without noise or compression artifacts\n\n"
+            "ZERO TEXT: Do not add any text, labels, watermarks, or annotations.\n\n"
+            f"DETAILED DESCRIPTION (recreate this exactly):\n{description}"
         )
+
         contents: list = [source, restore_prompt]
-        result = core.gemini_generate_image(api_key, contents, cancel_event=cancel, model_id=req.model_id)
+        result = core.gemini_generate_image(api_key, contents, aspect_ratio=ar, cancel_event=cancel, model_id=req.model_id)
         if result is None:
             return PropResponse(error="Restore failed")
         core.save_generated_image(result, "AI PropLab", view_name="restore", generation_type="restore")

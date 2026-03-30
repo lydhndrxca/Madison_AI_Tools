@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Card, Button, Select, PanelSection } from "@/components/ui";
 import { ModelViewer } from "@/components/shared/ModelViewer";
-import type { ModelViewerExportFormat } from "@/components/shared/ModelViewer";
+import type { ModelViewerExportFormat, TextureMap } from "@/components/shared/ModelViewer";
 import {
   listJobs,
   meshyPollTask,
@@ -31,12 +31,14 @@ import {
   X,
   ImageIcon,
   Wrench,
+  Trash2,
+  FileBox,
 } from "lucide-react";
 import { MaterialWorkshop } from "./MaterialWorkshop";
 import ModelWorkshopTab from "./ModelWorkshopTab";
 import { ThreeDGenSidebar, type ViewImage } from "@/components/shared/ThreeDGenSidebar";
 
-type ActiveTab = "create" | "queue" | "model" | "workshop";
+type ActiveTab = "create" | "queue" | "model" | "workshop" | "import";
 
 /* ── View slot definitions for image uploads ──────────────── */
 
@@ -170,10 +172,32 @@ export function ThreeDGenPage({ visible = true }: { visible?: boolean }) {
   const refreshJobList = useCallback(() => {
     listJobs().then((fresh) => {
       setJobs((prev) => {
-        const existingIds = new Set(prev.map((j) => j.task_id));
-        const newJobs = fresh.filter((j) => !existingIds.has(j.task_id));
-        if (newJobs.length === 0) return prev;
-        return [...newJobs, ...prev];
+        const freshMap = new Map(fresh.map((j) => [j.task_id, j]));
+        const prevMap = new Map(prev.map((j) => [j.task_id, j]));
+
+        // Merge: update existing jobs with fresh data, add new ones
+        const merged: ThreeDJob[] = [];
+        const seen = new Set<string>();
+
+        // Start with fresh jobs (preserves server ordering)
+        for (const fj of fresh) {
+          seen.add(fj.task_id);
+          const existing = prevMap.get(fj.task_id);
+          if (existing) {
+            merged.push({ ...existing, ...fj });
+          } else {
+            merged.push(fj);
+          }
+        }
+
+        // Append any local-only jobs the server doesn't know about yet
+        for (const pj of prev) {
+          if (!seen.has(pj.task_id)) {
+            merged.push(pj);
+          }
+        }
+
+        return merged;
       });
     }).catch(() => {});
   }, []);
@@ -328,6 +352,7 @@ export function ThreeDGenPage({ visible = true }: { visible?: boolean }) {
         {([
           { key: "create" as ActiveTab, icon: <Plus size={13} />, label: "New Generation" },
           { key: "queue" as ActiveTab, icon: <List size={13} />, label: "Generation Queue" },
+          { key: "import" as ActiveTab, icon: <Upload size={13} />, label: "Import Model" },
           { key: "model" as ActiveTab, icon: <Wrench size={13} />, label: "Model Workshop" },
           { key: "workshop" as ActiveTab, icon: <Paintbrush size={13} />, label: "Material Workshop" },
         ]).map((tab) => (
@@ -353,6 +378,11 @@ export function ThreeDGenPage({ visible = true }: { visible?: boolean }) {
       {/* ── New Generation tab content ── */}
       {activeTab === "create" && (
         <NewGenerationPanel onJobStarted={() => { setActiveTab("queue"); refreshJobList(); }} />
+      )}
+
+      {/* ── Import Model tab content ── */}
+      {activeTab === "import" && (
+        <ImportModelPanel />
       )}
 
       {/* ── Model Workshop tab content ── */}
@@ -881,4 +911,228 @@ function formatTimeAgo(ts: number): string {
   if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
   if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
   return `${Math.floor(secs / 86400)}d ago`;
+}
+
+/* ── Import Model Panel ──────────────────────────────────── */
+
+const TEXTURE_CHANNELS: { key: keyof TextureMap; label: string }[] = [
+  { key: "diffuse", label: "Diffuse / Color" },
+  { key: "normal", label: "Normal" },
+  { key: "roughness", label: "Roughness" },
+  { key: "metalness", label: "Metalness" },
+  { key: "ao", label: "Ambient Occlusion" },
+  { key: "emissive", label: "Emissive" },
+];
+
+function ImportModelPanel() {
+  const { addToast } = useToastContext();
+  const [modelFile, setModelFile] = useState<File | null>(null);
+  const [modelBlobUrl, setModelBlobUrl] = useState<string | null>(null);
+  const [textures, setTextures] = useState<TextureMap>({});
+  const [texturePreviews, setTexturePreviews] = useState<Record<string, string>>({});
+  const modelInputRef = useRef<HTMLInputElement>(null);
+  const textureInputRef = useRef<HTMLInputElement>(null);
+  const activeChannelRef = useRef<keyof TextureMap | null>(null);
+
+  const handleModelSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+    if (!["fbx", "glb", "gltf", "obj"].includes(ext)) {
+      addToast("Unsupported format — use FBX, GLB, GLTF, or OBJ", "error");
+      return;
+    }
+    if (modelBlobUrl) URL.revokeObjectURL(modelBlobUrl);
+    const url = URL.createObjectURL(file);
+    const nameWithExt = file.name.includes(".") ? file.name : `${file.name}.${ext}`;
+    const blobUrlWithExt = `${url}#${nameWithExt}`;
+    setModelFile(file);
+    setModelBlobUrl(blobUrlWithExt);
+    addToast(`Loaded ${file.name}`, "success");
+  }, [addToast, modelBlobUrl]);
+
+  const handleTextureSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const channel = activeChannelRef.current;
+    if (!file || !channel) return;
+    e.target.value = "";
+    const url = URL.createObjectURL(file);
+    setTextures((prev) => ({ ...prev, [channel]: url }));
+    setTexturePreviews((prev) => ({ ...prev, [channel]: url }));
+    addToast(`${channel} texture loaded`, "success");
+  }, [addToast]);
+
+  const removeTexture = useCallback((channel: keyof TextureMap) => {
+    setTextures((prev) => {
+      const next = { ...prev };
+      if (next[channel]) URL.revokeObjectURL(next[channel]!);
+      delete next[channel];
+      return next;
+    });
+    setTexturePreviews((prev) => {
+      const next = { ...prev };
+      delete next[channel];
+      return next;
+    });
+  }, []);
+
+  const handleClearModel = useCallback(() => {
+    if (modelBlobUrl) URL.revokeObjectURL(modelBlobUrl);
+    Object.values(textures).forEach((u) => { if (u) URL.revokeObjectURL(u); });
+    setModelFile(null);
+    setModelBlobUrl(null);
+    setTextures({});
+    setTexturePreviews({});
+  }, [modelBlobUrl, textures]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const files = Array.from(e.dataTransfer.files);
+    for (const file of files) {
+      const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+      if (["fbx", "glb", "gltf", "obj"].includes(ext)) {
+        if (modelBlobUrl) URL.revokeObjectURL(modelBlobUrl);
+        const url = URL.createObjectURL(file);
+        setModelFile(file);
+        setModelBlobUrl(`${url}#${file.name}`);
+        addToast(`Loaded ${file.name}`, "success");
+      } else if (["png", "jpg", "jpeg", "tga", "bmp", "webp"].includes(ext)) {
+        const url = URL.createObjectURL(file);
+        const name = file.name.toLowerCase();
+        let channel: keyof TextureMap = "diffuse";
+        if (name.includes("normal") || name.includes("nrm")) channel = "normal";
+        else if (name.includes("rough")) channel = "roughness";
+        else if (name.includes("metal")) channel = "metalness";
+        else if (name.includes("ao") || name.includes("occlusion") || name.includes("ambient")) channel = "ao";
+        else if (name.includes("emissive") || name.includes("emission")) channel = "emissive";
+        else if (name.includes("diffuse") || name.includes("color") || name.includes("albedo") || name.includes("base")) channel = "diffuse";
+        setTextures((prev) => ({ ...prev, [channel]: url }));
+        setTexturePreviews((prev) => ({ ...prev, [channel]: url }));
+        addToast(`Auto-assigned ${file.name} → ${channel}`, "success");
+      }
+    }
+  }, [addToast, modelBlobUrl]);
+
+  const hasTextures = Object.keys(textures).length > 0;
+
+  return (
+    <div
+      className="flex flex-1 min-h-0 overflow-hidden"
+      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+      onDrop={handleDrop}
+    >
+      {/* ── Left: upload controls ── */}
+      <div
+        className="flex flex-col shrink-0 overflow-y-auto"
+        style={{ width: 320, borderRight: "1px solid var(--color-border)", background: "var(--color-card)" }}
+      >
+        {/* Model file */}
+        <div className="px-3 pt-3 pb-2">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: "var(--color-text-muted)" }}>
+              Model File
+            </span>
+            {modelFile && (
+              <button
+                type="button"
+                onClick={handleClearModel}
+                className="text-[10px] px-2 py-0.5 rounded cursor-pointer"
+                style={{ background: "rgba(239,68,68,0.15)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.3)" }}
+              >
+                <Trash2 size={10} className="inline mr-1" />Clear
+              </button>
+            )}
+          </div>
+          <input ref={modelInputRef} type="file" accept=".fbx,.glb,.gltf,.obj" onChange={handleModelSelect} className="hidden" />
+          {modelFile ? (
+            <div
+              className="flex items-center gap-2 px-3 py-2 rounded-lg"
+              style={{ background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.3)" }}
+            >
+              <FileBox size={18} style={{ color: "#8b5cf6" }} />
+              <div className="flex-1 min-w-0">
+                <div className="text-[11px] font-medium truncate" style={{ color: "var(--color-text-primary)" }}>{modelFile.name}</div>
+                <div className="text-[9px]" style={{ color: "var(--color-text-muted)" }}>{(modelFile.size / 1024 / 1024).toFixed(1)} MB</div>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => modelInputRef.current?.click()}
+              className="w-full flex flex-col items-center gap-2 py-6 rounded-lg cursor-pointer transition-all hover:border-purple-500/50"
+              style={{ border: "2px dashed var(--color-border)", background: "rgba(255,255,255,0.02)", color: "var(--color-text-muted)" }}
+            >
+              <Upload size={24} strokeWidth={1.5} />
+              <span className="text-[11px] font-medium">Click to browse or drag & drop</span>
+              <span className="text-[9px]">FBX, GLB, GLTF, OBJ</span>
+            </button>
+          )}
+        </div>
+
+        <div className="w-full h-px" style={{ background: "var(--color-border)" }} />
+
+        {/* Texture slots */}
+        <div className="px-3 pt-2 pb-3 flex-1 min-h-0 overflow-y-auto">
+          <span className="text-[11px] font-semibold uppercase tracking-wide block mb-2" style={{ color: "var(--color-text-muted)" }}>
+            Textures (optional)
+          </span>
+          <p className="text-[9px] mb-2" style={{ color: "var(--color-text-muted)" }}>
+            Upload textures per channel, or drag & drop — filenames with "normal", "rough", etc. are auto-assigned.
+          </p>
+          <input ref={textureInputRef} type="file" accept="image/*,.tga" onChange={handleTextureSelect} className="hidden" />
+          <div className="flex flex-col gap-1.5">
+            {TEXTURE_CHANNELS.map(({ key, label }) => (
+              <div
+                key={key}
+                className="flex items-center gap-2 px-2 py-1.5 rounded"
+                style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--color-border)" }}
+              >
+                {texturePreviews[key] ? (
+                  <img src={texturePreviews[key]} alt={key} className="w-8 h-8 rounded object-cover shrink-0" style={{ border: "1px solid var(--color-border)" }} />
+                ) : (
+                  <div className="w-8 h-8 rounded shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid var(--color-border)" }}>
+                    <ImageIcon size={12} style={{ color: "var(--color-text-muted)" }} />
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="text-[10px] font-medium" style={{ color: "var(--color-text-primary)" }}>{label}</div>
+                </div>
+                {texturePreviews[key] ? (
+                  <button
+                    type="button"
+                    onClick={() => removeTexture(key)}
+                    className="p-1 rounded hover:bg-white/10 cursor-pointer"
+                    style={{ color: "var(--color-text-muted)", background: "transparent", border: "none" }}
+                    title="Remove texture"
+                  >
+                    <X size={12} />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => { activeChannelRef.current = key; textureInputRef.current?.click(); }}
+                    className="text-[9px] px-2 py-0.5 rounded cursor-pointer"
+                    style={{ background: "rgba(255,255,255,0.06)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
+                  >
+                    Upload
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Right: 3D Viewer ── */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden" style={{ background: "var(--color-background)" }}>
+        <ModelViewer
+          modelUrl={modelBlobUrl}
+          height="100%"
+          textures={hasTextures ? textures : undefined}
+        />
+      </div>
+    </div>
+  );
 }

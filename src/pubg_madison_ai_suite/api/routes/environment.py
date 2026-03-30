@@ -869,13 +869,27 @@ def _do_upscale(req: UpscaleRequest) -> EnvResponse:
     cancel = reset_cancel_event()
     try:
         source = core.b64_to_image(req.image_b64)
+        ar = core.detect_aspect_ratio(source.width, source.height)
         factor_hint = {"x4": "maximum", "x3": "high"}.get(req.scale_factor, "moderate")
-        prompt = (
-            f"Reproduce this exact environment image at {factor_hint} resolution. "
-            f"Preserve every detail, color, texture, and composition exactly as-is."
-        )
+
+        if req.context.strip():
+            prompt = (
+                f"Reproduce this exact environment image at higher resolution. "
+                f"CONTEXT: These are \"{req.context.strip()}\". "
+                f"Preserve the original art style and visual characteristics exactly — "
+                f"only increase clarity and detail fidelity. "
+                f"Preserve every detail, color, texture, and composition exactly as-is."
+            )
+        else:
+            prompt = (
+                f"Reproduce this exact environment image at {factor_hint} resolution. "
+                f"Preserve every detail, color, texture, and composition exactly as-is. "
+                f"Do not alter the content, style, or framing in any way. "
+                f"Only increase clarity, sharpness, and detail fidelity."
+            )
+
         contents: list = [source, prompt]
-        result = core.gemini_generate_image(api_key, contents, aspect_ratio="16:9", cancel_event=cancel, model_id=req.model_id)
+        result = core.gemini_generate_image(api_key, contents, aspect_ratio=ar, cancel_event=cancel, model_id=req.model_id)
         if result is None:
             return EnvResponse(error="Upscale failed")
         core.save_generated_image(result, "AI Environment Lab", view_name="upscale", generation_type="upscale")
@@ -886,6 +900,24 @@ def _do_upscale(req: UpscaleRequest) -> EnvResponse:
         release_cancel_event(cancel)
 
 
+_DESCRIBE_ENV_FOR_RESTORE_PROMPT = (
+    "You are a forensic environment analyst. Describe this scene with OBSESSIVE precision so it can be exactly recreated. "
+    "Ignore any blur, artifacts, noise, or compression — describe what the scene ACTUALLY looks like underneath the degradation.\n\n"
+    "Cover EVERY aspect in this exact order:\n"
+    "1. COMPOSITION: Camera angle, framing, depth layers (foreground/midground/background), vanishing points\n"
+    "2. ARCHITECTURE: Every structural element — buildings, walls, doors, windows, roofs, pillars, bridges, ruins — exact shapes, materials, proportions\n"
+    "3. TERRAIN: Ground surface type, elevation changes, paths, water features, rock formations\n"
+    "4. VEGETATION: Trees (species feel, canopy shape), bushes, grass, moss, vines — density, placement, colors\n"
+    "5. LIGHTING: Direction, color temperature, time of day feel, shadow directions and lengths, volumetric effects\n"
+    "6. ATMOSPHERE: Fog, haze, dust, particles, sky gradient, clouds\n"
+    "7. MATERIALS: Surface textures on every major element (stone grain, wood weathering, metal patina, fabric draping)\n"
+    "8. PROPS & DETAILS: Every small object — signs, lamps, crates, debris, furniture — exact placement\n"
+    "9. COLOR PALETTE: Dominant colors, accent colors, precise shade descriptions\n"
+    "10. MOOD: Overall emotional tone the scene conveys\n\n"
+    "Write as one continuous, dense image generation prompt. No preamble, no commentary. Be surgically specific."
+)
+
+
 def _do_restore(req: RestoreRequest) -> EnvResponse:
     api_key = core.get_api_key()
     if not api_key:
@@ -894,25 +926,51 @@ def _do_restore(req: RestoreRequest) -> EnvResponse:
     cancel = reset_cancel_event()
     try:
         source = core.b64_to_image(req.image_b64)
+        ar = core.detect_aspect_ratio(source.width, source.height)
+
         description = core.rest_generate_text_multimodal(
             api_key, "gemini-2.0-flash",
-            [source, "Describe this environment with obsessive precision for exact recreation. "
-             "Cover architecture, materials, vegetation, lighting, atmosphere, color palette, "
-             "props, and composition. Write as one continuous dense prompt. No preamble."],
+            [source, _DESCRIBE_ENV_FOR_RESTORE_PROMPT],
             cancel_event=cancel, cost_category="editing",
         )
         if not description:
             return EnvResponse(error="Restore failed — could not analyze image")
+
+        user_context = req.context.strip() if req.context else ""
+        context_block = ""
+        if user_context:
+            context_block = (
+                f"\nIMPORTANT CONTEXT: The source is \"{user_context}\". You MUST preserve this art style exactly — "
+                "if these are stylized renders, keep the stylization; if these are photorealistic, maintain realism. "
+                "Do NOT smooth, anti-alias, or alter stylistic features that are intentional.\n\n"
+            )
+
         restore_prompt = (
-            "QUALITY RESTORATION — Recreate this environment image at maximum quality.\n\n"
-            "WHAT MUST STAY IDENTICAL: Composition, architecture, spatial layout, "
-            "color palette, lighting direction, atmosphere.\n\n"
-            "WHAT MUST BE FRESHLY RENDERED: Crisp material textures, clean edges, "
-            "proper atmospheric depth, detailed vegetation.\n\n"
-            f"DETAILED DESCRIPTION:\n{description}"
+            "QUALITY RESTORATION — RECREATE THIS EXACT ENVIRONMENT AT MAXIMUM FIDELITY.\n\n"
+            "The reference image has suffered quality degradation (blur, artifacts, noise, compression). "
+            "Your job: recreate this SAME EXACT scene in the SAME EXACT composition — but rendered fresh "
+            "with full resolution detail.\n\n"
+            f"{context_block}"
+            "WHAT MUST STAY IDENTICAL:\n"
+            "- Full spatial layout, composition, and camera angle\n"
+            "- Every architectural element and structural feature\n"
+            "- Terrain, vegetation placement and density\n"
+            "- Lighting direction, color temperature, and atmosphere\n"
+            "- Color palette and mood\n"
+            "- All props, objects, and environmental details in their exact positions\n\n"
+            "WHAT MUST BE FRESHLY RENDERED:\n"
+            "- Crisp architectural edges and clean structural lines\n"
+            "- Detailed material textures (stone, wood, metal, fabric)\n"
+            "- Sharp vegetation detail (leaf patterns, bark texture, grass blades)\n"
+            "- Proper atmospheric depth and volumetric effects\n"
+            "- Clean sky and cloud detail without noise\n"
+            "- Fine environmental props at full clarity\n\n"
+            "ZERO TEXT: Do not add any text, labels, watermarks, or annotations.\n\n"
+            f"DETAILED DESCRIPTION (recreate this exactly):\n{description}"
         )
+
         contents: list = [source, restore_prompt]
-        result = core.gemini_generate_image(api_key, contents, aspect_ratio="16:9", cancel_event=cancel, model_id=req.model_id)
+        result = core.gemini_generate_image(api_key, contents, aspect_ratio=ar, cancel_event=cancel, model_id=req.model_id)
         if result is None:
             return EnvResponse(error="Restore failed")
         core.save_generated_image(result, "AI Environment Lab", view_name="restore", generation_type="restore")

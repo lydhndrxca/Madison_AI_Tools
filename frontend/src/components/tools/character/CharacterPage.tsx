@@ -1326,65 +1326,6 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
     }
   }, [description, age, race, gender, build, modelId, envPlacement, isSectionEnabled, resolveSection, getExtraContext, getMainImageB64, setTabImage, addToast, busy, styleFusion, customSections]);
 
-  const handleApplyEdit = useCallback(async () => {
-    const identityOn = isSectionEnabled("identity");
-    const attrText = resolveSection("attributes");
-    const attrBrief = attrText ? `\n\n${attrText}` : "";
-    const userEdit = editPrompt.trim();
-
-    const mainB64 = getMainImageB64();
-    if (!mainB64) {
-      if (userEdit || attrText) {
-        handleGenerate();
-      } else {
-        addToast("Generate or load an image first, or enter a description to generate one", "info");
-      }
-      return;
-    }
-
-    const effectiveEdit = userEdit
-      ? (attrText ? `${userEdit}\n\nAlso apply these attributes:\n${attrText}` : userEdit)
-      : (attrText ? `Update the character to match these attributes:\n${attrText}` : "");
-
-    if (!effectiveEdit) {
-      addToast("Enter an edit description or change attributes in the sidebar first", "info");
-      return;
-    }
-
-    busy.start("apply");
-    setGenText((p) => ({ ...p, apply: "Applying edits..." }));
-    const bibleCtx = resolveSection("bible");
-    const costumeCtx = resolveSection("costume");
-    const lockCtx = resolveSection("preservation");
-    const extra = getExtraContext();
-    try {
-      const resp = await apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
-        "/character/edit", {
-          method: "POST",
-          body: JSON.stringify({
-            description: ((identityOn ? description : "") + attrBrief).trim(),
-            age: identityOn ? age : "", race: identityOn ? race : "",
-            gender: identityOn ? gender : "", build: identityOn ? build : "",
-            edit_prompt: effectiveEdit, reference_image_b64: mainB64,
-            ref_a_b64: getImageB64("refA"), ref_b_b64: getImageB64("refB"), ref_c_b64: getImageB64("refC"),
-            mode: "quality", model_id: editModel || modelId || undefined,
-            bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
-            fusion_context: extra.fusionCtx || undefined,
-            fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
-            fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
-            style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
-            lock_constraints: lockCtx || undefined,
-          }),
-        },
-      );
-      if (resp.image_b64) {
-        const label = userEdit ? `Edit: ${userEdit.slice(0, 40)}` : "Attribute update";
-        setTabImage("main", `data:image/png;base64,${resp.image_b64}`, label);
-      } else if (resp.error) addToast(resp.error, "error");
-    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
-    busy.end("apply");
-  }, [editPrompt, description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, resolveSection, handleGenerate, getMainImageB64, getImageB64, editModel, modelId, setTabImage, addToast, busy, styleFusion]);
-
   const handleGenerateStyleFusion = useCallback(async () => {
     const mainB64 = getMainImageB64();
     const hasFusionRefs = !!(styleFusion.slots[0].image || styleFusion.slots[1].image);
@@ -1816,6 +1757,70 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
     }
   }, [description, age, race, gender, build, modelId, bible, costume, preservation, attributes, extractMode, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, addToast, busy, styleFusion, customSections]);
 
+  const handleApplyEdit = useCallback(async () => {
+    if (generationMode === "grid") {
+      handleGridGenerate();
+      return;
+    }
+
+    const identityOn = isSectionEnabled("identity");
+    const attrText = resolveSection("attributes");
+    const attrBrief = attrText ? `\n\n${attrText}` : "";
+    const userEdit = editPrompt.trim();
+
+    const mainB64 = getMainImageB64();
+    if (!mainB64) {
+      if (userEdit || attrText) {
+        handleGenerate();
+      } else {
+        addToast("Generate or load an image first, or enter a description to generate one", "info");
+      }
+      return;
+    }
+
+    const effectiveEdit = userEdit
+      ? (attrText ? `${userEdit}\n\nAlso apply these attributes:\n${attrText}` : userEdit)
+      : (attrText ? `Update the character to match these attributes:\n${attrText}` : "");
+
+    if (!effectiveEdit) {
+      addToast("Enter an edit description or change attributes in the sidebar first", "info");
+      return;
+    }
+
+    busy.start("apply");
+    setGenText((p) => ({ ...p, apply: "Applying edits..." }));
+    const bibleCtx = resolveSection("bible");
+    const costumeCtx = resolveSection("costume");
+    const lockCtx = resolveSection("preservation");
+    const extra = getExtraContext();
+    try {
+      const resp = await apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
+        "/character/edit", {
+          method: "POST",
+          body: JSON.stringify({
+            description: ((identityOn ? description : "") + attrBrief).trim(),
+            age: identityOn ? age : "", race: identityOn ? race : "",
+            gender: identityOn ? gender : "", build: identityOn ? build : "",
+            edit_prompt: effectiveEdit, reference_image_b64: mainB64,
+            ref_a_b64: getImageB64("refA"), ref_b_b64: getImageB64("refB"), ref_c_b64: getImageB64("refC"),
+            mode: "quality", model_id: editModel || modelId || undefined,
+            bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+            fusion_context: extra.fusionCtx || undefined,
+            fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+            lock_constraints: lockCtx || undefined,
+          }),
+        },
+      );
+      if (resp.image_b64) {
+        const label = userEdit ? `Edit: ${userEdit.slice(0, 40)}` : "Attribute update";
+        setTabImage("main", `data:image/png;base64,${resp.image_b64}`, label);
+      } else if (resp.error) addToast(resp.error, "error");
+    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
+    busy.end("apply");
+  }, [editPrompt, description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, resolveSection, handleGenerate, handleGridGenerate, generationMode, getMainImageB64, getImageB64, editModel, modelId, setTabImage, addToast, busy, styleFusion]);
+
   const handleGridDelete = useCallback((id: string) => {
     setGridResults((prev) => prev.filter((r) => r.id !== id));
   }, []);
@@ -2077,8 +2082,9 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
 
   // --- Character Lab keyboard shortcuts ---
   const { registerAction: regCharAction, unregisterAction: unregCharAction } = useShortcuts();
+  const activeGenerate = generationMode === "grid" ? handleGridGenerate : handleGenerate;
   const charHandlersRef = useRef({
-    generate: handleGenerate,
+    generate: activeGenerate,
     quickGen: handleQuickGenerate,
     allViews: handleGenerateAllViews,
     extract: handleExtractAttributes,
@@ -2088,7 +2094,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
     sendPS: handleSendToPS,
   });
   charHandlersRef.current = {
-    generate: handleGenerate,
+    generate: activeGenerate,
     quickGen: handleQuickGenerate,
     allViews: handleGenerateAllViews,
     extract: handleExtractAttributes,
@@ -2117,7 +2123,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
 
   // --- Voice Director command listener ---
   const voiceCmdRef = useRef({
-    generate: handleGenerate,
+    generate: activeGenerate,
     edit_image: (params: Record<string, unknown>) => { if (params.edit_prompt) setEditPrompt(String(params.edit_prompt)); setTimeout(() => handleApplyEdit(), 100); },
     extract_attributes: handleExtractAttributes,
     enhance_description: handleEnhance,
@@ -2140,7 +2146,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
     reset: handleReset,
   });
   voiceCmdRef.current = {
-    generate: handleGenerate,
+    generate: activeGenerate,
     edit_image: (params: Record<string, unknown>) => { if (params.edit_prompt) setEditPrompt(String(params.edit_prompt)); setTimeout(() => handleApplyEdit(), 100); },
     extract_attributes: handleExtractAttributes,
     enhance_description: handleEnhance,

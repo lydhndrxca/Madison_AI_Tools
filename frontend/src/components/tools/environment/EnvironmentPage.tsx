@@ -581,29 +581,6 @@ export function EnvironmentPage({ instanceId = 0, active = true, projectUid }: E
   }, [tabs, getImageB64, getMainImageB64, description, envName, biome, gameContext, timeOfDay, seasonWeather, envScale, attributes, styleFusion, preservation, modelId, extractMode, isSectionEnabled, styleLibraryFolder, styleLibraryFolders, customSections.getPromptContributions, customSections.getImageAttachments]);
 
   // Apply edit handler (uses /env/generate with edit_prompt)
-  const handleApplyEdit = useCallback(async () => {
-    if (!editPrompt.trim()) return;
-    const mainB64 = getMainImageB64();
-    if (!mainB64) { addToast("Load an image on Main Stage first", "info"); return; }
-    busy.start("apply");
-    try {
-      const body = {
-        ...buildRequestBody("main"),
-        reference_image_b64: mainB64,
-        edit_prompt: editPrompt,
-        model_id: editModel || modelId || undefined,
-      };
-      const res = await apiFetch<{ image_b64?: string; width?: number; height?: number; error?: string }>(
-        "/env/generate", { method: "POST", body: JSON.stringify(body) },
-      );
-      if (res.image_b64) {
-        setTabImage("main", `data:image/png;base64,${res.image_b64}`, `Edit: ${editPrompt.slice(0, 40)}`);
-        setLastSentPrompt(buildPromptPreview());
-      } else if (res.error) addToast(res.error, "error");
-    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
-    busy.end("apply");
-  }, [editPrompt, getMainImageB64, buildRequestBody, editModel, modelId, setTabImage, addToast, busy, buildPromptPreview]);
-
   // --- Generate ---
   const handleGenerate = useCallback(async (viewType?: string) => {
     const vt = viewType || VIEW_TYPE_MAP[activeTab] || "main";
@@ -706,6 +683,33 @@ export function EnvironmentPage({ instanceId = 0, active = true, projectUid }: E
     } catch (e) { addToast(e instanceof Error ? e.message : "Generation failed", "error"); }
     busy.end("gen");
   }, [buildRequestBody, addToast, busy]);
+
+  const handleApplyEdit = useCallback(async () => {
+    if (generationMode === "grid") {
+      handleGridGenerate();
+      return;
+    }
+    if (!editPrompt.trim()) return;
+    const mainB64 = getMainImageB64();
+    if (!mainB64) { addToast("Load an image on Main Stage first", "info"); return; }
+    busy.start("apply");
+    try {
+      const body = {
+        ...buildRequestBody("main"),
+        reference_image_b64: mainB64,
+        edit_prompt: editPrompt,
+        model_id: editModel || modelId || undefined,
+      };
+      const res = await apiFetch<{ image_b64?: string; width?: number; height?: number; error?: string }>(
+        "/env/generate", { method: "POST", body: JSON.stringify(body) },
+      );
+      if (res.image_b64) {
+        setTabImage("main", `data:image/png;base64,${res.image_b64}`, `Edit: ${editPrompt.slice(0, 40)}`);
+        setLastSentPrompt(buildPromptPreview());
+      } else if (res.error) addToast(res.error, "error");
+    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
+    busy.end("apply");
+  }, [editPrompt, generationMode, handleGridGenerate, getMainImageB64, buildRequestBody, editModel, modelId, setTabImage, addToast, busy, buildPromptPreview]);
 
   const handleGridDelete = useCallback((id: string) => {
     setGridResults((prev) => prev.filter((r) => r.id !== id));
@@ -1125,8 +1129,9 @@ export function EnvironmentPage({ instanceId = 0, active = true, projectUid }: E
   }, [active, registerAction, unregisterAction, handleGenerate, handleExtractAttributes, handleEnhanceDescription, handleRandomizeFull, handleReimagine, handleGenerateAllViews, handleSendToPS]);
 
   // --- Voice Director command listener ---
+  const activeGenerate = generationMode === "grid" ? handleGridGenerate : () => handleGenerate();
   const voiceCmdRef = useRef({
-    generate: () => handleGenerate(),
+    generate: activeGenerate,
     extract_attributes: handleExtractAttributes,
     enhance_description: handleEnhanceDescription,
     randomize: handleRandomizeFull,
@@ -1149,7 +1154,7 @@ export function EnvironmentPage({ instanceId = 0, active = true, projectUid }: E
     reset: handleReset,
   });
   voiceCmdRef.current = {
-    generate: () => handleGenerate(),
+    generate: activeGenerate,
     extract_attributes: handleExtractAttributes,
     enhance_description: handleEnhanceDescription,
     randomize: handleRandomizeFull,

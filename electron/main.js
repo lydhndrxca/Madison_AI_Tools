@@ -60,7 +60,7 @@ function startBackend() {
   backendProcess = spawn("python", [
     "-m", "uvicorn",
     "pubg_madison_ai_suite.api.server:app",
-    "--host", "127.0.0.1",
+    "--host", "0.0.0.0",
     "--port", String(API_PORT),
   ], { cwd: ROOT, env, stdio: "pipe", windowsHide: true });
 

@@ -19,6 +19,8 @@ import {
   useGLTF,
 } from "@react-three/drei";
 import * as THREE from "three";
+import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
+import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import {
   ModelWorkshopProvider,
   useModelWorkshop,
@@ -120,12 +122,48 @@ function CameraCapture() {
   return null;
 }
 
-/* ── GLB Model Scene ── */
+function detectModelFormat(url: string): "glb" | "fbx" | "obj" | "gltf" {
+  const lower = url.toLowerCase();
+  const hash = lower.split("#").pop() ?? "";
+  if (hash.endsWith(".fbx") || lower.replace(/[?#].*$/, "").endsWith(".fbx")) return "fbx";
+  if (hash.endsWith(".obj") || lower.replace(/[?#].*$/, "").endsWith(".obj")) return "obj";
+  if (hash.endsWith(".gltf") || lower.replace(/[?#].*$/, "").endsWith(".gltf")) return "gltf";
+  return "glb";
+}
+
+function WorkshopGLTFScene({ url, onScene }: { url: string; onScene: (s: THREE.Group) => void }) {
+  const cleanUrl = url.split("#")[0];
+  const { scene } = useGLTF(cleanUrl);
+  useEffect(() => { onScene(scene); }, [scene, onScene]);
+  return null;
+}
+
+function WorkshopFBXOBJScene({ url, fmt, onScene }: { url: string; fmt: "fbx" | "obj"; onScene: (s: THREE.Group) => void }) {
+  const cleanUrl = url.split("#")[0];
+  useEffect(() => {
+    const loader = fmt === "fbx" ? new FBXLoader() : new OBJLoader();
+    loader.load(
+      cleanUrl,
+      (result) => {
+        if (fmt === "fbx") (result as THREE.Group).scale.setScalar(0.01);
+        onScene(result as THREE.Group);
+      },
+      undefined,
+      () => { /* error handled by error boundary */ },
+    );
+  }, [cleanUrl, fmt, onScene]);
+  return null;
+}
+
+/* ── Model Scene ── */
 
 function WorkshopModelScene({ url }: { url: string }) {
   const { state, actions } = useModelWorkshop();
-  const { scene } = useGLTF(url);
-  const clonedScene = useMemo(() => scene.clone(true), [scene]);
+  const fmt = useMemo(() => detectModelFormat(url), [url]);
+  const isGltf = fmt === "glb" || fmt === "gltf";
+  const [rawScene, setRawScene] = useState<THREE.Group | null>(null);
+  const onScene = useCallback((s: THREE.Group) => setRawScene(s), []);
+  const clonedScene = useMemo(() => rawScene?.clone(true) ?? null, [rawScene]);
   const groupRef = useRef<THREE.Group>(null);
 
   useEffect(() => {
@@ -143,6 +181,7 @@ function WorkshopModelScene({ url }: { url: string }) {
   }, [clonedScene, actions]);
 
   useLayoutEffect(() => {
+    if (!clonedScene) return;
     clonedScene.traverse((child) => {
       if (!(child instanceof THREE.Mesh)) return;
       if (state.showNormals) {
@@ -166,11 +205,20 @@ function WorkshopModelScene({ url }: { url: string }) {
   }, [state.position, state.rotation, state.scale]);
 
   return (
-    <group ref={groupRef}>
-      <Center disableY disableZ={false}>
-        <primitive object={clonedScene} />
-      </Center>
-    </group>
+    <>
+      {isGltf ? (
+        <WorkshopGLTFScene url={url} onScene={onScene} />
+      ) : (
+        <WorkshopFBXOBJScene url={url} fmt={fmt as "fbx" | "obj"} onScene={onScene} />
+      )}
+      {clonedScene && (
+        <group ref={groupRef}>
+          <Center disableY disableZ={false}>
+            <primitive object={clonedScene} />
+          </Center>
+        </group>
+      )}
+    </>
   );
 }
 
@@ -630,7 +678,8 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
     e.target.value = "";
     setLoading(true);
     try {
-      const url = URL.createObjectURL(file);
+      const blobUrl = URL.createObjectURL(file);
+      const url = `${blobUrl}#${file.name}`;
       setModelUrl(url);
       setSelectedJobId(null);
     } catch { /* ignore */ }
@@ -670,9 +719,9 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
             color: "var(--color-text-secondary)", display: "inline-flex", alignItems: "center", gap: 4,
           }}
         >
-          <Upload size={11} /> Import .glb
+          <Upload size={11} /> Import Model
         </button>
-        <input ref={fileInputRef} type="file" accept=".glb,.gltf" className="hidden" onChange={handleFileImport} />
+        <input ref={fileInputRef} type="file" accept=".glb,.gltf,.fbx,.obj" className="hidden" onChange={handleFileImport} />
 
         <div className="w-px h-5 mx-1" style={{ background: "var(--color-border)" }} />
 

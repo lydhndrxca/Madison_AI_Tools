@@ -310,6 +310,32 @@ class RoomManager:
 room_manager = RoomManager()
 
 
+# ── Network info ─────────────────────────────────────────────────
+
+@router.get("/my-ip")
+def get_my_ip() -> dict:
+    """Return this machine's local network IPs so the host can share them."""
+    import socket
+    ips: list[str] = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            addr = info[4][0]
+            if addr and not addr.startswith("127."):
+                ips.append(addr)
+        ips = list(dict.fromkeys(ips))
+    except Exception:
+        pass
+    if not ips:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ips = [s.getsockname()[0]]
+            s.close()
+        except Exception:
+            pass
+    return {"ips": ips, "port": int(__import__("os").environ.get("MADISON_API_PORT", "8420"))}
+
+
 # ── Room REST endpoints ──────────────────────────────────────────
 
 class CreateRoomReq(BaseModel):

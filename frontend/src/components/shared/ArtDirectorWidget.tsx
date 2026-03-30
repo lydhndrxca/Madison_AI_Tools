@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
   Bot, X, Settings, Send, Trash2, ChevronDown, ChevronUp,
   Zap, Brain, Power, Save, ImagePlus, Paperclip, Check, Sparkles, Search,
-  MessageCircle, Lightbulb, Square, CheckSquare,
+  MessageCircle, Lightbulb, Square, CheckSquare, Eye, EyeOff,
 } from "lucide-react";
 import { useArtDirector, type ChatMessage } from "@/hooks/ArtDirectorContext";
 import { extractDeepSearchQuery, triggerDeepSearch, DS_EVT, dsDispatch, confettiBurst, loadDeepSearchSources } from "@/lib/deepSearchEvents";
@@ -86,13 +86,33 @@ function MessageBubble({ msg, onApply }: { msg: ChatMessage; onApply: ((suggesti
     setAppliedChunks(new Set(chunks.map((_, i) => i)));
   }, [onApply, chunks]);
 
+  if (isUser && msg.autoObserve) {
+    return (
+      <div className="flex justify-center mb-1">
+        <div className="flex items-center gap-1 px-2 py-0.5 rounded-full" style={{ background: "rgba(139,92,246,0.08)", border: "1px solid rgba(139,92,246,0.15)" }}>
+          <Eye className="h-2.5 w-2.5" style={{ color: "#a78bfa" }} />
+          <span className="text-[8px] font-medium" style={{ color: "#a78bfa" }}>New image detected — analyzing</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-2`}>
       <div className="max-w-[85%]">
         {!isUser && (
           <div className="flex items-center gap-1 mb-0.5">
-            <Bot className="h-3 w-3" style={{ color: "var(--color-text-muted)" }} />
-            <span className="text-[9px] font-medium" style={{ color: "var(--color-text-muted)" }}>Director</span>
+            {msg.autoObserve ? (
+              <>
+                <Eye className="h-3 w-3" style={{ color: "#a78bfa" }} />
+                <span className="text-[9px] font-medium" style={{ color: "#a78bfa" }}>Auto-Observe</span>
+              </>
+            ) : (
+              <>
+                <Bot className="h-3 w-3" style={{ color: "var(--color-text-muted)" }} />
+                <span className="text-[9px] font-medium" style={{ color: "var(--color-text-muted)" }}>Director</span>
+              </>
+            )}
           </div>
         )}
 
@@ -180,6 +200,7 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
     messages, sendMessage, clearChat, isTyping, cancelTyping,
     saveTranscript, onApplyFeedback,
     currentImage, attributesContext,
+    autoObservePaused, setAutoObservePaused,
   } = useArtDirector();
 
   const [expanded, setExpanded] = useState(false);
@@ -349,7 +370,7 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
   if (!expanded) {
     const adBorder = `1px solid ${config.enabled ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.1)"}`;
     return (
-      <div className="absolute bottom-3 left-3 z-30 flex items-end gap-0">
+      <div className="fixed bottom-3 left-3 z-50 flex items-end gap-0">
         {/* Widget column */}
         <div className="flex flex-col w-max">
           <div
@@ -383,8 +404,12 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
               <div className="text-[11px] font-semibold" style={{ color: config.enabled ? "var(--color-foreground)" : "var(--color-text-secondary)" }}>
                 Art Director
               </div>
-              <div className="text-[9px]" style={{ color: "var(--color-text-muted)" }}>
-                {config.enabled ? (config.mode === "deep" ? "Deep Thinking" : "Fast Mode") : "Off"}
+              <div className="text-[9px]" style={{ color: config.enabled && !autoObservePaused ? "#a78bfa" : "var(--color-text-muted)" }}>
+                {config.enabled
+                  ? autoObservePaused
+                    ? (config.mode === "deep" ? "Deep Thinking" : "Fast Mode")
+                    : "Watching Stage"
+                  : "Off"}
               </div>
             </div>
             <button
@@ -520,7 +545,7 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
 
   return (
     <div
-      className="absolute bottom-3 left-3 z-30 flex flex-col rounded-lg overflow-hidden"
+      className="fixed bottom-3 left-3 z-50 flex flex-col rounded-lg overflow-hidden"
       style={{
         width: 380,
         height: 480,
@@ -549,6 +574,21 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
         >
           {config.mode === "deep" ? <Brain className="h-3 w-3" /> : <Zap className="h-3 w-3" />}
           {config.mode === "deep" ? "Deep" : "Fast"}
+        </button>
+
+        {/* Auto-observe toggle */}
+        <button
+          onClick={() => setAutoObservePaused(!autoObservePaused)}
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] cursor-pointer"
+          style={{
+            background: !autoObservePaused && config.enabled ? "rgba(139,92,246,0.15)" : "rgba(255,255,255,0.08)",
+            color: !autoObservePaused && config.enabled ? "#a78bfa" : "var(--color-text-muted)",
+            border: !autoObservePaused && config.enabled ? "1px solid rgba(139,92,246,0.4)" : "1px solid var(--color-border)",
+          }}
+          title={autoObservePaused ? "Auto-observe is paused — click to resume watching new images" : "Auto-observe is active — director reacts to every new generation"}
+        >
+          {autoObservePaused ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+          {autoObservePaused ? "Watch Off" : "Watching"}
         </button>
 
         {/* On/Off */}
@@ -582,7 +622,9 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
             <Bot className="h-8 w-8" style={{ color: "var(--color-text-muted)", opacity: 0.3 }} />
             <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
               {config.enabled
-                ? "Send a message or paste an image to start."
+                ? autoObservePaused
+                  ? "Send a message or paste an image to start."
+                  : "Watching the stage — will react to new generations automatically."
                 : "Turn on the Art Director to start chatting."}
             </p>
           </div>

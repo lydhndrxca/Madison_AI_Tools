@@ -130,7 +130,9 @@ export function ArtboardCanvas() {
   const [joinCode, setJoinCode] = useState("");
   const [joinPassword, setJoinPassword] = useState("");
   const [joinUserName, setJoinUserName] = useState("");
+  const [joinRemoteHost, setJoinRemoteHost] = useState("");
   const [activeRooms, setActiveRooms] = useState<{ code: string; name: string; user_count: number; host: string }[]>([]);
+  const [hostIpInfo, setHostIpInfo] = useState<{ ips: string[]; port: number } | null>(null);
 
   // Save/Load modal state
   const [saveLoadModal, setSaveLoadModal] = useState<"save" | "load" | null>(null);
@@ -552,16 +554,17 @@ export function ArtboardCanvas() {
       setCredentials(shareUserName.trim(), sharePassword || undefined);
       joinRoom(res.code, shareUserName.trim(), sharePassword || undefined);
       addToast(`Room created: ${res.code}`, "success");
-      setShareModal(null);
+      try { setHostIpInfo(await apiFetch<{ ips: string[]; port: number }>("/artboard/my-ip")); } catch { /* */ }
     } catch { addToast("Failed to create room", "error"); }
   }, [shareUserName, shareRoomName, sharePassword, items, joinRoom, addToast, setCredentials]);
 
   const handleJoinRoom = useCallback(() => {
     if (!joinCode.trim() || !joinUserName.trim()) return;
     setCredentials(joinUserName.trim(), joinPassword || undefined);
-    joinRoom(joinCode.trim().toUpperCase(), joinUserName.trim(), joinPassword || undefined);
+    const rh = joinRemoteHost.trim() || undefined;
+    joinRoom(joinCode.trim().toUpperCase(), joinUserName.trim(), joinPassword || undefined, rh);
     setShareModal(null);
-  }, [joinCode, joinUserName, joinPassword, joinRoom, setCredentials]);
+  }, [joinCode, joinUserName, joinPassword, joinRemoteHost, joinRoom, setCredentials]);
 
   const openShareModal = useCallback(async () => {
     setShareModal("share");
@@ -572,7 +575,7 @@ export function ArtboardCanvas() {
 
   const openJoinModal = useCallback(async () => {
     setShareModal("join");
-    setJoinCode(""); setJoinPassword(""); setJoinUserName("");
+    setJoinCode(""); setJoinPassword(""); setJoinUserName(""); setJoinRemoteHost("");
     try { setActiveRooms(await apiFetch<typeof activeRooms>("/artboard/rooms")); } catch { setActiveRooms([]); }
   }, []);
 
@@ -1054,20 +1057,62 @@ export function ArtboardCanvas() {
             {shareModal === "share" ? (
               <>
                 <div className="text-sm font-semibold" style={{ color: "var(--color-foreground)" }}>Share Art Table</div>
-                <input className="w-full px-2 py-1.5 text-xs rounded" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} placeholder="Room name\u2026" value={shareRoomName} onChange={(e) => setShareRoomName(e.target.value)} />
-                <input className="w-full px-2 py-1.5 text-xs rounded" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} placeholder="Your display name\u2026" value={shareUserName} onChange={(e) => setShareUserName(e.target.value)} autoFocus />
-                <input className="w-full px-2 py-1.5 text-xs rounded" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} placeholder="Password (optional)" value={sharePassword} onChange={(e) => setSharePassword(e.target.value)} />
-                <button onClick={handleCreateRoom} disabled={!shareUserName.trim()} className="w-full px-3 py-1.5 text-xs rounded font-medium cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed" style={{ background: "rgba(80,160,255,0.9)", color: "#fff", border: "none" }}>Create Shared Room</button>
+                {mode === "shared" && roomId ? (
+                  <>
+                    <div className="rounded p-3 text-center space-y-2" style={{ background: "rgba(80,160,255,0.08)", border: "1px solid rgba(80,160,255,0.3)" }}>
+                      <div className="text-[10px] uppercase tracking-wider font-medium" style={{ color: "var(--color-text-muted)" }}>Room Code</div>
+                      <div className="text-2xl font-mono font-bold tracking-[0.3em]" style={{ color: "rgba(80,160,255,1)" }}>{roomId}</div>
+                    </div>
+                    {hostIpInfo && hostIpInfo.ips.length > 0 && (
+                      <div className="rounded p-3 space-y-1.5" style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.3)" }}>
+                        <div className="text-[10px] uppercase tracking-wider font-medium" style={{ color: "rgba(34,197,94,0.8)" }}>
+                          Share this with the person joining
+                        </div>
+                        {hostIpInfo.ips.map((ip) => (
+                          <div key={ip} className="flex items-center gap-2">
+                            <code className="text-xs font-mono font-bold flex-1" style={{ color: "var(--color-text-primary)" }}>
+                              {ip}:{hostIpInfo.port}
+                            </code>
+                            <button
+                              className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
+                              style={{ background: "rgba(34,197,94,0.2)", color: "#4ade80", border: "1px solid rgba(34,197,94,0.3)" }}
+                              onClick={() => { navigator.clipboard?.writeText(`${ip}:${hostIpInfo.port}`); addToast("Copied!", "success"); }}
+                            >Copy</button>
+                          </div>
+                        ))}
+                        <div className="text-[9px] mt-1" style={{ color: "var(--color-text-muted)" }}>
+                          They enter this as "Host Address" when joining. Same network = use these IPs directly.
+                          Different networks = you may need port forwarding on your router (port {hostIpInfo.port}) and your public IP.
+                        </div>
+                      </div>
+                    )}
+                    <button onClick={() => { setShareModal(null); setHostIpInfo(null); }} className="w-full px-3 py-1.5 text-xs rounded font-medium cursor-pointer" style={{ background: "rgba(80,160,255,0.9)", color: "#fff", border: "none" }}>Done</button>
+                  </>
+                ) : (
+                  <>
+                    <input className="w-full px-2 py-1.5 text-xs rounded" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} placeholder="Room name\u2026" value={shareRoomName} onChange={(e) => setShareRoomName(e.target.value)} />
+                    <input className="w-full px-2 py-1.5 text-xs rounded" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} placeholder="Your display name\u2026" value={shareUserName} onChange={(e) => setShareUserName(e.target.value)} autoFocus />
+                    <input className="w-full px-2 py-1.5 text-xs rounded" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} placeholder="Password (optional)" value={sharePassword} onChange={(e) => setSharePassword(e.target.value)} />
+                    <button onClick={handleCreateRoom} disabled={!shareUserName.trim()} className="w-full px-3 py-1.5 text-xs rounded font-medium cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed" style={{ background: "rgba(80,160,255,0.9)", color: "#fff", border: "none" }}>Create Shared Room</button>
+                  </>
+                )}
               </>
             ) : (
               <>
                 <div className="text-sm font-semibold" style={{ color: "var(--color-foreground)" }}>Join Shared Art Table</div>
+                <div className="rounded p-2 space-y-1.5" style={{ background: "rgba(255,165,0,0.06)", border: "1px solid rgba(255,165,0,0.2)" }}>
+                  <label className="text-[10px] font-medium block" style={{ color: "rgba(255,165,0,0.8)" }}>Host Address (required for remote)</label>
+                  <input className="w-full px-2 py-1.5 text-xs rounded font-mono" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} placeholder="e.g. 192.168.1.50:8420 or leave blank if same machine" value={joinRemoteHost} onChange={(e) => setJoinRemoteHost(e.target.value)} />
+                  <div className="text-[9px]" style={{ color: "var(--color-text-muted)" }}>
+                    The host sees their address after creating a room. Enter it here to connect remotely.
+                  </div>
+                </div>
                 <input className="w-full px-2 py-1.5 text-xs rounded font-mono tracking-widest" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} placeholder="Room code\u2026" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} autoFocus />
                 <input className="w-full px-2 py-1.5 text-xs rounded" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} placeholder="Your display name\u2026" value={joinUserName} onChange={(e) => setJoinUserName(e.target.value)} />
                 <input className="w-full px-2 py-1.5 text-xs rounded" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} placeholder="Password (if required)" value={joinPassword} onChange={(e) => setJoinPassword(e.target.value)} />
                 {activeRooms.length > 0 && (
                   <div>
-                    <label className="text-[10px] font-medium block mb-1" style={{ color: "var(--color-text-muted)" }}>Active Rooms</label>
+                    <label className="text-[10px] font-medium block mb-1" style={{ color: "var(--color-text-muted)" }}>Active Rooms (local server)</label>
                     <div className="max-h-[120px] overflow-y-auto space-y-0.5">
                       {activeRooms.map((r) => (
                         <button key={r.code} className="w-full text-left px-2 py-1 text-[11px] rounded cursor-pointer" style={{ background: "transparent", border: "none", color: "var(--color-text-primary)" }} onClick={() => setJoinCode(r.code)} onMouseEnter={(e) => { (e.currentTarget).style.background = "rgba(255,255,255,0.06)"; }} onMouseLeave={(e) => { (e.currentTarget).style.background = "transparent"; }}>

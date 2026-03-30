@@ -91,9 +91,10 @@ export interface ArtboardContextValue {
   // Collab
   mode: "local" | "shared";
   roomId: string | null;
+  remoteHost: string | null;
   roomUsers: RoomUser[];
   remoteCursors: Map<string, RemoteCursor>;
-  joinRoom: (roomId: string, userName: string, password?: string) => void;
+  joinRoom: (roomId: string, userName: string, password?: string, remoteHost?: string) => void;
   leaveRoom: () => void;
   setDeltaListener: (listener: ((delta: ArtboardDelta) => void) | null) => void;
   applyRemoteDelta: (delta: ArtboardDelta) => void;
@@ -195,6 +196,7 @@ export function ArtboardProvider({ children }: { children: ReactNode }) {
   // Collab state
   const [mode, setMode] = useState<"local" | "shared">("local");
   const [roomId, setRoomId] = useState<string | null>(null);
+  const [remoteHost, setRemoteHost] = useState<string | null>(null);
   const [roomUsers, setRoomUsers] = useState<RoomUser[]>([]);
   const [remoteCursors, setRemoteCursors] = useState<Map<string, RemoteCursor>>(new Map());
   const deltaListenerRef = useRef<((delta: ArtboardDelta) => void) | null>(null);
@@ -394,18 +396,19 @@ export function ArtboardProvider({ children }: { children: ReactNode }) {
 
   // ---- Collab ----
 
-  const joinRoom = useCallback((rid: string, userName: string, _password?: string) => {
+  const joinRoom = useCallback((rid: string, userName: string, _password?: string, _remoteHost?: string) => {
     setMode("shared");
     setRoomId(rid);
+    setRemoteHost(_remoteHost?.trim() || null);
     setRoomUsers([]);
     setRemoteCursors(new Map());
-    // The actual WS connection is managed by useArtboardSync hook
     void userName; void _password;
   }, []);
 
   const leaveRoom = useCallback(() => {
     setMode("local");
     setRoomId(null);
+    setRemoteHost(null);
     setRoomUsers([]);
     setRemoteCursors(new Map());
   }, []);
@@ -441,7 +444,7 @@ export function ArtboardProvider({ children }: { children: ReactNode }) {
       undo, redo, clearBoard, canUndo, canRedo,
       boards, activeBoardId, createBoard, switchBoard, renameBoard, deleteBoard, duplicateBoard,
       loadItemsDirectly,
-      mode, roomId, roomUsers, remoteCursors,
+      mode, roomId, remoteHost, roomUsers, remoteCursors,
       joinRoom, leaveRoom, setDeltaListener, applyRemoteDelta, setRoomUsers, setRemoteCursors,
     }}>
       {children}

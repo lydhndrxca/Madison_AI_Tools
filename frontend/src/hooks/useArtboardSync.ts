@@ -1,7 +1,11 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { useArtboard, type ArtboardDelta, type RoomUser, type RemoteCursor } from "./ArtboardContext";
 
-function getWsBase(): string {
+function getWsBase(remoteHost?: string | null): string {
+  if (remoteHost) {
+    const host = remoteHost.includes(":") ? remoteHost : `${remoteHost}:8420`;
+    return `ws://${host}`;
+  }
   if (window.location.protocol === "file:") return "ws://127.0.0.1:8420";
   return `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
 }
@@ -14,7 +18,7 @@ const CURSOR_THROTTLE_MS = 66;
  */
 export function useArtboardSync() {
   const {
-    mode, roomId, applyRemoteDelta, setDeltaListener, setRoomUsers, setRemoteCursors, leaveRoom,
+    mode, roomId, remoteHost, applyRemoteDelta, setDeltaListener, setRoomUsers, setRemoteCursors, leaveRoom,
   } = useArtboard();
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -53,7 +57,7 @@ export function useArtboardSync() {
       return;
     }
 
-    const wsBase = getWsBase();
+    const wsBase = getWsBase(remoteHost);
     const params = new URLSearchParams();
     params.set("user", userNameRef.current || "Guest");
     if (passwordRef.current) params.set("password", passwordRef.current);
@@ -130,7 +134,7 @@ export function useArtboardSync() {
       wsRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, roomId, reconnectTick]);
+  }, [mode, roomId, remoteHost, reconnectTick]);
 
   return { send, sendCursor, setCredentials, wsRef };
 }

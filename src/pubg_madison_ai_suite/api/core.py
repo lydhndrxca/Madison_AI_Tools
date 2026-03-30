@@ -350,6 +350,24 @@ def b64_to_image(data: str) -> Image.Image:
     return Image.open(io.BytesIO(base64.b64decode(data)))
 
 
+def detect_aspect_ratio(w: int, h: int) -> str:
+    """Pick the closest standard Gemini aspect ratio from pixel dimensions."""
+    if w <= 0 or h <= 0:
+        return "1:1"
+    ratio = w / h
+    candidates = [
+        (1.0,       "1:1"),
+        (16 / 9,    "16:9"),
+        (9 / 16,    "9:16"),
+        (4 / 3,     "4:3"),
+        (3 / 4,     "3:4"),
+        (3 / 2,     "3:2"),
+        (2 / 3,     "2:3"),
+    ]
+    best = min(candidates, key=lambda c: abs(ratio - c[0]))
+    return best[1]
+
+
 def image_to_inline_data(img: Image.Image) -> dict:
     buf = io.BytesIO()
     img.save(buf, format="PNG")

@@ -21,6 +21,8 @@ import {
   useGLTF,
 } from "@react-three/drei";
 import * as THREE from "three";
+import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
+import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import {
   Box,
   ChevronDown,
@@ -34,8 +36,18 @@ import {
 
 export type ModelViewerExportFormat = "glb" | "obj" | "fbx" | "usdz";
 
+/** Texture map to apply to imported models (keyed by channel name). */
+export interface TextureMap {
+  diffuse?: string;
+  normal?: string;
+  roughness?: string;
+  metalness?: string;
+  ao?: string;
+  emissive?: string;
+}
+
 export interface ModelViewerProps {
-  /** URL or blob URL to a GLB file */
+  /** URL or blob URL to a GLB / GLTF / FBX / OBJ file */
   modelUrl: string | null;
   /** Optional thumbnail while loading */
   thumbnailUrl?: string;
@@ -43,6 +55,17 @@ export interface ModelViewerProps {
   height?: number | string;
   /** Called when user picks an export format */
   onExport?: (format: ModelViewerExportFormat, modelUrl: string) => void;
+  /** Optional texture URLs to apply to the model */
+  textures?: TextureMap;
+}
+
+function detectFormat(url: string): "glb" | "fbx" | "obj" | "gltf" {
+  const lower = url.toLowerCase();
+  const hash = lower.split("#").pop() ?? "";
+  if (hash.endsWith(".fbx") || lower.replace(/[?#].*$/, "").endsWith(".fbx")) return "fbx";
+  if (hash.endsWith(".obj") || lower.replace(/[?#].*$/, "").endsWith(".obj")) return "obj";
+  if (hash.endsWith(".gltf") || lower.replace(/[?#].*$/, "").endsWith(".gltf")) return "gltf";
+  return "glb";
 }
 
 type ViewMode = "solid" | "wireframe" | "normals";
@@ -101,6 +124,93 @@ function LoadedModel({ url, viewMode }: { url: string; viewMode: ViewMode }) {
   );
 }
 
+function applyTexturesToGroup(group: THREE.Group | THREE.Object3D, textures?: TextureMap) {
+  if (!textures) return;
+  const loader = new THREE.TextureLoader();
+  const maps: Partial<Record<string, THREE.Texture>> = {};
+  const load = (url?: string) => url ? loader.load(url) : undefined;
+  if (textures.diffuse) maps.map = load(textures.diffuse);
+  if (textures.normal) maps.normalMap = load(textures.normal);
+  if (textures.roughness) maps.roughnessMap = load(textures.roughness);
+  if (textures.metalness) maps.metalnessMap = load(textures.metalness);
+  if (textures.ao) maps.aoMap = load(textures.ao);
+  if (textures.emissive) maps.emissiveMap = load(textures.emissive);
+  if (Object.keys(maps).length === 0) return;
+
+  group.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      const mat = new THREE.MeshStandardMaterial();
+      if (maps.map) mat.map = maps.map;
+      if (maps.normalMap) mat.normalMap = maps.normalMap;
+      if (maps.roughnessMap) mat.roughnessMap = maps.roughnessMap;
+      if (maps.metalnessMap) { mat.metalnessMap = maps.metalnessMap; mat.metalness = 1; }
+      if (maps.aoMap) mat.aoMap = maps.aoMap;
+      if (maps.emissiveMap) { mat.emissiveMap = maps.emissiveMap; mat.emissive = new THREE.Color(1, 1, 1); }
+      mat.needsUpdate = true;
+      child.material = mat;
+    }
+  });
+}
+
+function LoadedFBX({ url, viewMode, textures }: { url: string; viewMode: ViewMode; textures?: TextureMap }) {
+  const [root, setRoot] = useState<THREE.Group | null>(null);
+  const cleanUrl = url.split("#")[0];
+
+  useEffect(() => {
+    const loader = new FBXLoader();
+    loader.load(
+      cleanUrl,
+      (fbx) => {
+        fbx.scale.setScalar(0.01);
+        applyTexturesToGroup(fbx, textures);
+        setRoot(fbx);
+      },
+      undefined,
+      (err) => { throw new Error(`FBX load failed: ${err}`); },
+    );
+    return () => { setRoot(null); };
+  }, [url, textures]);
+
+  useLayoutEffect(() => {
+    if (!root) return;
+    root.traverse((child) => {
+      if (child instanceof THREE.Mesh) applyViewModeToMesh(child, viewMode);
+    });
+  }, [root, viewMode]);
+
+  if (!root) return null;
+  return <Center><primitive object={root} /></Center>;
+}
+
+function LoadedOBJ({ url, viewMode, textures }: { url: string; viewMode: ViewMode; textures?: TextureMap }) {
+  const [root, setRoot] = useState<THREE.Group | null>(null);
+  const cleanUrl = url.split("#")[0];
+
+  useEffect(() => {
+    const loader = new OBJLoader();
+    loader.load(
+      cleanUrl,
+      (obj) => {
+        applyTexturesToGroup(obj, textures);
+        setRoot(obj);
+      },
+      undefined,
+      (err) => { throw new Error(`OBJ load failed: ${err}`); },
+    );
+    return () => { setRoot(null); };
+  }, [url, textures]);
+
+  useLayoutEffect(() => {
+    if (!root) return;
+    root.traverse((child) => {
+      if (child instanceof THREE.Mesh) applyViewModeToMesh(child, viewMode);
+    });
+  }, [root, viewMode]);
+
+  if (!root) return null;
+  return <Center><primitive object={root} /></Center>;
+}
+
 function CameraControlsWithReset({
   resetRef,
 }: {
@@ -140,11 +250,15 @@ function ViewerScene({
   modelUrl,
   viewMode,
   resetRef,
+  textures,
 }: {
   modelUrl: string;
   viewMode: ViewMode;
   resetRef: MutableRefObject<(() => void) | null>;
+  textures?: TextureMap;
 }) {
+  const fmt = useMemo(() => detectFormat(modelUrl), [modelUrl]);
+
   return (
     <>
       <color attach="background" args={["#1a1a1c"]} />
@@ -164,7 +278,13 @@ function ViewerScene({
         sectionColor="#5a5a62"
         cellColor="#3d3d44"
       />
-      <LoadedModel url={modelUrl} viewMode={viewMode} />
+      {fmt === "fbx" ? (
+        <LoadedFBX url={modelUrl} viewMode={viewMode} textures={textures} />
+      ) : fmt === "obj" ? (
+        <LoadedOBJ url={modelUrl} viewMode={viewMode} textures={textures} />
+      ) : (
+        <LoadedModel url={modelUrl} viewMode={viewMode} />
+      )}
       <CameraControlsWithReset resetRef={resetRef} />
     </>
   );
@@ -223,6 +343,7 @@ export function ModelViewer({
   thumbnailUrl,
   height = 360,
   onExport,
+  textures,
 }: ModelViewerProps) {
   const [viewMode, setViewMode] = useState<ViewMode>("solid");
   const [exportOpen, setExportOpen] = useState(false);
@@ -433,6 +554,7 @@ export function ModelViewer({
                       modelUrl={modelUrl}
                       viewMode={viewMode}
                       resetRef={resetCameraRef}
+                      textures={textures}
                     />
                   </Canvas>
                 </div>
@@ -450,7 +572,7 @@ export function ModelViewer({
             No model loaded
           </span>
           <span className="text-[10px] text-center max-w-[220px]" style={{ color: "var(--color-text-muted)" }}>
-            Provide a GLB or GLTF URL to preview it here.
+            Provide a GLB, GLTF, FBX, or OBJ file to preview it here.
           </span>
         </div>
       )}

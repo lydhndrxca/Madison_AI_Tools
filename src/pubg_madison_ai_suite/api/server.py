@@ -70,5 +70,5 @@ async def ws_progress(ws: WebSocket):
 if __name__ == "__main__":
     port = int(os.environ.get("MADISON_API_PORT", "8420"))
     print(f"[Madison API] Starting on port {port}")
-    host = os.environ.get("MADISON_BIND_HOST", "127.0.0.1")
+    host = os.environ.get("MADISON_BIND_HOST", "0.0.0.0")
     uvicorn.run(app, host=host, port=port, log_level="info")

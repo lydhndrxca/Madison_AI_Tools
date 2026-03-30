@@ -875,13 +875,14 @@ def _do_upscale(req: UpscaleRequest) -> CharacterResponse:
 
     try:
         source = core.b64_to_image(req.image_b64)
+        ar = core.detect_aspect_ratio(source.width, source.height)
         factor_hint = {"x4": "maximum", "x3": "high"}.get(req.scale_factor, "moderate")
 
         if req.context.strip():
             prompt = (
                 f"Reproduce this exact image at higher resolution. "
                 f"CONTEXT: These are \"{req.context.strip()}\". "
-                f"Preserve the original art style, pixel density, and visual characteristics exactly \u2014 "
+                f"Preserve the original art style, pixel density, and visual characteristics exactly — "
                 f"only increase clarity and detail fidelity. Do not smooth, blur, or anti-alias stylistic "
                 f"features that are intentional (e.g. hard pixel edges in pixel art). "
                 f"Preserve every detail, color, texture, and composition exactly as-is."
@@ -895,9 +896,9 @@ def _do_upscale(req: UpscaleRequest) -> CharacterResponse:
             )
 
         contents: list = [source, prompt]
-        result = core.gemini_generate_image(api_key, contents, cancel_event=cancel, model_id=req.model_id)
+        result = core.gemini_generate_image(api_key, contents, aspect_ratio=ar, cancel_event=cancel, model_id=req.model_id)
         if result is None:
-            return CharacterResponse(error="Upscale failed \u2014 no image returned")
+            return CharacterResponse(error="Upscale failed — no image returned")
         core.save_generated_image(result, "Character Generator", view_name="upscale", generation_type="upscale")
         return CharacterResponse(image_b64=core.image_to_b64(result), width=result.width, height=result.height)
     except RuntimeError as e:
@@ -918,42 +919,55 @@ def _do_restore(req: RestoreRequest) -> CharacterResponse:
 
     try:
         source = core.b64_to_image(req.image_b64)
+        ar = core.detect_aspect_ratio(source.width, source.height)
 
-        # Step 1: Forensic description
+        # Step 1: Forensic description via fast vision model
         description = core.rest_generate_text_multimodal(
             api_key, "gemini-2.0-flash", [source, _DESCRIBE_FOR_RESTORE_PROMPT],
             cancel_event=cancel, cost_category="editing",
         )
         if not description:
-            return CharacterResponse(error="Restore failed \u2014 could not analyze image")
+            return CharacterResponse(error="Restore failed — could not analyze image")
 
-        # Step 2: Regenerate
+        # Step 2: Regenerate at full fidelity with the reference image
         user_context = req.context.strip() if req.context else ""
         context_block = ""
         if user_context:
             context_block = (
-                f"\nIMPORTANT CONTEXT: The source is \"{user_context}\". You MUST preserve this art style exactly \u2014 "
+                f"\nIMPORTANT CONTEXT: The source is \"{user_context}\". You MUST preserve this art style exactly — "
                 "if these are pixel art, keep hard pixel edges and limited palette; if these are game UI icons, keep flat colors "
                 "and sharp silhouettes; if these are screenshots, restore to the native rendering style. "
                 "Do NOT smooth, anti-alias, or photorealize stylistic features that are intentional.\n\n"
             )
 
         restore_prompt = (
-            "QUALITY RESTORATION \u2014 Recreate this image at maximum quality.\n\n"
-            "WHAT MUST STAY IDENTICAL: Subject identity, pose, composition, camera angle, "
-            "color palette, lighting direction, background, and all spatial relationships.\n\n"
-            "WHAT MUST BE FRESHLY RENDERED: Crisp edges on every surface. Clean material textures "
-            "(leather grain, fabric weave, metal sheen). Sharp facial features with natural skin. "
-            "Precise clothing details (stitching, buttons, folds). Clean background without noise.\n\n"
-            "ZERO TEXT: Do not add any text, labels, watermarks, or annotations.\n\n"
+            "QUALITY RESTORATION — RECREATE THIS EXACT IMAGE AT MAXIMUM FIDELITY.\n\n"
+            "The reference image has suffered quality degradation (blur, artifacts, noise, compression). "
+            "Your job: recreate this SAME EXACT subject in the SAME EXACT composition — but rendered fresh "
+            "with full resolution detail.\n\n"
             f"{context_block}"
+            "WHAT MUST STAY IDENTICAL:\n"
+            "- Subject identity, face, expression, gaze direction\n"
+            "- Exact pose — every limb position, weight distribution, hand positions\n"
+            "- Camera angle, framing, composition, and all spatial relationships\n"
+            "- Color palette and lighting direction\n"
+            "- Background content and depth\n"
+            "- All accessories, weapons, and held items in their exact positions\n\n"
+            "WHAT MUST BE FRESHLY RENDERED:\n"
+            "- Crisp edges on every surface and silhouette\n"
+            "- Clean material textures (leather grain, fabric weave, metal sheen)\n"
+            "- Sharp facial features with natural skin detail\n"
+            "- Precise clothing details (stitching, buttons, folds, patterns)\n"
+            "- Clean background without noise or compression artifacts\n"
+            "- Fine details like hair strands, jewelry, belt buckles at full clarity\n\n"
+            "ZERO TEXT: Do not add any text, labels, watermarks, or annotations.\n\n"
             f"DETAILED DESCRIPTION (recreate this exactly):\n{description}"
         )
 
         contents: list = [source, restore_prompt]
-        result = core.gemini_generate_image(api_key, contents, cancel_event=cancel, model_id=req.model_id)
+        result = core.gemini_generate_image(api_key, contents, aspect_ratio=ar, cancel_event=cancel, model_id=req.model_id)
         if result is None:
-            return CharacterResponse(error="Restore failed \u2014 regeneration returned no image")
+            return CharacterResponse(error="Restore failed — regeneration returned no image")
         core.save_generated_image(result, "Character Generator", view_name="restore", generation_type="restore")
         return CharacterResponse(image_b64=core.image_to_b64(result), width=result.width, height=result.height)
     except RuntimeError as e:
