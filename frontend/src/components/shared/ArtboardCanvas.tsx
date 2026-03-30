@@ -188,16 +188,38 @@ export function ArtboardCanvas() {
   // ---------------------------------------------------------------------------
   // Middle-mouse pan
   // ---------------------------------------------------------------------------
+  const middlePanActiveRef = useRef(false);
+
   useEffect(() => {
     const el = containerRef.current; if (!el) return;
-    const onDown = (e: PointerEvent) => {
+
+    const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 1) return;
-      e.preventDefault(); el.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      e.stopPropagation();
       middlePanRef.current = { lastX: e.clientX, lastY: e.clientY };
+      middlePanActiveRef.current = true;
       setIsMiddlePanning(true);
     };
+
+    // Prevent the browser's native auto-scroll on middle-click
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button === 1) { e.preventDefault(); }
+    };
+
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("mousedown", onMouseDown);
+    return () => {
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("mousedown", onMouseDown);
+    };
+  }, []);
+
+  // Window-level move/up listeners while middle-panning
+  useEffect(() => {
+    if (!isMiddlePanning) return;
     const onMove = (e: PointerEvent) => {
-      if ((e.buttons & 4) === 0) return;
+      if (!middlePanActiveRef.current) return;
       const { lastX, lastY } = middlePanRef.current;
       middlePanRef.current = { lastX: e.clientX, lastY: e.clientY };
       const v = viewportRef.current;
@@ -205,12 +227,19 @@ export function ArtboardCanvas() {
       markViewportTouched();
     };
     const onUp = (e: PointerEvent) => {
-      if (e.button === 1) { setIsMiddlePanning(false); try { el.releasePointerCapture(e.pointerId); } catch {} }
+      if (e.button !== 1) return;
+      middlePanActiveRef.current = false;
+      setIsMiddlePanning(false);
     };
-    el.addEventListener("pointerdown", onDown); el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp); el.addEventListener("pointercancel", onUp);
-    return () => { el.removeEventListener("pointerdown", onDown); el.removeEventListener("pointermove", onMove); el.removeEventListener("pointerup", onUp); el.removeEventListener("pointercancel", onUp); };
-  }, [setViewport, markViewportTouched]);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, [isMiddlePanning, setViewport, markViewportTouched]);
 
   // ---------------------------------------------------------------------------
   // Space + drag pan (hold Space, then left-click drag to pan)

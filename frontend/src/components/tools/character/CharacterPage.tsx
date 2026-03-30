@@ -24,6 +24,7 @@ import { ThreeDGenSidebar } from "@/components/shared/ThreeDGenSidebar";
 import type { ViewImage } from "@/components/shared/ThreeDGenSidebar";
 import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
 import { useArtDirector } from "@/hooks/ArtDirectorContext";
+import { useActivePage } from "@/hooks/ActivePageContext";
 import { DeepSearchPanel } from "@/components/shared/DeepSearchPanel";
 import type { SearchResult } from "@/components/shared/DeepSearchPanel";
 import { useArtboard } from "@/hooks/ArtboardContext";
@@ -565,6 +566,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
   const [description, setDescription] = useState("");
   const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
   const { setCurrentImage, setAttributesContext, setOnApplyFeedback } = useArtDirector();
+  const appPage = useActivePage();
   const [editPrompt, setEditPrompt] = useState("");
   const [age, setAge] = useState("");
   const [race, setRace] = useState("");
@@ -1730,7 +1732,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
     const extra = getExtraContext();
     if (!desc) return;
     busy.start("generate");
-    setGeneratingTab("main");
+    setGeneratingTab("grid");
     setActiveTab("grid");
     try {
       const bibleCtx = resolveSection("bible");
@@ -2236,19 +2238,16 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
   }, [active, description, setAttributesContext]);
 
   useEffect(() => {
-    if (active) {
+    if (active && appPage === "character") {
       setOnApplyFeedback(() => (suggestion: string) => {
-        // Always append to edit prompt for generation
         setEditPrompt((prev) => prev ? `${prev}\n${suggestion}` : suggestion);
 
-        // Also route to specific attribute fields by parsing the label
         const colonIdx = suggestion.indexOf(":");
         if (colonIdx < 0) return;
         const label = suggestion.slice(0, colonIdx).trim().toLowerCase();
         const body = suggestion.slice(colonIdx + 1).trim();
         if (!body) return;
 
-        // Map label to attribute fields
         const attrMap: Record<string, string> = {
           headwear: "Headwear", hat: "Headwear", helmet: "Headwear", head: "Headwear",
           outerwear: "Outerwear", jacket: "Outerwear", coat: "Outerwear", cloak: "Outerwear",
@@ -2266,7 +2265,6 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
           pose: "Pose", stance: "Pose",
         };
 
-        // Check attribute fields first
         const matchedAttr = attrMap[label] || Object.entries(attrMap).find(([k]) => label.includes(k))?.[1];
         if (matchedAttr) {
           setAttributes((prev) => ({
@@ -2276,7 +2274,6 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
           return;
         }
 
-        // Map label to costume fields
         if (label.includes("color") || label.includes("palette")) {
           setCostume((prev) => ({ ...prev, costumeNotes: prev.costumeNotes ? `${prev.costumeNotes}\n${body}` : body }));
           return;
@@ -2309,12 +2306,11 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
           return;
         }
 
-        // Fallback: put in design intent
         setBible((prev) => ({ ...prev, designIntent: prev.designIntent ? `${prev.designIntent}\n${body}` : body }));
       });
       return () => setOnApplyFeedback(null);
     }
-  }, [active, setOnApplyFeedback]);
+  }, [active, appPage, setOnApplyFeedback]);
 
   // --- Session save/load ---
   useSessionRegister(
@@ -2571,7 +2567,11 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
                   className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
                   style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
                   value={generationMode}
-                  onChange={(e) => setGenerationMode(e.target.value as "single" | "grid")}
+                  onChange={(e) => {
+                    const mode = e.target.value as "single" | "grid";
+                    setGenerationMode(mode);
+                    setActiveTab(mode === "grid" ? "grid" : "main");
+                  }}
                   disabled={busy.any}
                 >
                   <option value="single">Single Image</option>

@@ -36,6 +36,13 @@ class SearchRequest(BaseModel):
     image_b64: Optional[str] = None
     num_images: int = Field(default=12, ge=1, le=40)
     depth: str = Field(default="medium")  # quick / medium / deep
+    enabled_sources: Optional[dict] = None  # e.g. {"gemini":true,"pexels":false,...}
+
+
+class EnrichQueryRequest(BaseModel):
+    user_request: str
+    image_b64: Optional[str] = None
+    attributes_context: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -411,20 +418,55 @@ def _run_search_round(api_key: str, model: str, query: str, image_b64: str | Non
     return image_urls, source_pages, descriptions
 
 
+def _enrich_query_from_image(api_key: str, model: str, query: str,
+                             image_b64: str) -> str:
+    """Quick Gemini call to describe the reference image for text-only search APIs."""
+    try:
+        contents: list = [
+            {"inlineData": {"mimeType": "image/png", "data": image_b64[:10_000_000]}},
+            (
+                "Describe this image in detail for a visual reference search. "
+                "Focus on: style, materials, colors, era/culture, specific design elements, "
+                "and artistic genre (concept art, photography, illustration, etc.). "
+                f"The user is searching for: \"{query}\"\n\n"
+                "Return a single search-engine-friendly description (2-3 sentences) "
+                "with specific visual keywords. No preamble."
+            ),
+        ]
+        result = core.rest_generate_text_multimodal(
+            api_key, model, contents, timeout=15, cost_category="deep_search",
+        )
+        if result and len(result.strip()) > 10:
+            return result.strip()
+    except Exception:
+        pass
+    return query
+
+
 def _stream_search(api_key: str, query: str, image_b64: str | None,
-                   num_images: int, depth: str):
+                   num_images: int, depth: str, *,
+                   enabled_sources: dict | None = None):
     """Generator that yields SSE events as the search progresses."""
     model = "gemini-2.0-flash"
+    has_ref_image = bool(image_b64)
+
+    src = enabled_sources or {}
+    use_gemini = src.get("gemini", True)
+    use_pexels = src.get("pexels", True)
+    use_pixabay = src.get("pixabay", True)
+    use_google_images = src.get("googleImages", True)
 
     search_rounds = {"quick": 1, "medium": 2, "deep": 3}.get(depth, 2)
     scrape_per_page = {"quick": 5, "medium": 10, "deep": 15}.get(depth, 10)
     max_source_pages = {"quick": 8, "medium": 16, "deep": 24}.get(depth, 16)
 
-    search_angles = [
-        "",
-        f"Search specifically for: {query} - look for different styles, variations, materials, and design approaches",
-        f"Find more images related to: {query} - try alternative keywords, similar concepts, related categories, specific brands or eras",
-    ]
+    # --- Phase -1: If reference image provided, analyze it to enrich the query ---
+    stock_query = query
+    if has_ref_image and use_gemini:
+        yield f"data: {json.dumps({'status': 'Analyzing reference image...'})}\n\n"
+        enriched = _EXECUTOR.submit(_enrich_query_from_image, api_key, model, query, image_b64)
+    else:
+        enriched = None
 
     all_candidate_urls: list[str] = []
     all_source_pages: list[str] = []
@@ -436,12 +478,24 @@ def _stream_search(api_key: str, query: str, image_b64: str | None,
     pexels_key = core.get_extra_key("pexels_api_key")
     pixabay_key = core.get_extra_key("pixabay_api_key")
     stock_futures = {}
-    stock_request_count = max(num_images, 20)
 
-    if pexels_key:
-        stock_futures["pexels"] = _EXECUTOR.submit(_pexels_search, pexels_key, query, stock_request_count)
-    if pixabay_key:
-        stock_futures["pixabay"] = _EXECUTOR.submit(_pixabay_search, pixabay_key, query, stock_request_count)
+    # When we have a reference image, wait for the enriched query first
+    if has_ref_image and enriched is not None:
+        try:
+            stock_query = enriched.result(timeout=18)
+            yield f"data: {json.dumps({'status': f'Image analyzed. Searching for: {stock_query[:120]}...'})}\n\n"
+        except Exception:
+            stock_query = query
+
+    stock_request_count = max(num_images, 20)
+    # When a reference image is provided, cap stock results so Gemini visual
+    # search always gets a chance to find style-matched results.
+    stock_cap = num_images // 3 if has_ref_image else num_images
+
+    if pexels_key and use_pexels:
+        stock_futures["pexels"] = _EXECUTOR.submit(_pexels_search, pexels_key, stock_query, stock_request_count)
+    if pixabay_key and use_pixabay:
+        stock_futures["pixabay"] = _EXECUTOR.submit(_pixabay_search, pixabay_key, stock_query, stock_request_count)
 
     if stock_futures:
         sources_label = " + ".join(k.title() for k in stock_futures)
@@ -475,45 +529,59 @@ def _stream_search(api_key: str, query: str, image_b64: str | None,
                     valid_images.append(img_data)
                     yield f"data: {json.dumps({'image': img_data, 'count': len(valid_images)})}\n\n"
                     yield f"data: {json.dumps({'status': f'Downloaded {len(valid_images)} of {num_images} requested...'})}\n\n"
-                    if len(valid_images) >= num_images:
+                    if len(valid_images) >= stock_cap:
                         break
             except Exception:
                 pass
 
-    if len(valid_images) >= num_images:
+    # Only short-circuit when there is NO reference image — when the user
+    # provided a reference image we always continue to the AI visual search.
+    if not has_ref_image and len(valid_images) >= num_images:
         yield f"data: {json.dumps({'status': f'Search complete. Found {len(valid_images)} reference images.', 'total': len(valid_images)})}\n\n"
         yield f"data: {json.dumps({'done': True, 'total': len(valid_images)})}\n\n"
         return
 
     remaining = num_images - len(valid_images)
-    yield f"data: {json.dumps({'status': f'Have {len(valid_images)} images. Searching deeper for {remaining} more...'})}\n\n"
+    if has_ref_image:
+        yield f"data: {json.dumps({'status': f'Have {len(valid_images)} stock results. Running AI visual search to find style-matched images...'})}\n\n"
+    else:
+        yield f"data: {json.dumps({'status': f'Have {len(valid_images)} images. Searching deeper for {remaining} more...'})}\n\n"
 
     # --- Phase 1: Gemini grounded search rounds ---
+    # Build search angles using the enriched query when available
+    sq = stock_query if has_ref_image else query
+    search_angles = [
+        "",
+        f"Search specifically for: {sq} - look for different styles, variations, materials, and design approaches",
+        f"Find more images related to: {sq} - try alternative keywords, similar concepts, related categories, specific brands or eras",
+    ]
+
     first_round_error = None
-    for round_num in range(search_rounds):
-        angle = search_angles[round_num] if round_num < len(search_angles) else ""
-        label = f"Round {round_num + 1}/{search_rounds}" if search_rounds > 1 else "Searching"
-        yield f"data: {json.dumps({'status': f'{label}: Searching the web for references...'})}\n\n"
+    if use_gemini:
+        for round_num in range(search_rounds):
+            angle = search_angles[round_num] if round_num < len(search_angles) else ""
+            label = f"Round {round_num + 1}/{search_rounds}" if search_rounds > 1 else "Searching"
+            yield f"data: {json.dumps({'status': f'{label}: Searching the web for references...'})}\n\n"
 
-        try:
-            image_urls, source_pages, descriptions = _run_search_round(
-                api_key, model, query, image_b64, num_images, depth, angle,
-            )
-        except Exception as exc:
-            if round_num == 0:
-                first_round_error = str(exc)[:500]
-            continue
+            try:
+                image_urls, source_pages, descriptions = _run_search_round(
+                    api_key, model, query, image_b64, num_images, depth, angle,
+                )
+            except Exception as exc:
+                if round_num == 0:
+                    first_round_error = str(exc)[:500]
+                continue
 
-        new_urls = [u for u in image_urls if u not in seen_urls]
-        seen_urls.update(new_urls)
-        all_candidate_urls.extend(new_urls)
-        all_descriptions.extend(descriptions)
+            new_urls = [u for u in image_urls if u not in seen_urls]
+            seen_urls.update(new_urls)
+            all_candidate_urls.extend(new_urls)
+            all_descriptions.extend(descriptions)
 
-        new_pages = [p for p in source_pages if p not in seen_urls]
-        seen_urls.update(new_pages)
-        all_source_pages.extend(new_pages)
+            new_pages = [p for p in source_pages if p not in seen_urls]
+            seen_urls.update(new_pages)
+            all_source_pages.extend(new_pages)
 
-        yield f"data: {json.dumps({'status': f'{label}: Found {len(all_candidate_urls)} direct URLs + {len(all_source_pages)} source pages...'})}\n\n"
+            yield f"data: {json.dumps({'status': f'{label}: Found {len(all_candidate_urls)} direct URLs + {len(all_source_pages)} source pages...'})}\n\n"
 
     # --- Phase 2: Always scrape source pages for images ---
     if all_source_pages:
@@ -534,38 +602,40 @@ def _stream_search(api_key: str, query: str, image_b64: str | None,
                 pass
 
     # --- Phase 3: Google Images direct scrape (always run for supplementation) ---
-    need_more = max(num_images * 3, 50) - len(all_candidate_urls)
-    if need_more > 0:
-        yield f"data: {json.dumps({'status': 'Searching Google Images directly...'})}\n\n"
-        try:
-            gi_urls = _google_images_scrape(query, max_imgs=max(num_images * 3, 60))
-            new_gi = [u for u in gi_urls if u not in seen_urls]
-            seen_urls.update(new_gi)
-            all_candidate_urls.extend(new_gi)
-            if new_gi:
-                yield f"data: {json.dumps({'status': f'Google Images found {len(new_gi)} additional candidates...'})}\n\n"
-        except Exception:
-            pass
-
-    # --- Phase 4: Related search terms if still short ---
-    if len(all_candidate_urls) < num_images * 3:
-        yield f"data: {json.dumps({'status': 'Trying related search terms...'})}\n\n"
-        variants = [
-            f"{query} reference photo",
-            f"{query} high quality",
-            f"{query} design inspiration",
-            f"{query} aesthetic",
-        ]
-        for variant in variants:
-            if len(all_candidate_urls) >= num_images * 4:
-                break
+    gi_query = stock_query if has_ref_image else query
+    if use_google_images:
+        need_more = max(num_images * 3, 50) - len(all_candidate_urls)
+        if need_more > 0:
+            yield f"data: {json.dumps({'status': 'Searching Google Images directly...'})}\n\n"
             try:
-                gi_urls = _google_images_scrape(variant, max_imgs=max(num_images, 20))
+                gi_urls = _google_images_scrape(gi_query, max_imgs=max(num_images * 3, 60))
                 new_gi = [u for u in gi_urls if u not in seen_urls]
                 seen_urls.update(new_gi)
                 all_candidate_urls.extend(new_gi)
+                if new_gi:
+                    yield f"data: {json.dumps({'status': f'Google Images found {len(new_gi)} additional candidates...'})}\n\n"
             except Exception:
                 pass
+
+        # --- Phase 4: Related search terms if still short ---
+        if len(all_candidate_urls) < num_images * 3:
+            yield f"data: {json.dumps({'status': 'Trying related search terms...'})}\n\n"
+            variants = [
+                f"{gi_query} reference photo",
+                f"{gi_query} high quality",
+                f"{gi_query} design inspiration",
+                f"{gi_query} concept art",
+            ]
+            for variant in variants:
+                if len(all_candidate_urls) >= num_images * 4:
+                    break
+                try:
+                    gi_urls = _google_images_scrape(variant, max_imgs=max(num_images, 20))
+                    new_gi = [u for u in gi_urls if u not in seen_urls]
+                    seen_urls.update(new_gi)
+                    all_candidate_urls.extend(new_gi)
+                except Exception:
+                    pass
 
     if not all_candidate_urls and not valid_images and first_round_error:
         yield f"data: {json.dumps({'error': first_round_error})}\n\n"
@@ -639,7 +709,52 @@ async def deep_search(req: SearchRequest):
         raise HTTPException(400, "No API key configured")
 
     return StreamingResponse(
-        _stream_search(api_key, req.query, req.image_b64, req.num_images, req.depth),
+        _stream_search(api_key, req.query, req.image_b64, req.num_images, req.depth,
+                       enabled_sources=req.enabled_sources),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/enrich-query")
+async def enrich_query(req: EnrichQueryRequest):
+    """Analyze the current image + user request and return an enriched search query."""
+    api_key = core.get_api_key()
+    if not api_key:
+        raise HTTPException(400, "No API key configured")
+
+    import asyncio
+    loop = asyncio.get_event_loop()
+
+    def _do():
+        model = "gemini-2.0-flash"
+        ctx_line = ""
+        if req.attributes_context:
+            ctx_line = f"\nCurrent design context: {req.attributes_context}\n"
+
+        prompt = (
+            "You are helping a concept artist find reference images. "
+            "They are looking at their current artwork and want to explore alternatives.\n\n"
+            f"Artist's request: \"{req.user_request}\"\n"
+            f"{ctx_line}\n"
+            "Look at the image (if provided) and generate a SINGLE detailed search query "
+            "(2-4 sentences) that a reference-image search engine can use. "
+            "The query should:\n"
+            "1. Describe the specific element from the image the artist is referring to\n"
+            "2. Suggest alternative styles, variations, or design directions to explore\n"
+            "3. Include relevant design terminology, materials, cultural references, or era keywords\n\n"
+            "Return ONLY the search query text, no explanation or preamble."
+        )
+
+        contents: list = []
+        if req.image_b64:
+            contents.append({"inlineData": {"mimeType": "image/png", "data": req.image_b64[:10_000_000]}})
+        contents.append(prompt)
+
+        result = core.rest_generate_text_multimodal(
+            api_key, model, contents, timeout=20, cost_category="deep_search",
+        )
+        return (result or req.user_request).strip()
+
+    enriched = await loop.run_in_executor(None, _do)
+    return {"enriched_query": enriched}

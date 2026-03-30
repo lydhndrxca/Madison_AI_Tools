@@ -21,6 +21,7 @@ import { CustomSectionsProvider } from "./hooks/CustomSectionsContext";
 import { useSettingsBackup } from "./hooks/useSettingsBackup";
 import { ArtDirectorProvider } from "./hooks/ArtDirectorContext";
 import { ModelsProvider } from "./hooks/ModelsContext";
+import { ActivePageProvider } from "./hooks/ActivePageContext";
 import { TranscriptsPage } from "./components/tools/transcripts/TranscriptsPage";
 import { ThreeDGenPage } from "./components/tools/threedgen/ThreeDGenPage";
 import { BrainstormPage } from "./components/tools/brainstorm/BrainstormPage";
@@ -35,6 +36,7 @@ function AppInner() {
   const setPage = useCallback((p: string) => { if (VALID_PAGES.has(p)) setActivePage(p as PageId); }, []);
 
   return (
+    <ActivePageProvider value={activePage}>
     <SessionProvider activePage={activePage} onSetActivePage={setPage} onToast={addToast}>
       <AppShell activePage={activePage} onNavigate={setActivePage}>
         <div className="h-full" style={{ display: activePage === "style-library" ? "contents" : "none" }}><StyleLibraryPage /></div>
@@ -53,6 +55,7 @@ function AppInner() {
         <div className="h-full" style={{ display: activePage === "writingroom" ? "contents" : "none" }}><WritingRoomPage /></div>
       </AppShell>
     </SessionProvider>
+    </ActivePageProvider>
   );
 }
 

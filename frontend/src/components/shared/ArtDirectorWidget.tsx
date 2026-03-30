@@ -5,7 +5,7 @@ import {
   MessageCircle, Lightbulb, Square, CheckSquare,
 } from "lucide-react";
 import { useArtDirector, type ChatMessage } from "@/hooks/ArtDirectorContext";
-import { extractDeepSearchQuery, triggerDeepSearch, DS_EVT, confettiBurst } from "@/lib/deepSearchEvents";
+import { extractDeepSearchQuery, triggerDeepSearch, DS_EVT, dsDispatch, confettiBurst, loadDeepSearchSources } from "@/lib/deepSearchEvents";
 import { apiFetch } from "@/hooks/useApi";
 
 const bubbleKeyframes = `
@@ -179,6 +179,7 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
     config, updateConfig,
     messages, sendMessage, clearChat, isTyping, cancelTyping,
     saveTranscript, onApplyFeedback,
+    currentImage, attributesContext,
   } = useArtDirector();
 
   const [expanded, setExpanded] = useState(false);
@@ -214,18 +215,38 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
       : input.trim();
     if (!text && pendingImages.length === 0) return;
 
-    // Detect deep-search intent and auto-kick it off
     const dsQuery = extractDeepSearchQuery(text);
     if (dsQuery) {
-      const imageForSearch = pendingImages.length > 0 ? pendingImages[0] : undefined;
-      triggerDeepSearch(dsQuery, imageForSearch);
+      const imageForSearch = pendingImages.length > 0
+        ? pendingImages[0]
+        : currentImage || undefined;
+
       window.dispatchEvent(new CustomEvent("switch-tab", { detail: { tabId: "deepSearch" } }));
+
+      if (imageForSearch) {
+        dsDispatch(DS_EVT.PREPARING);
+        const imgB64 = imageForSearch.replace(/^data:image\/[^;]+;base64,/, "");
+        apiFetch<{ enriched_query: string }>("/refsearch/enrich-query", {
+          method: "POST",
+          body: JSON.stringify({
+            user_request: dsQuery,
+            image_b64: imgB64,
+            attributes_context: attributesContext || undefined,
+          }),
+        }).then((res) => {
+          triggerDeepSearch(res.enriched_query, imageForSearch);
+        }).catch(() => {
+          triggerDeepSearch(dsQuery, imageForSearch);
+        });
+      } else {
+        triggerDeepSearch(dsQuery);
+      }
     }
 
     sendMessage(text || "(see attached images)", pendingImages.length > 0 ? pendingImages : undefined);
     setInput("");
     setPendingImages([]);
-  }, [input, quickCtx, pendingImages, sendMessage]);
+  }, [input, quickCtx, pendingImages, sendMessage, currentImage, attributesContext]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -277,11 +298,12 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
   }, [saveTranscript, clearChat]);
 
   // Deep search visual state tracking
-  const [dsState, setDsState] = useState<"idle" | "searching" | "results">("idle");
+  const [dsState, setDsState] = useState<"idle" | "preparing" | "searching" | "results">("idle");
   const dsButtonRef = useRef<HTMLButtonElement>(null);
   const dsButtonTopRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
+    const onPreparing = () => setDsState("preparing");
     const onStart = () => setDsState("searching");
     const onComplete = (e: Event) => {
       const count = (e as CustomEvent).detail?.count ?? 0;
@@ -295,10 +317,12 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
       }
     };
     const onViewed = () => setDsState("idle");
+    window.addEventListener(DS_EVT.PREPARING, onPreparing);
     window.addEventListener(DS_EVT.START, onStart);
     window.addEventListener(DS_EVT.COMPLETE, onComplete);
     window.addEventListener(DS_EVT.VIEWED, onViewed);
     return () => {
+      window.removeEventListener(DS_EVT.PREPARING, onPreparing);
       window.removeEventListener(DS_EVT.START, onStart);
       window.removeEventListener(DS_EVT.COMPLETE, onComplete);
       window.removeEventListener(DS_EVT.VIEWED, onViewed);
@@ -355,7 +379,7 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
                 </span>
               )}
             </div>
-            <div>
+            <div className="flex-1">
               <div className="text-[11px] font-semibold" style={{ color: config.enabled ? "var(--color-foreground)" : "var(--color-text-secondary)" }}>
                 Art Director
               </div>
@@ -363,11 +387,26 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
                 {config.enabled ? (config.mode === "deep" ? "Deep Thinking" : "Fast Mode") : "Off"}
               </div>
             </div>
+            {!config.enabled && (
+              <button
+                onClick={(e) => { e.stopPropagation(); updateConfig({ enabled: true }); }}
+                className="flex items-center gap-1 px-2 py-1 rounded-full cursor-pointer transition-all"
+                style={{
+                  background: "rgba(34,197,94,0.2)",
+                  border: "1px solid rgba(34,197,94,0.5)",
+                  color: "#4ade80",
+                }}
+                title="Turn on Art Director"
+              >
+                <Power className="h-3 w-3" />
+                <span className="text-[9px] font-bold tracking-wide">ON</span>
+              </button>
+            )}
           </div>
           <button
             ref={dsButtonRef}
             type="button"
-            className={`flex items-center justify-center gap-1 px-3 py-1.5 rounded-b-lg rounded-t-none text-[10px] font-medium cursor-pointer select-none transition-all hover:scale-[1.02]${dsState === "searching" ? " ds-searching" : ""}${dsState === "results" ? " ds-results-ready" : ""}`}
+            className={`flex items-center justify-center gap-1 px-3 py-1.5 rounded-b-lg rounded-t-none text-[10px] font-medium cursor-pointer select-none transition-all hover:scale-[1.02]${dsState === "searching" || dsState === "preparing" ? " ds-searching" : ""}${dsState === "results" ? " ds-results-ready" : ""}`}
             style={{
               background: dsState === "results" ? "rgba(34,197,94,0.08)" : "rgba(255,255,255,0.05)",
               border: dsState === "results" ? "1px solid rgba(34,197,94,0.5)" : "1px solid rgba(255,255,255,0.08)",
@@ -382,10 +421,10 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
               }
               window.dispatchEvent(new CustomEvent("switch-tab", { detail: { tabId: "deepSearch" } }));
             }}
-            title={dsState === "results" ? "Results ready — click to view" : dsState === "searching" ? "Searching..." : "Open Deep Search"}
+            title={dsState === "results" ? "Results ready — click to view" : dsState === "searching" ? "Searching..." : dsState === "preparing" ? "Analyzing image..." : "Open Deep Search"}
           >
             <Search className="h-3 w-3 shrink-0" style={{ color: dsState === "results" ? "#22c55e" : "var(--color-text-muted)" }} />
-            {dsState === "results" ? "RESULTS READY" : dsState === "searching" ? "Searching..." : "Deep Search"}
+            {dsState === "results" ? "RESULTS READY" : dsState === "searching" ? "Searching..." : dsState === "preparing" ? "Preparing..." : "Deep Search"}
           </button>
         </div>
 
@@ -517,14 +556,16 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
         {/* On/Off */}
         <button
           onClick={() => updateConfig({ enabled: !config.enabled })}
-          className="p-1 rounded cursor-pointer"
+          className="flex items-center gap-1 px-2 py-0.5 rounded-full cursor-pointer transition-all"
           style={{
-            color: config.enabled ? "#22c55e" : "var(--color-text-muted)",
-            background: config.enabled ? "rgba(34,197,94,0.1)" : "transparent",
+            color: config.enabled ? "#fff" : "var(--color-text-muted)",
+            background: config.enabled ? "rgba(34,197,94,0.35)" : "rgba(255,255,255,0.06)",
+            border: config.enabled ? "1px solid rgba(34,197,94,0.6)" : "1px solid var(--color-border)",
           }}
-          title={config.enabled ? "Director is ON" : "Director is OFF"}
+          title={config.enabled ? "Director is ON — click to turn OFF" : "Director is OFF — click to turn ON"}
         >
-          <Power className="h-3.5 w-3.5" />
+          <Power className="h-3 w-3" />
+          <span className="text-[9px] font-bold tracking-wide">{config.enabled ? "ON" : "OFF"}</span>
         </button>
 
         <button onClick={onOpenConfig} className="p-1 rounded cursor-pointer" style={{ color: "var(--color-text-muted)" }} title="Art Director settings">

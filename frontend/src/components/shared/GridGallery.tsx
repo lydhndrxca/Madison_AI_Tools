@@ -270,6 +270,11 @@ export function GridGallery({
           <div className="flex items-center justify-center h-full">
             <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>{emptyMessage}</p>
           </div>
+        ) : results.length === 0 && generating ? (
+          <div className="flex flex-col items-center justify-center h-full gap-3">
+            <Loader2 size={28} className="animate-spin" style={{ color: "var(--color-text-muted)" }} />
+            <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>Generating 4×4 variation sheet...</p>
+          </div>
         ) : (
           <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
             {results.map((result, idx) => {
@@ -461,7 +466,8 @@ export function GridGallery({
             </button>
 
             <div
-              className="relative flex flex-col items-stretch gap-3 w-full max-w-[min(92vw,1200px)] max-h-[90vh] min-h-0"
+              className="relative flex flex-col items-center gap-3 max-h-[90vh] min-h-0"
+              style={{ width: "fit-content", maxWidth: "min(92vw, 1200px)", minWidth: 340 }}
               onClick={(e) => e.stopPropagation()}
             >
               <button
@@ -474,7 +480,7 @@ export function GridGallery({
                 <X className="h-4 w-4" />
               </button>
 
-              <header className="text-center shrink-0 pt-1 pr-8">
+              <header className="text-center shrink-0 pt-1 pr-8 w-full">
                 <p className="text-sm font-medium tracking-wide" style={{ color: "rgba(255,255,255,0.55)" }}>
                   {expandedOverlayLabel} · {expandedIdx + 1} of {results.length}
                 </p>
@@ -485,7 +491,7 @@ export function GridGallery({
 
               <div
                 ref={zoomViewportRef}
-                className="flex-1 min-h-0 flex items-center justify-center rounded-lg overflow-hidden select-none"
+                className="flex-1 min-h-0 w-full flex items-center justify-center rounded-lg overflow-hidden select-none"
                 style={{
                   background: "repeating-conic-gradient(rgba(128,128,128,0.2) 0% 25%, rgba(40,40,40,1) 0% 50%) 50%/20px 20px",
                   cursor: expandZoom > 1 ? (expandPanning ? "grabbing" : "grab") : "default",
@@ -533,7 +539,7 @@ export function GridGallery({
                   <img
                     src={`data:image/png;base64,${expandedResult.image_b64}`}
                     alt=""
-                    className="block max-w-[min(78vw,1000px)] max-h-[min(58vh,720px)] object-contain pointer-events-none"
+                    className="block max-w-[min(85vw,1100px)] max-h-[min(70vh,900px)] object-contain pointer-events-none"
                     draggable={false}
                     style={{
                       imageRendering: expandedResult.width <= 256 ? "pixelated" : "auto",

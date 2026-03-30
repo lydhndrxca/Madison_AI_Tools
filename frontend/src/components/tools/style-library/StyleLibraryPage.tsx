@@ -9,6 +9,9 @@ import {
   ArrowLeft,
   Eye,
   EyeOff,
+  Plus,
+  Check,
+  Clipboard,
 } from "lucide-react";
 import { apiFetch } from "@/hooks/useApi";
 
@@ -42,9 +45,12 @@ export function StyleLibraryPage() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<"all" | "general" | "ui">("all");
+  const [newFolderName, setNewFolderName] = useState("");
+  const [showNewInput, setShowNewInput] = useState(false);
 
   const guidanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const newFolderInputRef = useRef<HTMLInputElement>(null);
 
   /* ── Fetch folders ─────────────────────────────────────────── */
 
@@ -99,19 +105,27 @@ export function StyleLibraryPage() {
 
   /* ── Folder CRUD ───────────────────────────────────────────── */
 
-  const handleNewFolder = useCallback(async (forceCategory?: string) => {
-    const name = prompt("New style folder name:");
-    if (!name?.trim()) return;
-    const cat = forceCategory ?? (categoryFilter === "all" ? "general" : categoryFilter);
+  const handleStartNewFolder = useCallback(() => {
+    setNewFolderName("");
+    setShowNewInput(true);
+    requestAnimationFrame(() => newFolderInputRef.current?.focus());
+  }, []);
+
+  const handleCommitNewFolder = useCallback(async () => {
+    const name = newFolderName.trim();
+    if (!name) { setShowNewInput(false); return; }
+    const cat = categoryFilter === "all" ? "general" : categoryFilter;
     try {
-      await apiFetch("/styles/folders", { method: "POST", body: JSON.stringify({ name: name.trim(), category: cat }) });
+      await apiFetch("/styles/folders", { method: "POST", body: JSON.stringify({ name, category: cat }) });
       await loadFolders();
-      setSelectedFolder(name.trim());
+      setSelectedFolder(name);
       setGuidance("");
       setImages([]);
       setSubfolders([]);
-    } catch (e) { console.error(e); }
-  }, [loadFolders, categoryFilter]);
+    } catch (e) { console.error("[StyleLibrary] Failed to create folder:", e); }
+    setShowNewInput(false);
+    setNewFolderName("");
+  }, [newFolderName, loadFolders, categoryFilter]);
 
   const handleSetCategory = useCallback(async (cat: string) => {
     if (!selectedFolder) return;
@@ -176,25 +190,14 @@ export function StyleLibraryPage() {
 
   const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!selectedFolder || !e.target.files?.length) return;
-    const items: { filename: string; data_url: string }[] = [];
+    const uploads: { filename: string; data_url: string }[] = [];
     for (const file of Array.from(e.target.files)) {
-      const dataUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.readAsDataURL(file);
-      });
-      items.push({ filename: file.name, data_url: dataUrl });
+      const dataUrl = await readFileAsDataUrl(file);
+      uploads.push({ filename: file.name, data_url: dataUrl });
     }
-    try {
-      await apiFetch(`/styles/folders/${encodeURIComponent(selectedFolder)}/images`, {
-        method: "POST",
-        body: JSON.stringify(items),
-      });
-      loadImages(selectedFolder, activeSubfolder);
-      loadFolders();
-    } catch (err) { console.error(err); }
+    await uploadDataUrls(uploads);
     e.target.value = "";
-  }, [selectedFolder, activeSubfolder, loadImages, loadFolders]);
+  }, [selectedFolder, uploadDataUrls, readFileAsDataUrl]);
 
   const handleRemoveImage = useCallback(async () => {
     if (!selectedFolder || !selectedImage) return;
@@ -218,6 +221,122 @@ export function StyleLibraryPage() {
     } catch (e) { console.error(e); }
   }, [selectedFolder, activeSubfolder, loadImages]);
 
+  /* ── Shared image upload helper ─────────────────────────────── */
+
+  const uploadDataUrls = useCallback(async (items: { filename: string; data_url: string }[]) => {
+    if (!selectedFolder || items.length === 0) return;
+    try {
+      await apiFetch(`/styles/folders/${encodeURIComponent(selectedFolder)}/images`, {
+        method: "POST",
+        body: JSON.stringify(items),
+      });
+      loadImages(selectedFolder, activeSubfolder);
+      loadFolders();
+    } catch (e) { console.error("[StyleLibrary] Upload failed:", e); }
+  }, [selectedFolder, activeSubfolder, loadImages, loadFolders]);
+
+  const readFileAsDataUrl = useCallback((file: File): Promise<string> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.readAsDataURL(file);
+    });
+  }, []);
+
+  /* ── Clipboard paste ───────────────────────────────────────── */
+
+  const handlePasteImages = useCallback(async () => {
+    if (!selectedFolder) return;
+    try {
+      const clipItems = await navigator.clipboard.read();
+      const uploads: { filename: string; data_url: string }[] = [];
+      for (const ci of clipItems) {
+        const imgType = ci.types.find((t) => t.startsWith("image/"));
+        if (imgType) {
+          const blob = await ci.getType(imgType);
+          const ext = imgType.split("/")[1] || "png";
+          const dataUrl = await readFileAsDataUrl(new File([blob], `pasted_${Date.now()}.${ext}`));
+          uploads.push({ filename: `pasted_${Date.now()}_${uploads.length}.${ext}`, data_url: dataUrl });
+        }
+      }
+      if (uploads.length > 0) await uploadDataUrls(uploads);
+    } catch { /* clipboard read may fail if no permission */ }
+  }, [selectedFolder, uploadDataUrls, readFileAsDataUrl]);
+
+  useEffect(() => {
+    const onPaste = async (e: ClipboardEvent) => {
+      if (!selectedFolder) return;
+      const t = e.target as HTMLElement;
+      if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable) return;
+      if (!e.clipboardData) return;
+
+      const files: File[] = [];
+      for (const item of Array.from(e.clipboardData.items)) {
+        if (item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) files.push(file);
+        }
+      }
+      if (files.length === 0) return;
+      e.preventDefault();
+
+      const uploads: { filename: string; data_url: string }[] = [];
+      for (const file of files) {
+        const dataUrl = await readFileAsDataUrl(file);
+        const ext = file.type.split("/")[1] || "png";
+        uploads.push({ filename: `pasted_${Date.now()}_${uploads.length}.${ext}`, data_url: dataUrl });
+      }
+      await uploadDataUrls(uploads);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [selectedFolder, uploadDataUrls, readFileAsDataUrl]);
+
+  /* ── Drag and drop ─────────────────────────────────────────── */
+
+  const [draggingOver, setDraggingOver] = useState(false);
+  const dragCounterRef = useRef(0);
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current++;
+    if (selectedFolder && e.dataTransfer.types.some((t) => t === "Files" || t.startsWith("image/"))) {
+      setDraggingOver(true);
+    }
+  }, [selectedFolder]);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current--;
+    if (dragCounterRef.current <= 0) { dragCounterRef.current = 0; setDraggingOver(false); }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = selectedFolder ? "copy" : "none";
+  }, [selectedFolder]);
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setDraggingOver(false);
+    if (!selectedFolder) return;
+
+    const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
+    if (files.length === 0) return;
+
+    const uploads: { filename: string; data_url: string }[] = [];
+    for (const file of files) {
+      const dataUrl = await readFileAsDataUrl(file);
+      uploads.push({ filename: file.name, data_url: dataUrl });
+    }
+    await uploadDataUrls(uploads);
+  }, [selectedFolder, uploadDataUrls, readFileAsDataUrl]);
+
   /* ── Render ────────────────────────────────────────────────── */
 
   const filteredFolders = categoryFilter === "all"
@@ -230,8 +349,9 @@ export function StyleLibraryPage() {
       {/* ── Left: Folder list ────────────────────────────────── */}
       <div
         className="flex flex-col shrink-0"
-        style={{ width: 220, borderRight: "1px solid var(--color-border)", background: "var(--color-card)" }}
+        style={{ width: 240, borderRight: "1px solid var(--color-border)", background: "var(--color-card)" }}
       >
+        {/* Header + New button */}
         <div
           className="flex items-center gap-1.5 px-3 shrink-0"
           style={{ height: 36, borderBottom: "1px solid var(--color-border)" }}
@@ -239,27 +359,142 @@ export function StyleLibraryPage() {
           <span className="text-[11px] font-semibold uppercase tracking-wider flex-1" style={{ color: "var(--color-text-muted)" }}>
             Style Folders
           </span>
+          <button
+            onClick={handleStartNewFolder}
+            className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium cursor-pointer transition-colors"
+            style={{ background: "var(--color-accent)", color: "var(--color-foreground)", border: "none" }}
+            title="Create New Folder"
+          >
+            <Plus className="h-3 w-3" /> New
+          </button>
         </div>
 
-        {/* Category filter tabs */}
-        <div className="flex shrink-0" style={{ borderBottom: "1px solid var(--color-border)" }}>
-          {(["all", "general", "ui"] as const).map((cat) => (
+        {/* Folder actions toolbar (visible when a folder is selected) */}
+        {selectedFolder && (
+          <div
+            className="flex items-center gap-1 px-2 py-1.5 shrink-0"
+            style={{ borderBottom: "1px solid var(--color-border)", background: "rgba(255,255,255,0.02)" }}
+          >
+            <span className="text-[9px] uppercase tracking-wider shrink-0 mr-auto" style={{ color: "var(--color-text-muted)" }}>
+              Actions
+            </span>
             <button
-              key={cat}
-              onClick={() => setCategoryFilter(cat)}
-              className="flex-1 py-1.5 text-[10px] font-medium uppercase tracking-wider cursor-pointer transition-colors"
-              style={{
-                background: categoryFilter === cat ? "var(--color-hover)" : "transparent",
-                color: categoryFilter === cat ? "var(--color-foreground)" : "var(--color-text-muted)",
-                border: "none",
-                borderBottom: categoryFilter === cat ? "2px solid var(--color-accent)" : "2px solid transparent",
-              }}
+              onClick={handleRenameFolder}
+              className="flex items-center gap-1 px-1.5 py-1 rounded text-[10px] cursor-pointer transition-colors"
+              style={{ background: "var(--color-hover)", color: "var(--color-text-secondary)", border: "none" }}
+              title="Rename folder"
             >
-              {cat === "all" ? "All" : cat === "ui" ? "UI" : "General"}
+              <Pencil className="h-3 w-3" /> Rename
             </button>
-          ))}
+            <button
+              onClick={handleDeleteFolder}
+              className="flex items-center gap-1 px-1.5 py-1 rounded text-[10px] cursor-pointer transition-colors"
+              style={{ background: "var(--color-hover)", color: "var(--color-destructive, #e55)", border: "none" }}
+              title="Delete folder"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+            <button
+              onClick={() => handleSetCategory(currentFolder?.category === "ui" ? "general" : "ui")}
+              className="px-1.5 py-1 rounded text-[9px] font-bold cursor-pointer transition-colors"
+              style={{
+                background: currentFolder?.category === "ui" ? "rgba(94,156,224,0.15)" : "rgba(78,201,160,0.15)",
+                color: currentFolder?.category === "ui" ? "#5e9ce0" : "#4ec9a0",
+                border: `1px solid ${currentFolder?.category === "ui" ? "rgba(94,156,224,0.3)" : "rgba(78,201,160,0.3)"}`,
+              }}
+              title={currentFolder?.category === "ui" ? "Move to General library" : "Move to UI library"}
+            >
+              {currentFolder?.category === "ui" ? "UI" : "GEN"}
+            </button>
+          </div>
+        )}
+
+        {/* Category tabs — prominent segmented style */}
+        <div className="shrink-0 px-2 pt-2 pb-1" style={{ borderBottom: "1px solid var(--color-border)" }}>
+          <div className="grid grid-cols-2 gap-1.5 mb-1.5">
+            {(["general", "ui"] as const).map((cat) => {
+              const isActive = categoryFilter === cat;
+              const count = folders.filter((f) => f.category === cat).length;
+              const isGeneral = cat === "general";
+              const activeColor = isGeneral ? "#4ec9a0" : "#5e9ce0";
+              const activeBg = isGeneral ? "rgba(78,201,160,0.12)" : "rgba(94,156,224,0.12)";
+              const activeBorder = isGeneral ? "rgba(78,201,160,0.45)" : "rgba(94,156,224,0.45)";
+              return (
+                <button
+                  key={cat}
+                  onClick={() => setCategoryFilter(cat)}
+                  className="flex flex-col items-center py-2 rounded cursor-pointer transition-all"
+                  style={{
+                    background: isActive ? activeBg : "rgba(255,255,255,0.03)",
+                    border: isActive ? `1.5px solid ${activeBorder}` : "1.5px solid var(--color-border)",
+                    color: isActive ? activeColor : "var(--color-text-muted)",
+                  }}
+                >
+                  <span className="text-[12px] font-bold tracking-wide">{isGeneral ? "General" : "UI"}</span>
+                  <span className="text-[9px] mt-0.5 opacity-70">{count} folder{count !== 1 ? "s" : ""}</span>
+                </button>
+              );
+            })}
+          </div>
+          <button
+            onClick={() => setCategoryFilter("all")}
+            className="w-full text-center text-[9px] py-0.5 cursor-pointer transition-colors rounded"
+            style={{
+              background: categoryFilter === "all" ? "var(--color-hover)" : "transparent",
+              color: categoryFilter === "all" ? "var(--color-foreground)" : "var(--color-text-muted)",
+              border: "none",
+              fontWeight: categoryFilter === "all" ? 600 : 400,
+            }}
+          >
+            Show All ({folders.length})
+          </button>
         </div>
 
+        {/* Inline new-folder input */}
+        {showNewInput && (
+          <div
+            className="flex items-center gap-1 px-2 py-1.5 shrink-0"
+            style={{ borderBottom: "1px solid var(--color-border)", background: "rgba(78,201,160,0.06)" }}
+          >
+            <FolderPlus className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--color-text-muted)" }} />
+            <input
+              ref={newFolderInputRef}
+              value={newFolderName}
+              onChange={(e) => setNewFolderName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); handleCommitNewFolder(); }
+                if (e.key === "Escape") { setShowNewInput(false); setNewFolderName(""); }
+              }}
+              onBlur={() => { if (!newFolderName.trim()) { setShowNewInput(false); } }}
+              placeholder="Folder name…"
+              className="flex-1 min-w-0 px-1.5 py-1 text-[11px] rounded outline-none"
+              style={{
+                background: "var(--color-input-bg)",
+                border: "1px solid var(--color-border)",
+                color: "var(--color-text-primary)",
+              }}
+            />
+            <button
+              onClick={handleCommitNewFolder}
+              disabled={!newFolderName.trim()}
+              className="p-1 rounded cursor-pointer transition-colors disabled:opacity-30"
+              style={{ background: "var(--color-accent)", color: "var(--color-foreground)", border: "none" }}
+              title="Create"
+            >
+              <Check className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => { setShowNewInput(false); setNewFolderName(""); }}
+              className="p-1 rounded cursor-pointer transition-colors"
+              style={{ background: "var(--color-hover)", color: "var(--color-text-muted)", border: "none" }}
+              title="Cancel"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Folder list */}
         <div className="flex-1 overflow-y-auto">
           {filteredFolders.map((f) => (
             <button
@@ -305,54 +540,9 @@ export function StyleLibraryPage() {
           ))}
           {filteredFolders.length === 0 && (
             <div className="px-3 py-6 text-center text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-              No style folders yet
+              {categoryFilter === "all" ? "No style folders yet" : `No ${categoryFilter === "ui" ? "UI" : "General"} folders yet`}
             </div>
           )}
-        </div>
-
-        <div
-          className="flex gap-1 px-2 py-2 shrink-0"
-          style={{ borderTop: "1px solid var(--color-border)" }}
-        >
-          <button
-            onClick={() => handleNewFolder()}
-            className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-[11px] font-medium transition-colors cursor-pointer"
-            style={{ background: "var(--color-accent)", color: "var(--color-foreground)", border: "none" }}
-            title="New Folder"
-          >
-            <FolderPlus className="h-3.5 w-3.5" /> New
-          </button>
-          <button
-            onClick={handleRenameFolder}
-            disabled={!selectedFolder}
-            className="px-2 py-1.5 rounded text-[11px] transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-            style={{ background: "var(--color-hover)", color: "var(--color-text-secondary)", border: "none" }}
-            title="Rename"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={handleDeleteFolder}
-            disabled={!selectedFolder}
-            className="px-2 py-1.5 rounded text-[11px] transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-            style={{ background: "var(--color-hover)", color: "var(--color-destructive, #e55)", border: "none" }}
-            title="Delete"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={() => handleSetCategory(currentFolder?.category === "ui" ? "general" : "ui")}
-            disabled={!selectedFolder}
-            className="px-2 py-1.5 rounded text-[10px] font-bold transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-            style={{
-              background: currentFolder?.category === "ui" ? "rgba(94,156,224,0.15)" : "var(--color-hover)",
-              color: currentFolder?.category === "ui" ? "#5e9ce0" : "var(--color-text-secondary)",
-              border: currentFolder?.category === "ui" ? "1px solid rgba(94,156,224,0.3)" : "none",
-            }}
-            title={currentFolder?.category === "ui" ? "Switch to General category" : "Switch to UI category"}
-          >
-            {currentFolder?.category === "ui" ? "UI" : "GEN"}
-          </button>
         </div>
       </div>
 
@@ -425,34 +615,68 @@ export function StyleLibraryPage() {
           className="flex items-center gap-2 px-3 shrink-0"
           style={{ height: 36, borderBottom: "1px solid var(--color-border)", background: "var(--color-card)" }}
         >
-          <span className="text-[11px] font-semibold uppercase tracking-wider flex-1" style={{ color: "var(--color-text-muted)" }}>
+          <span className="text-[11px] font-semibold uppercase tracking-wider shrink-0" style={{ color: "var(--color-text-muted)" }}>
             {selectedFolder
               ? `Images — ${currentFolder?.name ?? selectedFolder}${activeSubfolder ? ` / ${activeSubfolder.replace(/_styles$/, "")}` : ""}`
               : "Select a folder"}
           </span>
-          <span className="text-[10px] font-mono" style={{ color: "var(--color-text-muted)" }}>
+          <span className="text-[10px] font-mono shrink-0" style={{ color: "var(--color-text-muted)" }}>
             {selectedFolder ? `${images.length}/16` : ""}
           </span>
           <button
             onClick={handleAddImages}
             disabled={!selectedFolder}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
             style={{ background: "var(--color-accent)", color: "var(--color-foreground)", border: "none" }}
+            title="Open images from disk"
           >
-            <ImagePlus className="h-3.5 w-3.5" /> Add Images
+            <ImagePlus className="h-3.5 w-3.5" /> Open
+          </button>
+          <button
+            onClick={handlePasteImages}
+            disabled={!selectedFolder}
+            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+            style={{ background: "var(--color-hover)", color: "var(--color-text-secondary)", border: "none" }}
+            title="Paste image from clipboard (Ctrl+V)"
+          >
+            <Clipboard className="h-3.5 w-3.5" /> Paste
           </button>
           <button
             onClick={handleRemoveImage}
             disabled={!selectedImage}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
             style={{ background: "var(--color-hover)", color: "var(--color-text-secondary)", border: "none" }}
           >
             <X className="h-3.5 w-3.5" /> Remove
           </button>
+          <div className="flex-1" />
         </div>
 
-        {/* Image grid */}
-        <div className="flex-1 overflow-y-auto p-3">
+        {/* Image grid (drop zone) */}
+        <div
+          className="flex-1 overflow-y-auto p-3 relative"
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+        >
+          {/* Drag overlay */}
+          {draggingOver && selectedFolder && (
+            <div
+              className="absolute inset-0 z-10 flex items-center justify-center rounded-lg pointer-events-none"
+              style={{
+                background: "rgba(78,201,160,0.08)",
+                border: "2px dashed rgba(78,201,160,0.5)",
+                margin: 4,
+              }}
+            >
+              <div className="text-center">
+                <ImagePlus className="mx-auto mb-2 h-8 w-8" style={{ color: "#4ec9a0" }} />
+                <p className="text-[13px] font-medium" style={{ color: "#4ec9a0" }}>Drop images here</p>
+              </div>
+            </div>
+          )}
+
           {!selectedFolder ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
@@ -466,15 +690,18 @@ export function StyleLibraryPage() {
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
                 <ImagePlus className="mx-auto mb-3 h-10 w-10" style={{ color: "var(--color-text-muted)", opacity: 0.4 }} />
-                <p className="text-[13px] mb-2" style={{ color: "var(--color-text-muted)" }}>
+                <p className="text-[13px] mb-1" style={{ color: "var(--color-text-muted)" }}>
                   No images in this folder
+                </p>
+                <p className="text-[11px] mb-3" style={{ color: "var(--color-text-muted)", opacity: 0.7 }}>
+                  Drop images, paste (Ctrl+V), or click to add
                 </p>
                 <button
                   onClick={handleAddImages}
                   className="text-[12px] px-3 py-1.5 rounded cursor-pointer"
                   style={{ background: "var(--color-accent)", color: "var(--color-foreground)", border: "none" }}
                 >
-                  + Add Images
+                  + Open Images
                 </button>
               </div>
             </div>

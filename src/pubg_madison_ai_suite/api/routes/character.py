@@ -410,17 +410,35 @@ def _do_generate_grid(req: CharacterGenerateRequest) -> CharacterGridResponse:
 
     base_prompt = _build_character_prompt(req)
 
+    # Detect whether the description specifies an environment/background.
+    has_env = bool(req.env_context)
+
+    bg_instruction = (
+        "Each cell uses the EXACT background/environment described in the character "
+        "description below — do NOT override it."
+        if has_env else
+        "Background: solid dark grey #343434 behind every cell — no environments, "
+        "no scenery, no props on the ground."
+    )
+
     grid_header = (
         "4×4 character variation sheet: Generate a single image containing a 4×4 grid "
-        "(4 columns, 4 rows = 16 cells) of character variations.\n"
-        "Each cell shows ONE full-body character based on the description below, but each "
-        "of the 16 MUST be a DIFFERENT creative variation — vary the pose, camera angle, "
-        "lighting mood, expression, costume details, color accents, and overall energy. "
-        "No two cells should look the same.\n"
-        "Background: solid dark grey #343434 behind every cell.\n"
-        "Keep all 16 characters evenly spaced in a clean grid with no overlap or grid lines.\n"
-        "Realistic 3D-rendered style. NOT illustrated, NOT cartoon, NOT painted.\n"
-        "No text, labels, or annotations anywhere."
+        "(4 columns, 4 rows = 16 cells) of 16 DIFFERENT character design interpretations.\n\n"
+        "WHAT MUST DIFFER between the 16 cells:\n"
+        "- Each cell is a UNIQUE character design / interpretation of the spec below.\n"
+        "- Vary: facial features, hairstyle, body proportions, costume design choices, "
+        "color palette, material finishes, accessories, detailing, and overall silhouette.\n"
+        "- Every cell should feel like a distinctly different character that fits the same brief.\n\n"
+        "WHAT MUST BE IDENTICAL across ALL 16 cells:\n"
+        "- The EXACT pose described in the character attributes below. If the attributes say "
+        "'A pose' every character must be in an A pose. Do NOT change the pose per cell.\n"
+        "- The same camera angle / view for every cell.\n"
+        f"- {bg_instruction}\n\n"
+        "Layout rules:\n"
+        "- Keep all 16 characters evenly spaced in a clean 4×4 grid with no overlap and "
+        "no grid lines.\n"
+        "- Realistic 3D-rendered style. NOT illustrated, NOT cartoon, NOT painted.\n"
+        "- No text, labels, or annotations anywhere."
     )
 
     prompt = f"{grid_header}\n\n--- Character Description ---\n{base_prompt}"

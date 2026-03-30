@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { useToastContext } from "@/hooks/ToastContext";
 import { apiFetch } from "@/hooks/useApi";
-import { DS_EVT, dsDispatch } from "@/lib/deepSearchEvents";
+import { DS_EVT, dsDispatch, loadDeepSearchSources, saveDeepSearchSources, type DeepSearchSources } from "@/lib/deepSearchEvents";
 
 const DEPTH_OPTIONS = [
   { value: "quick", label: "Quick" },
@@ -50,29 +50,52 @@ export function DeepSearchPanel({ onSendToArtboard, isActivePage = true }: DeepS
   const [libraryName, setLibraryName] = useState("");
   const [showLibraryDialog, setShowLibraryDialog] = useState(false);
   const [libraryAdded, setLibraryAdded] = useState<Set<number>>(new Set());
+  const [sources, setSources] = useState<DeepSearchSources>(loadDeepSearchSources);
+  const [showSources, setShowSources] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const queryRef = useRef<HTMLTextAreaElement>(null);
+
+  const toggleSource = useCallback((key: keyof DeepSearchSources) => {
+    setSources((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      saveDeepSearchSources(next);
+      return next;
+    });
+  }, []);
 
   // Listen for Art Director (or other) trigger events.
   // We store the triggered query in a ref and use a flag + effect so
   // handleSearch runs with the committed state.
   const [triggerFlag, setTriggerFlag] = useState(0);
+  const [preparing, setPreparing] = useState(false);
 
   useEffect(() => {
     if (!isActivePage) return;
+    const onPreparing = () => {
+      setPreparing(true);
+      setStatus("Analyzing image and preparing smart search queries...");
+    };
     const onTrigger = (e: Event) => {
-      const { query: q, imageB64 } = (e as CustomEvent).detail ?? {};
+      setPreparing(false);
+      const { query: q, imageB64, enabledSources } = (e as CustomEvent).detail ?? {};
       if (typeof q === "string" && q.trim()) {
         setQuery(q.trim());
         if (imageB64) {
           setRefInputs([{ id: crypto.randomUUID(), b64: imageB64, note: "" }]);
         }
+        if (enabledSources) {
+          setSources(enabledSources);
+        }
         setTriggerFlag((f) => f + 1);
       }
     };
+    window.addEventListener(DS_EVT.PREPARING, onPreparing);
     window.addEventListener(DS_EVT.TRIGGER, onTrigger);
-    return () => window.removeEventListener(DS_EVT.TRIGGER, onTrigger);
+    return () => {
+      window.removeEventListener(DS_EVT.PREPARING, onPreparing);
+      window.removeEventListener(DS_EVT.TRIGGER, onTrigger);
+    };
   }, [isActivePage]);
 
   const addRefImage = useCallback((b64: string) => {
@@ -162,6 +185,7 @@ export function DeepSearchPanel({ onSendToArtboard, isActivePage = true }: DeepS
         query: fullQuery,
         num_images: numImages,
         depth,
+        enabled_sources: sources,
       };
       if (refInputs.length > 0) {
         body.image_b64 = refInputs[0].b64.replace(/^data:image\/[^;]+;base64,/, "");
@@ -465,6 +489,42 @@ export function DeepSearchPanel({ onSendToArtboard, isActivePage = true }: DeepS
             </div>
           </div>
 
+          {/* Search Sources */}
+          <div>
+            <button
+              onClick={() => setShowSources((v) => !v)}
+              className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider cursor-pointer w-full"
+              style={{ color: "var(--color-text-secondary)", background: "none", border: "none", padding: 0 }}
+            >
+              <span style={{ transform: showSources ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.15s", display: "inline-block", fontSize: 8 }}>&#9654;</span>
+              Search Sources
+              <span className="text-[9px] font-normal ml-auto" style={{ color: "var(--color-text-muted)" }}>
+                {Object.values(sources).filter(Boolean).length}/4
+              </span>
+            </button>
+            {showSources && (
+              <div className="mt-1.5 space-y-1 rounded p-2" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid var(--color-border)" }}>
+                {([
+                  ["gemini", "Gemini AI Search"],
+                  ["pexels", "Pexels"],
+                  ["pixabay", "Pixabay"],
+                  ["googleImages", "Google Images"],
+                ] as const).map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2 cursor-pointer py-0.5 group">
+                    <input
+                      type="checkbox"
+                      checked={sources[key]}
+                      onChange={() => toggleSource(key)}
+                      className="accent-current cursor-pointer"
+                      style={{ width: 13, height: 13 }}
+                    />
+                    <span className="text-[11px]" style={{ color: sources[key] ? "var(--color-text-primary)" : "var(--color-text-muted)" }}>{label}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Reference Images */}
           <div>
             <div className="flex items-center justify-between mb-1">
@@ -563,11 +623,11 @@ export function DeepSearchPanel({ onSendToArtboard, isActivePage = true }: DeepS
       {/* ── Right Panel: Results ── */}
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden" style={{ background: "var(--color-background)" }}>
         {/* Status / Summary bar */}
-        {(searching || status || summary) && (
+        {(preparing || searching || status || summary) && (
           <div className="shrink-0 px-3 py-2" style={{ borderBottom: "1px solid var(--color-border)", background: "var(--color-card)" }}>
             <div className="flex items-center gap-2">
-              {searching && <Loader2 size={14} className="animate-spin shrink-0" style={{ color: "var(--color-text-secondary)" }} />}
-              <span className="text-[11px] flex-1 font-medium" style={{ color: searching ? "var(--color-text-primary)" : "var(--color-text-muted)" }}>{status}</span>
+              {(searching || preparing) && <Loader2 size={14} className="animate-spin shrink-0" style={{ color: "var(--color-text-secondary)" }} />}
+              <span className="text-[11px] flex-1 font-medium" style={{ color: (searching || preparing) ? "var(--color-text-primary)" : "var(--color-text-muted)" }}>{status}</span>
               {results.length > 0 && (
                 <span className="text-[11px] shrink-0 font-medium" style={{ color: "var(--color-text-secondary)" }}>{results.length} found</span>
               )}

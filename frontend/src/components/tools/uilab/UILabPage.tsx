@@ -18,6 +18,7 @@ import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigMod
 import { ThreeDGenSidebar } from "@/components/shared/ThreeDGenSidebar";
 import type { ViewImage } from "@/components/shared/ThreeDGenSidebar";
 import { useArtDirector } from "@/hooks/ArtDirectorContext";
+import { useActivePage } from "@/hooks/ActivePageContext";
 import { DeepSearchPanel } from "@/components/shared/DeepSearchPanel";
 import type { SearchResult } from "@/components/shared/DeepSearchPanel";
 import { useArtboard } from "@/hooks/ArtboardContext";
@@ -200,6 +201,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   const [prompt, setPrompt] = useState("");
   const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
   const { setCurrentImage, setAttributesContext, setOnApplyFeedback } = useArtDirector();
+  const appPage = useActivePage();
   const [genCount, setGenCount] = useState(1);
   const { models, defaultModelId } = useModels();
   const [modelId, setModelId] = useState("");
@@ -1102,13 +1104,13 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   }, [active, prompt, setAttributesContext]);
 
   useEffect(() => {
-    if (active) {
+    if (active && appPage === "uilab") {
       setOnApplyFeedback(() => (suggestion: string) => {
         setPrompt((prev) => prev ? `${prev}\n${suggestion}` : suggestion);
       });
       return () => setOnApplyFeedback(null);
     }
-  }, [active, setOnApplyFeedback]);
+  }, [active, appPage, setOnApplyFeedback]);
 
   // ---------------------------------------------------------------------------
   // Render helpers
@@ -1714,22 +1716,23 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       {/* Image grid + guidance */}
       <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
         <div className="flex items-center gap-2 px-3 shrink-0" style={{ height: 36, borderBottom: "1px solid var(--color-border)", background: "var(--color-card)" }}>
-          <span className="text-[11px] font-semibold uppercase tracking-wider flex-1" style={{ color: "var(--color-text-muted)" }}>
+          <span className="text-[11px] font-semibold uppercase tracking-wider shrink-0" style={{ color: "var(--color-text-muted)" }}>
             {slSelectedFolder ? `Images — ${slSelectedFolder}${slActiveSub ? ` / ${slActiveSub.replace(/_styles$/, "")}` : ""}` : "Select a folder"}
           </span>
-          <span className="text-[10px] font-mono" style={{ color: "var(--color-text-muted)" }}>{slSelectedFolder ? `${slImages.length}/16` : ""}</span>
+          <span className="text-[10px] font-mono shrink-0" style={{ color: "var(--color-text-muted)" }}>{slSelectedFolder ? `${slImages.length}/16` : ""}</span>
+          <button onClick={handleSlAddImages} disabled={!slSelectedFolder} className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shrink-0" style={{ background: "var(--color-accent)", color: "var(--color-foreground)", border: "none" }}>
+            <ImagePlus className="h-3.5 w-3.5" /> Add
+          </button>
+          <button onClick={handleSlRemoveImage} disabled={!slSelectedImage} className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shrink-0" style={{ background: "var(--color-hover)", color: "var(--color-text-secondary)", border: "none" }}>
+            <X className="h-3.5 w-3.5" /> Remove
+          </button>
+          <div className="flex-1" />
           {slSelectedFolder && (
-            <button onClick={() => handleSlUseFolder(slSelectedFolder)} className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer"
+            <button onClick={() => handleSlUseFolder(slSelectedFolder)} className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer shrink-0"
               style={{ background: styleLibraryFolder === slSelectedFolder ? "rgba(78,201,160,0.15)" : "var(--color-accent)", color: styleLibraryFolder === slSelectedFolder ? "#4ec9a0" : "var(--color-foreground)", border: styleLibraryFolder === slSelectedFolder ? "1px solid rgba(78,201,160,0.3)" : "none" }}>
               {styleLibraryFolder === slSelectedFolder ? "Active Style" : "Use This Style"}
             </button>
           )}
-          <button onClick={handleSlAddImages} disabled={!slSelectedFolder} className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed" style={{ background: "var(--color-accent)", color: "var(--color-foreground)", border: "none" }}>
-            <ImagePlus className="h-3.5 w-3.5" /> Add
-          </button>
-          <button onClick={handleSlRemoveImage} disabled={!slSelectedImage} className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed" style={{ background: "var(--color-hover)", color: "var(--color-text-secondary)", border: "none" }}>
-            <X className="h-3.5 w-3.5" /> Remove
-          </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-3" onContextMenu={(e) => {
@@ -1990,16 +1993,17 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       {/* Image grid */}
       <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
         <div className="flex items-center gap-2 px-3 shrink-0" style={{ height: 36, borderBottom: "1px solid var(--color-border)", background: "var(--color-card)" }}>
-          <span className="text-[11px] font-semibold uppercase tracking-wider flex-1" style={{ color: "var(--color-text-muted)" }}>
+          <span className="text-[11px] font-semibold uppercase tracking-wider shrink-0" style={{ color: "var(--color-text-muted)" }}>
             {ulSelectedFolder ? `Images — ${ulSelectedFolder}` : "Select a folder"}
           </span>
-          <span className="text-[10px] font-mono" style={{ color: "var(--color-text-muted)" }}>{ulSelectedFolder ? `${ulImages.length}/50` : ""}</span>
-          <button onClick={handleUlAddImages} disabled={!ulSelectedFolder} className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed" style={{ background: "var(--color-accent)", color: "var(--color-foreground)", border: "none" }}>
+          <span className="text-[10px] font-mono shrink-0" style={{ color: "var(--color-text-muted)" }}>{ulSelectedFolder ? `${ulImages.length}/50` : ""}</span>
+          <button onClick={handleUlAddImages} disabled={!ulSelectedFolder} className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shrink-0" style={{ background: "var(--color-accent)", color: "var(--color-foreground)", border: "none" }}>
             <ImagePlus className="h-3.5 w-3.5" /> Add
           </button>
-          <button onClick={handleUlRemoveImage} disabled={!ulSelectedImage} className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed" style={{ background: "var(--color-hover)", color: "var(--color-text-secondary)", border: "none" }}>
+          <button onClick={handleUlRemoveImage} disabled={!ulSelectedImage} className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shrink-0" style={{ background: "var(--color-hover)", color: "var(--color-text-secondary)", border: "none" }}>
             <X className="h-3.5 w-3.5" /> Remove
           </button>
+          <div className="flex-1" />
         </div>
 
         <div className="flex-1 overflow-y-auto p-3" onContextMenu={(e) => {

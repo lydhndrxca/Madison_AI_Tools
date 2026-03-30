@@ -32,6 +32,7 @@ class WeaponGenerateRequest(BaseModel):
     ref_images_b64: Optional[dict[str, str]] = None
     mode: str = "quality"
     model_id: Optional[str] = None
+    style_guidance: Optional[str] = None
 
 
 class WeaponResponse(BaseModel):
@@ -90,9 +91,10 @@ def _build_weapon_prompt(req: WeaponGenerateRequest) -> str:
     if req.condition:
         parts.append(f"Condition: {req.condition}")
     header = "\n".join(parts)
-    if header:
-        return f"{header}\n\n{req.prompt}"
-    return req.prompt
+    prompt = f"{header}\n\n{req.prompt}" if header else req.prompt
+    if req.style_guidance:
+        prompt += f"\n\n--- Style Library Guidance ---\n{req.style_guidance}"
+    return prompt
 
 
 # ---------------------------------------------------------------------------

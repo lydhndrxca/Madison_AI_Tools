@@ -17,6 +17,7 @@ import { XmlModal } from "@/components/shared/XmlModal";
 import { ArtDirectorWidget } from "@/components/shared/ArtDirectorWidget";
 import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
 import { useArtDirector } from "@/hooks/ArtDirectorContext";
+import { useActivePage } from "@/hooks/ActivePageContext";
 import { DeepSearchPanel } from "@/components/shared/DeepSearchPanel";
 import type { SearchResult } from "@/components/shared/DeepSearchPanel";
 import { useArtboard } from "@/hooks/ArtboardContext";
@@ -258,6 +259,7 @@ export function EnvironmentPage({ instanceId = 0, active = true, projectUid }: E
   const [description, setDescription] = useState("");
   const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
   const { setCurrentImage, setAttributesContext, setOnApplyFeedback } = useArtDirector();
+  const appPage = useActivePage();
   const [editPrompt, setEditPrompt] = useState("");
 
   // Environment attributes
@@ -1234,7 +1236,7 @@ export function EnvironmentPage({ instanceId = 0, active = true, projectUid }: E
   }, [active, description, setAttributesContext]);
 
   useEffect(() => {
-    if (active) {
+    if (active && appPage === "environment") {
       setOnApplyFeedback(() => (suggestion: string) => {
         setEditPrompt((prev) => prev ? `${prev}\n${suggestion}` : suggestion);
 
@@ -1264,7 +1266,7 @@ export function EnvironmentPage({ instanceId = 0, active = true, projectUid }: E
       });
       return () => setOnApplyFeedback(null);
     }
-  }, [active, setOnApplyFeedback]);
+  }, [active, appPage, setOnApplyFeedback]);
 
   // ---------------------------------------------------------------------------
   // Render helpers
@@ -1474,7 +1476,11 @@ export function EnvironmentPage({ instanceId = 0, active = true, projectUid }: E
           className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
           style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
           value={generationMode}
-          onChange={(e) => setGenerationMode(e.target.value as "single" | "grid")}
+          onChange={(e) => {
+            const mode = e.target.value as "single" | "grid";
+            setGenerationMode(mode);
+            setActiveTab(mode === "grid" ? "grid" : "main");
+          }}
           disabled={busy.any}
         >
           <option value="single">Single Image</option>

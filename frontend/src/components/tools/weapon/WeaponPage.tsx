@@ -15,6 +15,7 @@ import { XmlModal } from "@/components/shared/XmlModal";
 import { ArtDirectorWidget } from "@/components/shared/ArtDirectorWidget";
 import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
 import { useArtDirector } from "@/hooks/ArtDirectorContext";
+import { useActivePage } from "@/hooks/ActivePageContext";
 import { DeepSearchPanel } from "@/components/shared/DeepSearchPanel";
 import type { SearchResult } from "@/components/shared/DeepSearchPanel";
 import { ThreeDGenSidebar } from "@/components/shared/ThreeDGenSidebar";
@@ -348,6 +349,11 @@ export function WeaponPage({ instanceId = 0, active = true, projectUid }: Weapon
   const { addFavorite, removeFavorite, isFavorited, getFavoriteId } = useFavorites();
   const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
   const { setCurrentImage, setAttributesContext, setOnApplyFeedback } = useArtDirector();
+  const appPage = useActivePage();
+
+  // Style library
+  const [styleLibraryFolder, setStyleLibraryFolder] = useState("");
+  const [styleLibraryFolders, setStyleLibraryFolders] = useState<{ name: string; guidance_text: string }[]>([]);
 
   // Weapon library
   const [library, setLibrary] = useState<WeaponDef[]>(() => loadLibrary());
@@ -421,6 +427,12 @@ export function WeaponPage({ instanceId = 0, active = true, projectUid }: Weapon
     if (defaultModelId && !modelId) setModelId(defaultModelId);
   }, [defaultModelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    apiFetch<{ name: string; guidance_text: string }[]>("/styles/folders?category=general").then((folders) => {
+      setStyleLibraryFolders(folders);
+    }).catch(() => {});
+  }, []);
+
   // Image helpers
   const currentImages = gallery[activeTab] || [];
   const currentIdx = imageIdx[activeTab] ?? 0;
@@ -460,6 +472,7 @@ export function WeaponPage({ instanceId = 0, active = true, projectUid }: Weapon
     try {
       const mainB64 = getMainB64();
       const isEdit = mainB64 && editPrompt.trim();
+      const styleFolder = styleLibraryFolders.find((f) => f.name === styleLibraryFolder);
       const resp = await apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
         isEdit ? "/weapon/edit" : "/weapon/generate", {
           method: "POST",
@@ -469,6 +482,7 @@ export function WeaponPage({ instanceId = 0, active = true, projectUid }: Weapon
             view_type: "main", reference_image_b64: mainB64,
             edit_prompt: isEdit ? editPrompt : undefined,
             mode: "quality", model_id: modelId || undefined,
+            style_guidance: styleFolder?.guidance_text || undefined,
           }),
         },
       );
@@ -479,7 +493,7 @@ export function WeaponPage({ instanceId = 0, active = true, projectUid }: Weapon
       } else if (resp.error) addToast(resp.error, "error");
     } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
     busy.end("generate");
-  }, [editPrompt, weaponName, components, finish, condition, modelId, getMainB64, setTabImage, addToast, busy]);
+  }, [editPrompt, weaponName, components, finish, condition, modelId, styleLibraryFolder, styleLibraryFolders, getMainB64, setTabImage, addToast, busy]);
 
   const handleExtract = useCallback(async () => {
     const mainB64 = getMainB64();
@@ -680,7 +694,7 @@ export function WeaponPage({ instanceId = 0, active = true, projectUid }: Weapon
   // Session register
   useSessionRegister(
     sessionKey,
-    () => ({ activeTab, tabs, editText, editPrompt, weaponName, finish, condition, components, gallery, imageIdx, editHistory, modelId }),
+    () => ({ activeTab, tabs, editText, editPrompt, weaponName, finish, condition, components, gallery, imageIdx, editHistory, modelId, styleLibraryFolder }),
     (s: unknown) => {
       if (s === null) { handleReset(); return; }
       const d = s as Record<string, unknown>;
@@ -696,6 +710,7 @@ export function WeaponPage({ instanceId = 0, active = true, projectUid }: Weapon
       if (d.imageIdx) setImageIdx(d.imageIdx as Record<string, number>);
       if (d.editHistory) setEditHistory(d.editHistory as EditEntry[]);
       if (typeof d.modelId === "string") setModelId(d.modelId);
+      if (typeof d.styleLibraryFolder === "string") setStyleLibraryFolder(d.styleLibraryFolder);
     },
   );
 
@@ -703,11 +718,11 @@ export function WeaponPage({ instanceId = 0, active = true, projectUid }: Weapon
   useEffect(() => { if (active) setCurrentImage(currentSrc || null); }, [active, currentSrc, setCurrentImage]);
   useEffect(() => { if (active) setAttributesContext(editText || ""); }, [active, editText, setAttributesContext]);
   useEffect(() => {
-    if (active) {
+    if (active && appPage === "weapon") {
       setOnApplyFeedback(() => (suggestion: string) => { setEditPrompt((prev) => prev ? `${prev}\n${suggestion}` : suggestion); });
       return () => setOnApplyFeedback(null);
     }
-  }, [active, setOnApplyFeedback]);
+  }, [active, appPage, setOnApplyFeedback]);
 
   // Voice command listener
   const voiceCmdRef = useRef({ generate: handleGenerate, extract_attributes: handleExtract, enhance_description: handleEnhance, generate_all_views: handleGenerateAllViews, send_to_photoshop: handleSendToPS, save_image: handleSaveImage });
@@ -851,6 +866,19 @@ export function WeaponPage({ instanceId = 0, active = true, projectUid }: Weapon
                     Generate Weapon
                   </Button>
                   {busy.any && <Button variant="danger" size="sm" className="w-full" onClick={handleCancel} title="Cancel all generations">Cancel</Button>}
+                  <div>
+                    <span className="text-xs font-medium block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Style Library</span>
+                    <select
+                      className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)] min-w-0 truncate"
+                      style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)", maxWidth: "100%" }}
+                      value={styleLibraryFolder}
+                      onChange={(e) => setStyleLibraryFolder(e.target.value)}
+                      title="Style folder for visual guidance"
+                    >
+                      <option value="">Default (Gemini)</option>
+                      {styleLibraryFolders.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
+                    </select>
+                  </div>
                   {models.length > 0 && (
                     <select className="w-full min-w-0 px-2 py-1 text-xs rounded-[var(--radius-sm)] truncate" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)", maxWidth: "100%" }} value={modelId} onChange={(e) => setModelId(e.target.value)} title="AI model for generation">
                       {models.map((m) => <option key={m.id} value={m.id}>{m.label} — {m.resolution} ({m.time_estimate})</option>)}

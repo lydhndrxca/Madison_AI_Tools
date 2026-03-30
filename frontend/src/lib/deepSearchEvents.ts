@@ -4,11 +4,45 @@
  * and button visual states across AppShell & ArtDirectorWidget.
  */
 
+// ── Search source settings (persisted in localStorage) ──────
+
+export interface DeepSearchSources {
+  gemini: boolean;
+  pexels: boolean;
+  pixabay: boolean;
+  googleImages: boolean;
+}
+
+const DS_SOURCES_KEY = "madison-deep-search-sources";
+
+const DEFAULT_SOURCES: DeepSearchSources = {
+  gemini: true,
+  pexels: true,
+  pixabay: true,
+  googleImages: true,
+};
+
+export function loadDeepSearchSources(): DeepSearchSources {
+  try {
+    const raw = localStorage.getItem(DS_SOURCES_KEY);
+    if (raw) return { ...DEFAULT_SOURCES, ...JSON.parse(raw) };
+  } catch { /* */ }
+  return { ...DEFAULT_SOURCES };
+}
+
+export function saveDeepSearchSources(sources: DeepSearchSources) {
+  try {
+    localStorage.setItem(DS_SOURCES_KEY, JSON.stringify(sources));
+  } catch { /* */ }
+}
+
 // ── Event names ──────────────────────────────────────────────
 
 export const DS_EVT = {
   /** Art Director requests a search. detail: { query: string; imageB64?: string } */
   TRIGGER: "deep-search-trigger",
+  /** Search is being prepared (enrichment in progress) */
+  PREPARING: "deep-search-preparing",
   /** DeepSearchPanel started searching */
   START: "deep-search-start",
   /** DeepSearchPanel finished (has results). detail: { count: number } */
@@ -23,8 +57,8 @@ export function dsDispatch(name: string, detail?: Record<string, unknown>) {
   window.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
-export function triggerDeepSearch(query: string, imageB64?: string) {
-  dsDispatch(DS_EVT.TRIGGER, { query, imageB64 });
+export function triggerDeepSearch(query: string, imageB64?: string, enabledSources?: DeepSearchSources) {
+  dsDispatch(DS_EVT.TRIGGER, { query, imageB64, enabledSources: enabledSources ?? loadDeepSearchSources() });
 }
 
 // ── Detect "deep search" intent in user text ─────────────────
