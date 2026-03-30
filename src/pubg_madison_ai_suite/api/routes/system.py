@@ -67,6 +67,9 @@ async def set_api_key(body: ApiKeyRequest):
 # Extra API keys (Pexels, Pixabay, etc.)
 # ---------------------------------------------------------------------------
 
+_ALLOWED_EXTRA_KEYS = frozenset({"pexels_api_key", "pixabay_api_key"})
+
+
 class ExtraKeyRequest(BaseModel):
     name: str
     key: str
@@ -76,7 +79,7 @@ class ExtraKeyRequest(BaseModel):
 async def get_extra_keys():
     """Return masked status for all optional API keys."""
     result = {}
-    for name in ("pexels_api_key", "pixabay_api_key"):
+    for name in _ALLOWED_EXTRA_KEYS:
         val = core.get_extra_key(name)
         masked = val[:4] + "..." + val[-4:] if len(val) > 8 else ("***" if val else "")
         result[name] = {"has_key": bool(val), "key_masked": masked}
@@ -85,6 +88,9 @@ async def get_extra_keys():
 
 @router.post("/extra-key")
 async def set_extra_key(body: ExtraKeyRequest):
+    if body.name not in _ALLOWED_EXTRA_KEYS:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=400, content={"error": f"Key name '{body.name}' is not allowed. Allowed: {sorted(_ALLOWED_EXTRA_KEYS)}"})
     core.set_extra_key(body.name, body.key)
     return {"ok": True}
 

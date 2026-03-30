@@ -223,11 +223,13 @@ const inputStyle = { background: "var(--color-input-bg)", border: "1px solid var
 interface PropPageProps {
   instanceId?: number;
   active?: boolean;
+  projectUid?: string;
 }
 
-export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
-  const layoutStorageKey = layoutStorageKeyFor(instanceId);
-  const sessionKey = `prop${instanceId ? `-${instanceId}` : ""}`;
+export function PropPage({ instanceId = 0, active = true, projectUid }: PropPageProps) {
+  const stableId = projectUid ?? String(instanceId);
+  const layoutStorageKey = `madison-prop-layout-${stableId}`;
+  const sessionKey = `prop-${stableId}`;
   const [tabs, setTabs] = useState<TabDef[]>(BUILTIN_TABS);
   const [activeTab, setActiveTab] = useState("main");
   const busy = useBusySet();
@@ -656,7 +658,11 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
   }, [activeTab, getMainImageB64, addToast, handleGenerate]);
 
   // Cancel
-  const handleCancel = useCallback(() => { cancelAllRequests(); busy.endAll(); }, [busy]);
+  const handleCancel = useCallback(() => {
+    cancelAllRequests();
+    busy.endAll();
+    try { fetch(`${window.location.protocol === "file:" ? "http://127.0.0.1:8420" : ""}/api/system/cancel`, { method: "POST" }); } catch { /* */ }
+  }, [busy]);
 
   const handleGridGenerate = useCallback(async () => {
     busy.start("gen");

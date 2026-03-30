@@ -171,11 +171,13 @@ const inputStyle = { background: "var(--color-input-bg)", border: "1px solid var
 interface UILabPageProps {
   instanceId?: number;
   active?: boolean;
+  projectUid?: string;
 }
 
-export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
-  const layoutStorageKey = layoutStorageKeyFor(instanceId);
-  const sessionKey = `uilab${instanceId ? `-${instanceId}` : ""}`;
+export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPageProps) {
+  const stableId = projectUid ?? String(instanceId);
+  const layoutStorageKey = `madison-uilab-layout-${stableId}`;
+  const sessionKey = `uilab-${stableId}`;
   const [tabs, setTabs] = useState<TabDef[]>(BUILTIN_TABS);
   const [activeTab, setActiveTab] = useState("main");
   const busy = useBusySet();
@@ -758,6 +760,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
     cancelAllRequests();
     busy.endAll();
     addToast("Cancelled", "info");
+    try { fetch(`${window.location.protocol === "file:" ? "http://127.0.0.1:8420" : ""}/api/system/cancel`, { method: "POST" }); } catch { /* */ }
   }, [busy, addToast]);
 
   const handleClearGallery = useCallback(() => {

@@ -190,6 +190,11 @@ export function ArtDirectorProvider({ children }: { children: React.ReactNode })
   const sendMessage = useCallback(async (text: string, extraImages?: string[]) => {
     if (!text.trim()) return;
 
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",

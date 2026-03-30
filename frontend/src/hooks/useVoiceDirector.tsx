@@ -81,7 +81,7 @@ export function VoiceDirectorProvider({ activePage, children }: ProviderProps) {
       const b64 = arrayBufferToBase64(buf);
       const { hasImage, activeTab } = getImageState();
 
-      console.log(`[VoiceDirector] Sending ${(blob.size / 1024).toFixed(1)}KB audio for intent parsing...`);
+      void 0;
 
       const resp = await apiFetch<{
         action: string;
@@ -111,7 +111,7 @@ export function VoiceDirectorProvider({ activePage, children }: ProviderProps) {
       const params = resp.params || {};
       const spokenText = resp.spoken_text || resp.message || "";
 
-      console.log(`[VoiceDirector] Action: ${action}`, params);
+      void 0;
 
       const cmd: VoiceCommand = { action, params, spokenText };
       setLastCommand(cmd);

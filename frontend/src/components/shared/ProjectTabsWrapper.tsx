@@ -12,7 +12,7 @@ interface ProjectMeta {
 interface ProjectTabsWrapperProps {
   storageKey: string;
   defaultProjectName?: string;
-  children: (props: { instanceId: number; active: boolean }) => React.ReactNode;
+  children: (props: { instanceId: number; active: boolean; projectUid: string }) => React.ReactNode;
 }
 
 function ensureUid(p: ProjectMeta): ProjectMeta {
@@ -353,7 +353,7 @@ export function ProjectTabsWrapper({
             className="h-full"
             style={{ display: idx === activeIdx ? "contents" : "none" }}
           >
-            {children({ instanceId: idx, active: idx === activeIdx })}
+            {children({ instanceId: idx, active: idx === activeIdx, projectUid: proj.uid ?? String(idx) })}
           </div>
         ))}
       </div>

@@ -63,7 +63,8 @@ export async function apiFetchSSE(
     const text = await res.text();
     return { error: `${res.status}: ${text}` };
   }
-  const reader = res.body!.getReader();
+  if (!res.body) return { error: "No response body" };
+  const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
   while (true) {

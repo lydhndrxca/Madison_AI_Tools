@@ -377,7 +377,10 @@ class LoadHistoryRequest(BaseModel):
 @router.post("/save-history")
 async def save_history(req: SaveHistoryRequest):
     try:
-        p = Path(req.image_path)
+        p = Path(req.image_path).resolve()
+        save_root = Path(core.get_save_folder()).resolve()
+        if not str(p).startswith(str(save_root)):
+            return {"ok": False, "error": "Path outside save directory"}
         if not p.exists():
             return {"ok": False, "error": "Image file not found"}
         hist_path = p.with_suffix(".history.json")
@@ -390,7 +393,10 @@ async def save_history(req: SaveHistoryRequest):
 @router.post("/load-history")
 async def load_history(req: LoadHistoryRequest):
     try:
-        p = Path(req.image_path)
+        p = Path(req.image_path).resolve()
+        save_root = Path(core.get_save_folder()).resolve()
+        if not str(p).startswith(str(save_root)):
+            return {"found": False, "error": "Path outside save directory"}
         hist_path = p.with_suffix(".history.json")
         if not hist_path.exists():
             return {"found": False, "history": None}

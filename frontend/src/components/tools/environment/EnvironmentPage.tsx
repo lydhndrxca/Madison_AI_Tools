@@ -229,11 +229,13 @@ const inputStyle = { background: "var(--color-input-bg)", border: "1px solid var
 interface EnvironmentPageProps {
   instanceId?: number;
   active?: boolean;
+  projectUid?: string;
 }
 
-export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPageProps) {
-  const layoutStorageKey = layoutStorageKeyFor(instanceId);
-  const sessionKey = `environment${instanceId ? `-${instanceId}` : ""}`;
+export function EnvironmentPage({ instanceId = 0, active = true, projectUid }: EnvironmentPageProps) {
+  const stableId = projectUid ?? String(instanceId);
+  const layoutStorageKey = `madison-env-layout-${stableId}`;
+  const sessionKey = `environment-${stableId}`;
   const [tabs, setTabs] = useState<TabDef[]>(BUILTIN_TABS);
   const [activeTab, setActiveTab] = useState("main");
   const busy = useBusySet();
@@ -572,7 +574,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
     };
   }, [tabs, getImageB64, getMainImageB64, description, envName, biome, gameContext, timeOfDay, seasonWeather, envScale, attributes, styleFusion, preservation, modelId, extractMode, isSectionEnabled, styleLibraryFolder, styleLibraryFolders, customSections.getPromptContributions, customSections.getImageAttachments]);
 
-  // Apply edit handler (uses /environment/generate with edit_prompt)
+  // Apply edit handler (uses /env/generate with edit_prompt)
   const handleApplyEdit = useCallback(async () => {
     if (!editPrompt.trim()) return;
     const mainB64 = getMainImageB64();
@@ -586,7 +588,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
         model_id: editModel || modelId || undefined,
       };
       const res = await apiFetch<{ image_b64?: string; width?: number; height?: number; error?: string }>(
-        "/environment/generate", { method: "POST", body: JSON.stringify(body) },
+        "/env/generate", { method: "POST", body: JSON.stringify(body) },
       );
       if (res.image_b64) {
         setTabImage("main", `data:image/png;base64,${res.image_b64}`, `Edit: ${editPrompt.slice(0, 40)}`);
@@ -651,7 +653,11 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
     await handleGenerate(vt);
   }, [activeTab, getMainImageB64, addToast, handleGenerate]);
 
-  const handleCancel = useCallback(() => { cancelAllRequests(); busy.endAll(); }, [busy]);
+  const handleCancel = useCallback(() => {
+    cancelAllRequests();
+    busy.endAll();
+    try { fetch(`${window.location.protocol === "file:" ? "http://127.0.0.1:8420" : ""}/api/system/cancel`, { method: "POST" }); } catch { /* */ }
+  }, [busy]);
 
   const handleGridGenerate = useCallback(async () => {
     busy.start("gen");

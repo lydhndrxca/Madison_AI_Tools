@@ -315,11 +315,12 @@ function useBusySet() {
 
 /* ── Main component ────────────────────────────────────────── */
 
-interface WeaponPageProps { instanceId?: number; active?: boolean }
+interface WeaponPageProps { instanceId?: number; active?: boolean; projectUid?: string }
 
-export function WeaponPage({ instanceId = 0, active = true }: WeaponPageProps) {
-  const layoutStorageKey = `madison-weapon-layout${instanceId ? `-${instanceId}` : ""}`;
-  const sessionKey = `weapon${instanceId ? `-${instanceId}` : ""}`;
+export function WeaponPage({ instanceId = 0, active = true, projectUid }: WeaponPageProps) {
+  const stableId = projectUid ?? String(instanceId);
+  const layoutStorageKey = `madison-weapon-layout-${stableId}`;
+  const sessionKey = `weapon-${stableId}`;
 
   const [tabs, setTabs] = useState<TabDef[]>(BUILTIN_TABS);
   const [activeTab, setActiveTab] = useState("main");

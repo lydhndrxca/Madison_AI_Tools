@@ -226,8 +226,14 @@ class ImageInfo(BaseModel):
     disabled: bool = False
 
 
+def _safe_segment(seg: str) -> bool:
+    return ".." not in seg and "/" not in seg and "\\" not in seg and "\x00" not in seg and seg.strip() != ""
+
+
 @router.get("/folders/{folder_name}/images")
 def list_images(folder_name: str, subfolder: str = "") -> List[ImageInfo]:
+    if not _safe_segment(folder_name) or (subfolder and not _safe_segment(subfolder)):
+        return []
     base = _lib_dir() / folder_name
     if subfolder:
         base = base / subfolder
@@ -274,6 +280,8 @@ class AddImageReq(BaseModel):
 
 @router.post("/folders/{folder_name}/images")
 def add_images(folder_name: str, images: List[AddImageReq]) -> dict:
+    if not _safe_segment(folder_name):
+        return {"ok": False, "error": "Invalid folder name"}
     folder_path = _lib_dir() / folder_name
     folder_path.mkdir(parents=True, exist_ok=True)
     current = _image_files(folder_path)
@@ -302,6 +310,10 @@ def add_images(folder_name: str, images: List[AddImageReq]) -> dict:
 
 @router.delete("/folders/{folder_name}/images/{filename}")
 def remove_image(folder_name: str, filename: str, subfolder: str = "") -> dict:
+    if not _safe_segment(folder_name) or not _safe_segment(filename):
+        return {"ok": False, "error": "Invalid name"}
+    if subfolder and not _safe_segment(subfolder):
+        return {"ok": False, "error": "Invalid subfolder"}
     base = _lib_dir() / folder_name
     if subfolder:
         base = base / subfolder

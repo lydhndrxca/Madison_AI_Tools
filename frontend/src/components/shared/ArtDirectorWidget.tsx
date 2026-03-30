@@ -240,6 +240,7 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
     for (let i = 0; i < items.length; i++) {
       if (items[i].type.startsWith("image/")) {
         e.preventDefault();
+        e.stopPropagation();
         const file = items[i].getAsFile();
         if (!file) continue;
         const reader = new FileReader();

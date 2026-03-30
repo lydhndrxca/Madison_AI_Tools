@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, Component, type ReactNode, type ErrorInfo } from "react";
 import { AppShell } from "./components/shell/AppShell";
 import { GeminiPage } from "./components/tools/gemini/GeminiPage";
 import { MultiviewPage } from "./components/tools/multiview/MultiviewPage";
@@ -58,6 +58,29 @@ function AppInner() {
   );
 }
 
+class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error, info: ErrorInfo) { console.error("[AppErrorBoundary]", error, info.componentStack); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", background: "#1a1a1c", color: "#e0e0e0", fontFamily: "system-ui", gap: 16, padding: 32, textAlign: "center" }}>
+          <div style={{ fontSize: 20, fontWeight: 600 }}>Something went wrong</div>
+          <div style={{ fontSize: 13, color: "#999", maxWidth: 480 }}>{this.state.error.message}</div>
+          <button onClick={() => this.setState({ error: null })} style={{ marginTop: 8, padding: "8px 20px", background: "#333", color: "#fff", border: "1px solid #555", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>
+            Try Again
+          </button>
+          <button onClick={() => window.location.reload()} style={{ padding: "8px 20px", background: "transparent", color: "#888", border: "1px solid #444", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>
+            Reload Application
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function BackupInit() {
   useSettingsBackup();
   return null;
@@ -74,7 +97,9 @@ export function App() {
               <CustomSectionsProvider>
                 <ModelsProvider>
                   <ArtDirectorProvider>
-                    <AppInner />
+                    <AppErrorBoundary>
+                      <AppInner />
+                    </AppErrorBoundary>
                   </ArtDirectorProvider>
                 </ModelsProvider>
               </CustomSectionsProvider>

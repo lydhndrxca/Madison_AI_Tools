@@ -854,6 +854,8 @@ async def generate_grid(body: PropGenerateRequest):
 
 @router.post("/extract-attributes", response_model=PropAttributeResponse)
 async def extract_attributes(body: PropAttributeRequest):
+    if not body.description.strip() and not body.image_b64:
+        return PropAttributeResponse(error="Provide a description or image")
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(_pool, _do_extract_attributes, body.description, body.image_b64)
 

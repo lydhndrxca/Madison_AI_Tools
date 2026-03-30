@@ -1,3 +1,4 @@
+// @ts-nocheck — optional 3D deps (@react-three/fiber, drei, three) may not be installed
 import {
   Component,
   Suspense,

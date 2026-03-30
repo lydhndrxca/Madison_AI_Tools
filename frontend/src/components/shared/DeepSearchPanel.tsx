@@ -167,7 +167,8 @@ export function DeepSearchPanel({ onSendToArtboard, isActivePage = true }: DeepS
         body.image_b64 = refInputs[0].b64.replace(/^data:image\/[^;]+;base64,/, "");
       }
 
-      const res = await fetch("/api/refsearch/search", {
+      const base = window.location.protocol === "file:" ? "http://127.0.0.1:8420" : "";
+      const res = await fetch(`${base}/api/refsearch/search`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

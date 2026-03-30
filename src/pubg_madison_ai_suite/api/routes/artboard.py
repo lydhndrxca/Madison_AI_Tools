@@ -135,9 +135,15 @@ def list_boards() -> List[BoardInfo]:
     return result
 
 
+def _safe_board_name(raw: str) -> Optional[str]:
+    """Strip dangerous chars from board name. Returns None if invalid."""
+    name = raw.strip().replace("..", "").replace("/", "").replace("\\", "").replace("\x00", "")
+    return name if name else None
+
+
 @router.post("/boards")
 def save_board(req: SaveBoardReq) -> dict:
-    name = req.name.strip()
+    name = _safe_board_name(req.name)
     if not name:
         return {"ok": False, "error": "Name required"}
     _write_board(name, [it.model_dump() for it in req.items])
@@ -146,7 +152,10 @@ def save_board(req: SaveBoardReq) -> dict:
 
 @router.get("/boards/{name}")
 def load_board(name: str) -> BoardData:
-    meta = _read_board_meta(name)
+    safe = _safe_board_name(name)
+    if not safe:
+        return BoardData(name=name, items=[], created_at="", updated_at="")
+    meta = _read_board_meta(safe)
     validated_items = []
     for it in meta.get("items", []):
         try:
@@ -154,7 +163,7 @@ def load_board(name: str) -> BoardData:
         except Exception:
             pass
     return BoardData(
-        name=name,
+        name=safe,
         items=validated_items,
         created_at=meta.get("created_at", ""),
         updated_at=meta.get("updated_at", ""),
@@ -163,14 +172,20 @@ def load_board(name: str) -> BoardData:
 
 @router.put("/boards/{name}")
 def update_board(name: str, req: SaveBoardReq) -> dict:
-    _write_board(name, [it.model_dump() for it in req.items])
+    safe = _safe_board_name(name)
+    if not safe:
+        return {"ok": False, "error": "Invalid board name"}
+    _write_board(safe, [it.model_dump() for it in req.items])
     return {"ok": True}
 
 
 @router.delete("/boards/{name}")
 def delete_board(name: str) -> dict:
     import shutil
-    folder = _lib_dir() / name
+    safe = _safe_board_name(name)
+    if not safe:
+        return {"ok": False, "error": "Invalid board name"}
+    folder = _lib_dir() / safe
     if folder.is_dir():
         shutil.rmtree(folder)
     return {"ok": True}

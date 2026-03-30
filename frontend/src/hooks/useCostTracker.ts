@@ -44,10 +44,13 @@ function saveCache(data: CostData): void {
 export function useCostTracker() {
   const [costs, setCosts] = useState<CostData>(loadCache);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fetchIdRef = useRef(0);
 
   const fetchCosts = useCallback(async () => {
+    const id = ++fetchIdRef.current;
     try {
       const data = await apiFetch<CostData>("/system/api-costs");
+      if (id !== fetchIdRef.current) return;
       if (data && typeof data.total === "number") {
         const slim = { total: data.total, categories: data.categories || {} };
         setCosts(slim);

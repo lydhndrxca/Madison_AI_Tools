@@ -4,8 +4,8 @@ import { CharacterPage } from "./CharacterPage";
 export function CharacterLabWrapper() {
   return (
     <ProjectTabsWrapper storageKey="madison-charlab-projects" defaultProjectName="Project">
-      {({ instanceId, active }) => (
-        <CharacterPage instanceId={instanceId} active={active} />
+      {({ instanceId, active, projectUid }) => (
+        <CharacterPage instanceId={instanceId} active={active} projectUid={projectUid} />
       )}
     </ProjectTabsWrapper>
   );

@@ -253,6 +253,8 @@ class DeleteRequest(BaseModel):
 
 @router.post("/delete")
 async def gallery_delete(body: DeleteRequest):
+    if not _validate_segment(body.tool) or not _validate_segment(body.date):
+        return {"ok": False, "deleted": 0, "error": "Invalid tool or date segment"}
     deleted = 0
     for fn in body.filenames:
         if ".." in fn or "/" in fn or "\\" in fn:
@@ -281,6 +283,10 @@ async def gallery_delete(body: DeleteRequest):
 
 @router.post("/open-folder")
 async def gallery_open_folder(tool: str = "", date: str = ""):
+    if tool and not _validate_segment(tool):
+        return {"ok": False, "error": "Invalid tool segment"}
+    if date and not _validate_segment(date):
+        return {"ok": False, "error": "Invalid date segment"}
     target = _save_root()
     if tool:
         target = target / tool

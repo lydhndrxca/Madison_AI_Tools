@@ -542,11 +542,13 @@ function loadDefaultLayout(storageKey: string): LayoutState {
 interface CharacterPageProps {
   instanceId?: number;
   active?: boolean;
+  projectUid?: string;
 }
 
-export function CharacterPage({ instanceId = 0, active = true }: CharacterPageProps) {
-  const layoutStorageKey = `madison-character-layout${instanceId ? `-${instanceId}` : ""}`;
-  const sessionKey = `character${instanceId ? `-${instanceId}` : ""}`;
+export function CharacterPage({ instanceId = 0, active = true, projectUid }: CharacterPageProps) {
+  const stableId = projectUid ?? String(instanceId);
+  const layoutStorageKey = `madison-character-layout-${stableId}`;
+  const sessionKey = `character-${stableId}`;
   const [tabs, setTabs] = useState<TabDef[]>(BUILTIN_TABS);
   const [activeTab, setActiveTab] = useState("main");
   const busy = useBusySet();
@@ -1751,7 +1753,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
           reference_image_b64: mainRef || undefined,
           recreate_mode: extractMode === "recreate",
           custom_sections_context: customSections.getPromptContributions() || undefined,
-          custom_section_images: customSections.getImageAttachments(),
+          custom_section_images: customSections.getImageAttachments().map((img: string) => img.replace(/^data:image\/\w+;base64,/, "")).filter(Boolean),
         }),
       });
       if (res.error) {

@@ -187,7 +187,7 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
   const insertText = useCallback((text: string) => {
     const el = resolveTarget();
     if (!el) {
-      console.log("[VoiceToText] No target text field found — transcription:", text);
+      if (process.env.NODE_ENV === "development") console.log("[VoiceToText] No target text field found — transcription:", text);
       return;
     }
 
@@ -197,7 +197,7 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
     const inserted = document.execCommand("insertText", false, spacer + text);
 
     if (!inserted) {
-      console.log("[VoiceToText] execCommand failed, using fallback setter");
+      void 0;
       const start = el.selectionStart ?? el.value.length;
       const end = el.selectionEnd ?? el.value.length;
       const before = el.value.slice(0, start);
@@ -215,7 +215,7 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
       el.setSelectionRange(cursorPos, cursorPos);
     }
 
-    console.log("[VoiceToText] Inserted text into", el.tagName, el.placeholder || el.name || "");
+    void 0;
   }, [resolveTarget]);
 
   /* ── Gemini engine ──────────────────────────────────────────── */
@@ -253,13 +253,13 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
           console.warn("[VoiceToText] Dropping duplicate transcript (likely hallucination loop):", transcript);
           recentTranscriptsRef.current = [];
         } else {
-          console.log("[VoiceToText] Transcript:", transcript);
+          void 0;
           recent.push(transcript);
           if (recent.length > 10) recent.shift();
           insertText(transcript);
         }
       } else {
-        console.log("[VoiceToText] Empty transcript (silence or unintelligible)");
+        void 0;
       }
     } catch (err) {
       if ((err as Error)?.name !== "AbortError") {
@@ -363,7 +363,7 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
         if (event.results[i].isFinal) {
           const text = event.results[i][0].transcript.trim();
           if (text) {
-            console.log("[VoiceToText/Native] Transcript:", text);
+            void 0;
             insertText(text);
           }
         }

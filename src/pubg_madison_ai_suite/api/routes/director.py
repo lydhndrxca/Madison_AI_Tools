@@ -173,6 +173,9 @@ def _stream_chat(api_key: str, model: str, system_prompt: str, contents: list[di
 @router.post("/chat")
 async def chat(req: ChatRequest):
     api_key = core.get_api_key()
+    if not api_key:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=400, content={"error": "No API key configured. Set your Gemini API key in Settings."})
     model = _select_model(req.mode)
     system_prompt = _build_system_prompt(req)
 
@@ -270,6 +273,8 @@ async def list_transcripts():
 
 @router.get("/transcripts/{tid}")
 async def get_transcript(tid: str):
+    if ".." in tid or "/" in tid or "\\" in tid or "\x00" in tid:
+        raise HTTPException(400, "Invalid transcript ID")
     fpath = _TRANSCRIPTS_DIR / f"{tid}.json"
     if not fpath.exists():
         raise HTTPException(404, "Transcript not found")
