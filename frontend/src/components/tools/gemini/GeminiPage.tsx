@@ -236,6 +236,16 @@ export function GeminiPage() {
     } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
   }, [currentSrc, activeTab, addToast]);
 
+  const handleImageEdited = useCallback((newSrc: string, label: string) => {
+    const idx = currentIdx;
+    setGallery((prev) => {
+      const arr = [...(prev[activeTab] || [])];
+      arr[idx] = newSrc;
+      return { ...prev, [activeTab]: arr };
+    });
+    setEditHistory((prev) => [{ timestamp: new Date().toISOString(), prompt: label }, ...prev]);
+  }, [activeTab, currentIdx]);
+
   const handlePrevImage = useCallback(() => { setImageIdx((prev) => ({ ...prev, [activeTab]: Math.max(0, (prev[activeTab] ?? 0) - 1) })); }, [activeTab]);
   const handleNextImage = useCallback(() => { const max = (gallery[activeTab] || []).length - 1; setImageIdx((prev) => ({ ...prev, [activeTab]: Math.min(max, (prev[activeTab] ?? 0) + 1) })); }, [activeTab, gallery]);
 
@@ -401,6 +411,7 @@ export function GeminiPage() {
           onPasteImage={handlePaste}
           onOpenImage={handleOpenImage}
           onClearImage={isRefTab ? handleClearRef : undefined}
+          onImageEdited={handleImageEdited}
           imageCount={currentImages.length}
           imageIndex={currentIdx}
           onPrevImage={handlePrevImage}

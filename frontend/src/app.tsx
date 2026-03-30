@@ -1,4 +1,4 @@
-import { useState, useCallback, Component, type ReactNode, type ErrorInfo } from "react";
+import { useState, useCallback, useEffect, Component, type ReactNode, type ErrorInfo } from "react";
 import { AppShell } from "./components/shell/AppShell";
 import { GeminiPage } from "./components/tools/gemini/GeminiPage";
 import { MultiviewPage } from "./components/tools/multiview/MultiviewPage";
@@ -35,6 +35,12 @@ function AppInner() {
   const { addToast } = useToastContext();
   const VALID_PAGES = new Set<string>(["style-library", "prompt-builder", "generated-images", "favorites", "gemini", "multiview", "character", "weapon", "prop", "environment", "uilab", "3d", "transcripts", "brainstorm", "writingroom", "help"]);
   const setPage = useCallback((p: string) => { if (VALID_PAGES.has(p)) setActivePage(p as PageId); }, []);
+
+  useEffect(() => {
+    const onCopy = () => addToast("Copied to Clipboard!", "success");
+    document.addEventListener("copy", onCopy);
+    return () => document.removeEventListener("copy", onCopy);
+  }, [addToast]);
 
   return (
     <ActivePageProvider value={activePage}>

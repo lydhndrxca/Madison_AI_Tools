@@ -3484,6 +3484,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
               onClearImage={handleClearImage}
               onClearAllImages={handleClearAllImages}
               onImageEdited={handleImageEdited}
+              restoreContext={editPrompt}
               imageCount={currentImages.length}
               imageIndex={currentIdx}
               onPrevImage={handlePrevImage}

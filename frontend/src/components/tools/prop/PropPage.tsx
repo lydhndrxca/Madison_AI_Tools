@@ -2130,6 +2130,7 @@ export function PropPage({ instanceId = 0, active = true, projectUid }: PropPage
                 onClearImage={handleClearImage}
                 onClearAllImages={handleClearAllGenerated}
                 onImageEdited={(newSrc: string, label: string) => appendToGallery(activeTab, newSrc, label)}
+                restoreContext={editPrompt}
                 locked={busy.any}
                 isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
                 onToggleFavorite={currentSrc ? () => { const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "prop", label: activeTab || "main", source: "viewer" }); } : undefined}

@@ -543,21 +543,20 @@ export function ModelViewer({
                 retryKey={errorRetryKey}
                 onError={(e) => setCanvasError(e)}
               >
-                <div className="absolute inset-0">
-                  <Canvas
-                    className="!block w-full h-full touch-none"
-                    camera={{ position: [0, 1.5, 3], fov: 45, near: 0.1, far: 200 }}
-                    gl={{ antialias: true, alpha: false }}
-                    dpr={[1, 2]}
-                  >
-                    <ViewerScene
-                      modelUrl={modelUrl}
-                      viewMode={viewMode}
-                      resetRef={resetCameraRef}
-                      textures={textures}
-                    />
-                  </Canvas>
-                </div>
+                <Canvas
+                  style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}
+                  camera={{ position: [0, 1.5, 3], fov: 45, near: 0.1, far: 200 }}
+                  gl={{ antialias: true, alpha: false }}
+                  dpr={[1, 2]}
+                  resize={{ scroll: false, debounce: { scroll: 0, resize: 0 } }}
+                >
+                  <ViewerScene
+                    modelUrl={modelUrl}
+                    viewMode={viewMode}
+                    resetRef={resetCameraRef}
+                    textures={textures}
+                  />
+                </Canvas>
               </ModelCanvasErrorBoundary>
             </Suspense>
           </div>

@@ -5,6 +5,7 @@ import { EditorToolbar, STYLE_PRESETS } from "./editor/EditorToolbar";
 import type { EditorTool, OutpaintDir } from "./editor/EditorToolbar";
 import * as Mask from "./editor/maskEngine";
 import { apiFetch } from "@/hooks/useApi";
+import { useToastContext } from "@/hooks/ToastContext";
 import { useImageEnhance } from "@/hooks/useImageEnhance";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import { useModels } from "@/hooks/ModelsContext";
@@ -35,6 +36,8 @@ interface ImageViewerProps {
   onClearImage?: () => void;
   onClearAllImages?: () => void;
   onImageEdited?: (newSrc: string, label: string) => void;
+  /** Text from the "Edit Character" / "Edit Prop" / etc. box — fed into AI Restore as creative direction */
+  restoreContext?: string;
   imageCount?: number;
   imageIndex?: number;
   onPrevImage?: () => void;
@@ -59,6 +62,7 @@ export function ImageViewer({
   onClearImage,
   onClearAllImages,
   onImageEdited,
+  restoreContext = "",
   imageCount = 0,
   imageIndex = 0,
   onPrevImage,
@@ -104,6 +108,7 @@ export function ImageViewer({
 
   // AI Upres / Restore
   const enhancer = useImageEnhance();
+  const { addToast } = useToastContext();
 
   // Annotation state
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -427,12 +432,15 @@ export function ImageViewer({
   // --- AI Enhance shortcut handlers ---
   const handleEnhance = useCallback(async (mode: "upscale" | "restore") => {
     if (!src || !onImageEdited || enhancer.busy) return;
-    const result = await enhancer.enhance(mode, src);
+    const opts = mode === "restore" && restoreContext?.trim()
+      ? { context: restoreContext.trim() }
+      : undefined;
+    const result = await enhancer.enhance(mode, src, opts);
     if (result) {
       const label = mode === "upscale" ? "AI Upres" : "AI Restore";
       onImageEdited(result, label);
     }
-  }, [src, onImageEdited, enhancer]);
+  }, [src, onImageEdited, enhancer, restoreContext]);
 
   // --- Context menu helpers ---
   const doAction = useCallback((fn?: () => void) => () => { setCtxMenu(null); fn?.(); }, []);
@@ -447,8 +455,8 @@ export function ImageViewer({
   ];
   if (src && onImageEdited) {
     menuItems.push({ separator: true });
+    menuItems.push({ label: enhancer.busy ? "AI Restore (processing…)" : `AI Restore${restoreContext?.trim() ? " (with prompt)" : ""}`, onClick: () => { setCtxMenu(null); handleEnhance("restore"); } });
     menuItems.push({ label: enhancer.busy ? "AI Upres (processing…)" : "AI Upres", onClick: () => { setCtxMenu(null); handleEnhance("upscale"); } });
-    menuItems.push({ label: enhancer.busy ? "AI Restore (processing…)" : "AI Restore", onClick: () => { setCtxMenu(null); handleEnhance("restore"); } });
   }
   menuItems.push({ separator: true });
   menuItems.push({ label: "Clear", onClick: doAction(onClearImage) });
@@ -481,11 +489,12 @@ export function ImageViewer({
       apiFetch<{ image_b64: string | null; error?: string }>(endpoint, {
         method: "POST",
         body: JSON.stringify({ ...body, model_id: modelId }),
-      }).catch(() => ({ image_b64: null as string | null })),
+      }).catch((e) => ({ image_b64: null as string | null, error: e instanceof Error ? e.message : "Request failed" })),
     );
 
     const results = await Promise.all(promises);
     const images = results.map((r) => r.image_b64).filter((b): b is string => !!b);
+    const firstError = results.find((r) => r.image_b64 == null && r.error)?.error;
 
     if (images.length > 0 && onImageEdited) {
       if (images.length === 1) {
@@ -500,10 +509,12 @@ export function ImageViewer({
         Mask.clearMask(maskCanvasRef.current); setHasMask(false);
       }
       setInpaintMode(false);
+    } else if (images.length === 0) {
+      addToast(firstError || `${label} failed — no image returned`, "error");
     }
     if (opts?.clearOutpaint) setOutpaintPreview(null);
     setEditorBusy(false);
-  }, [src, generationCount, editorModelId, onImageEdited]);
+  }, [src, generationCount, editorModelId, onImageEdited, addToast]);
 
   const handleEditorResultNav = useCallback((dir: -1 | 1) => {
     if (editorResults.length < 2) return;
@@ -525,8 +536,8 @@ export function ImageViewer({
   }, [src, getImageB64, runEditorMulti, refImages, styleContext]);
 
   const handleSmartSelect = useCallback(async (subject: string) => {
-    if (!src) { console.warn("[SmartSelect] No image loaded"); return; }
-    if (!subject.trim()) { console.warn("[SmartSelect] No subject entered"); return; }
+    if (!src) { addToast("No image loaded", "error"); return; }
+    if (!subject.trim()) { addToast("Enter a subject to select", "error"); return; }
     setEditorBusy(true);
     try {
       const resp = await apiFetch<{ mask_b64?: string; error?: string }>("/editor/smart-select", {
@@ -537,7 +548,7 @@ export function ImageViewer({
         const nw = imgEl?.naturalWidth ?? 0;
         const nh = imgEl?.naturalHeight ?? 0;
         if (!nw || !nh) {
-          console.warn("[SmartSelect] Image not decoded yet (natural size 0); try again after load");
+          addToast("Image not fully loaded — try again", "error");
         } else {
           Mask.resizeMask(maskCanvasRef.current, nw, nh);
           if (naturalSize.w !== nw || naturalSize.h !== nh) {
@@ -548,16 +559,16 @@ export function ImageViewer({
           setInpaintMode(true);
         }
       } else if (resp.error) {
-        console.error("[SmartSelect]", resp.error);
+        addToast(`Smart Select failed: ${resp.error}`, "error");
       } else {
-        console.warn("[SmartSelect] No mask returned from API");
+        addToast("Smart Select returned no mask — try a different subject", "error");
       }
     } catch (err) {
-      console.error("[SmartSelect] Request failed:", err);
+      addToast(`Smart Select failed: ${err instanceof Error ? err.message : String(err)}`, "error");
     } finally {
       setEditorBusy(false);
     }
-  }, [src, getImageB64, naturalSize.w, naturalSize.h, editorModelId]);
+  }, [src, getImageB64, naturalSize.w, naturalSize.h, editorModelId, addToast]);
 
   const handleSmartErase = useCallback(async () => {
     if (!src || !maskCanvasRef.current || !Mask.maskHasContent(maskCanvasRef.current)) return;
@@ -654,8 +665,10 @@ export function ImageViewer({
 
   useEffect(() => {
     regAction("toggleFullscreen", () => {
-      if (fullscreenRef.current) exitFsRef.current();
-      else enterFsRef.current();
+      if (fullscreenRef.current) { exitFsRef.current(); return; }
+      // Only enter fullscreen if this viewer's container is actually visible (not display:none)
+      if (!containerRef.current || containerRef.current.offsetParent === null) return;
+      enterFsRef.current();
     });
     regAction("exitFullscreen", () => {
       if (fullscreenRef.current) exitFsRef.current();
