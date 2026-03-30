@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { apiFetch } from "./useApi";
 
 const STORAGE_KEY = "madison-api-costs-cache";
-const POLL_INTERVAL_MS = 8_000;
+const POLL_INTERVAL_MS = 30_000;
 
 export interface CostData {
   total: number;

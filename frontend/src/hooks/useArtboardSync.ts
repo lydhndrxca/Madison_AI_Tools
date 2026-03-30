@@ -11,6 +11,9 @@ function getWsBase(remoteHost?: string | null): string {
 }
 
 const CURSOR_THROTTLE_MS = 66;
+const RECONNECT_BASE_MS = 2_000;
+const RECONNECT_MAX_MS = 30_000;
+const MAX_RECONNECT_ATTEMPTS = 20;
 
 /**
  * Manages the WebSocket connection for real-time artboard collaboration.
@@ -26,15 +29,14 @@ export function useArtboardSync() {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userNameRef = useRef("");
   const passwordRef = useRef("");
+  const reconnectAttemptRef = useRef(0);
   const [reconnectTick, setReconnectTick] = useState(0);
 
-  // Store credentials for reconnection
   const setCredentials = useCallback((userName: string, password?: string) => {
     userNameRef.current = userName;
     passwordRef.current = password || "";
   }, []);
 
-  // Send a message over the WebSocket
   const send = useCallback((msg: Record<string, unknown>) => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -42,7 +44,6 @@ export function useArtboardSync() {
     }
   }, []);
 
-  // Send cursor position (throttled)
   const sendCursor = useCallback((x: number, y: number) => {
     const now = Date.now();
     if (now - lastCursorSend.current < CURSOR_THROTTLE_MS) return;
@@ -50,7 +51,6 @@ export function useArtboardSync() {
     send({ op: "cursor", x, y });
   }, [send]);
 
-  // Connect to room
   useEffect(() => {
     if (mode !== "shared" || !roomId) {
       if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
@@ -65,9 +65,11 @@ export function useArtboardSync() {
 
     const ws = new WebSocket(url);
     wsRef.current = ws;
+    let everOpened = false;
 
     ws.onopen = () => {
-      // Register delta listener so local mutations get sent to the room
+      everOpened = true;
+      reconnectAttemptRef.current = 0;
       setDeltaListener((delta: ArtboardDelta) => {
         send({ op: "delta", ...delta });
       });
@@ -113,14 +115,31 @@ export function useArtboardSync() {
     ws.onclose = (ev) => {
       wsRef.current = null;
       setDeltaListener(null);
-      // Auto-reconnect on unexpected close (not a clean leave)
-      if (mode === "shared" && roomId && ev.code !== 1000 && ev.code !== 4003 && ev.code !== 4004) {
-        reconnectTimer.current = setTimeout(() => {
-          setReconnectTick((t) => t + 1);
-        }, 2000);
-      } else if (ev.code === 4003 || ev.code === 4004) {
+
+      if (ev.code === 4003 || ev.code === 4004) {
         leaveRoom();
+        return;
       }
+
+      if (mode !== "shared" || !roomId || ev.code === 1000) return;
+
+      if (!everOpened) {
+        reconnectAttemptRef.current += 1;
+      }
+
+      if (reconnectAttemptRef.current >= MAX_RECONNECT_ATTEMPTS) {
+        console.warn("[ArtboardSync] Max reconnect attempts reached — giving up");
+        leaveRoom();
+        return;
+      }
+
+      const delay = Math.min(
+        RECONNECT_BASE_MS * Math.pow(1.5, reconnectAttemptRef.current),
+        RECONNECT_MAX_MS,
+      );
+      reconnectTimer.current = setTimeout(() => {
+        setReconnectTick((t) => t + 1);
+      }, delay);
     };
 
     ws.onerror = () => {

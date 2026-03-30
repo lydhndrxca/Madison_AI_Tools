@@ -368,9 +368,11 @@ def close_room(code: str) -> dict:
 async def ws_artboard(ws: WebSocket, room_code: str, user: str = "Guest", password: str = ""):
     room = room_manager.get(room_code)
     if not room:
+        await ws.accept()
         await ws.close(code=4004, reason="Room not found")
         return
     if room.password and room.password != password:
+        await ws.accept()
         await ws.close(code=4003, reason="Wrong password")
         return
 

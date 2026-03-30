@@ -152,23 +152,72 @@ function applyTexturesToGroup(group: THREE.Group | THREE.Object3D, textures?: Te
   });
 }
 
+function stripGroundPlanes(group: THREE.Group) {
+  const toRemove: THREE.Object3D[] = [];
+  group.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    const geo = child.geometry;
+    if (!geo) return;
+    geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    if (!bb) return;
+    const s = new THREE.Vector3();
+    bb.getSize(s);
+    const dims = [s.x, s.y, s.z].sort((a, b) => a - b);
+    const thin = dims[0];
+    const wide = dims[2];
+    if (wide > 0 && thin / wide < 0.005) {
+      toRemove.push(child);
+    }
+  });
+  for (const obj of toRemove) obj.removeFromParent();
+}
+
+function autoFitModel(group: THREE.Group) {
+  stripGroundPlanes(group);
+
+  const box = new THREE.Box3().setFromObject(group);
+  if (box.isEmpty()) return;
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const maxDim = Math.max(size.x, size.y, size.z);
+  if (maxDim > 0) {
+    const TARGET = 2;
+    const s = TARGET / maxDim;
+    group.scale.multiplyScalar(s);
+  }
+  box.setFromObject(group);
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  group.position.sub(center);
+  group.position.y -= box.min.y - center.y;
+}
+
 function LoadedFBX({ url, viewMode, textures }: { url: string; viewMode: ViewMode; textures?: TextureMap }) {
   const [root, setRoot] = useState<THREE.Group | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const cleanUrl = url.split("#")[0];
 
   useEffect(() => {
+    let cancelled = false;
+    setError(null);
     const loader = new FBXLoader();
     loader.load(
       cleanUrl,
       (fbx) => {
-        fbx.scale.setScalar(0.01);
+        if (cancelled) return;
+        autoFitModel(fbx);
         applyTexturesToGroup(fbx, textures);
         setRoot(fbx);
       },
       undefined,
-      (err) => { throw new Error(`FBX load failed: ${err}`); },
+      (err) => {
+        if (cancelled) return;
+        console.error("FBX load failed:", err);
+        setError(`FBX load failed: ${err}`);
+      },
     );
-    return () => { setRoot(null); };
+    return () => { cancelled = true; setRoot(null); };
   }, [url, textures]);
 
   useLayoutEffect(() => {
@@ -178,26 +227,36 @@ function LoadedFBX({ url, viewMode, textures }: { url: string; viewMode: ViewMod
     });
   }, [root, viewMode]);
 
+  if (error) throw new Error(error);
   if (!root) return null;
   return <Center><primitive object={root} /></Center>;
 }
 
 function LoadedOBJ({ url, viewMode, textures }: { url: string; viewMode: ViewMode; textures?: TextureMap }) {
   const [root, setRoot] = useState<THREE.Group | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const cleanUrl = url.split("#")[0];
 
   useEffect(() => {
+    let cancelled = false;
+    setError(null);
     const loader = new OBJLoader();
     loader.load(
       cleanUrl,
       (obj) => {
+        if (cancelled) return;
+        autoFitModel(obj as THREE.Group);
         applyTexturesToGroup(obj, textures);
         setRoot(obj);
       },
       undefined,
-      (err) => { throw new Error(`OBJ load failed: ${err}`); },
+      (err) => {
+        if (cancelled) return;
+        console.error("OBJ load failed:", err);
+        setError(`OBJ load failed: ${err}`);
+      },
     );
-    return () => { setRoot(null); };
+    return () => { cancelled = true; setRoot(null); };
   }, [url, textures]);
 
   useLayoutEffect(() => {
@@ -207,6 +266,7 @@ function LoadedOBJ({ url, viewMode, textures }: { url: string; viewMode: ViewMod
     });
   }, [root, viewMode]);
 
+  if (error) throw new Error(error);
   if (!root) return null;
   return <Center><primitive object={root} /></Center>;
 }
@@ -290,6 +350,44 @@ function ViewerScene({
   );
 }
 
+function CanvasWrapper({
+  modelUrl,
+  viewMode,
+  resetRef,
+  textures,
+}: {
+  modelUrl: string;
+  viewMode: ViewMode;
+  resetRef: MutableRefObject<(() => void) | null>;
+  textures?: TextureMap;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <div ref={containerRef} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}>
+      <Canvas
+        style={{ width: "100%", height: "100%", display: "block" }}
+        camera={{ position: [0, 1.5, 3], fov: 45, near: 0.1, far: 200 }}
+        gl={{ antialias: true, alpha: false }}
+        dpr={[1, 2]}
+        resize={{ scroll: false, debounce: { scroll: 0, resize: 0 } }}
+      >
+        <ViewerScene modelUrl={modelUrl} viewMode={viewMode} resetRef={resetRef} textures={textures} />
+      </Canvas>
+    </div>
+  );
+}
+
 class ModelCanvasErrorBoundary extends Component<
   {
     children: ReactNode;
@@ -352,6 +450,7 @@ export function ModelViewer({
   const resetCameraRef = useRef<(() => void) | null>(null);
   const exportWrapRef = useRef<HTMLDivElement>(null);
 
+  const isFlexFill = height === "100%";
   const heightStyle = typeof height === "number" ? `${height}px` : height;
 
   useEffect(() => {
@@ -385,7 +484,9 @@ export function ModelViewer({
     <div
       className="flex flex-col w-full min-h-0 rounded-lg overflow-hidden"
       style={{
-        height: heightStyle,
+        height: isFlexFill ? undefined : heightStyle,
+        flex: isFlexFill ? "1 1 0%" : undefined,
+        minHeight: isFlexFill ? 0 : undefined,
         border: "1px solid var(--color-border)",
         background: "var(--color-card)",
       }}
@@ -480,7 +581,7 @@ export function ModelViewer({
             </div>
           </div>
 
-          <div className="relative flex-1 min-h-0" style={{ minHeight: 200 }}>
+          <div style={{ position: "relative", flex: "1 1 0%", minHeight: 200, overflow: "hidden" }}>
             {canvasError ? (
               <div
                 className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-4 text-center z-10"
@@ -543,20 +644,12 @@ export function ModelViewer({
                 retryKey={errorRetryKey}
                 onError={(e) => setCanvasError(e)}
               >
-                <Canvas
-                  style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}
-                  camera={{ position: [0, 1.5, 3], fov: 45, near: 0.1, far: 200 }}
-                  gl={{ antialias: true, alpha: false }}
-                  dpr={[1, 2]}
-                  resize={{ scroll: false, debounce: { scroll: 0, resize: 0 } }}
-                >
-                  <ViewerScene
-                    modelUrl={modelUrl}
-                    viewMode={viewMode}
-                    resetRef={resetCameraRef}
-                    textures={textures}
-                  />
-                </Canvas>
+                <CanvasWrapper
+                  modelUrl={modelUrl}
+                  viewMode={viewMode}
+                  resetRef={resetCameraRef}
+                  textures={textures}
+                />
               </ModelCanvasErrorBoundary>
             </Suspense>
           </div>

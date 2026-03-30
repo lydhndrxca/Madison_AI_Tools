@@ -9,7 +9,6 @@ import {
 } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import {
-  Center,
   Environment,
   Grid,
   GizmoHelper,
@@ -52,7 +51,28 @@ import {
   Copy,
   Minus,
   Plus,
+  ImageIcon,
+  X,
 } from "lucide-react";
+import { useToastContext } from "@/hooks/ToastContext";
+
+interface TextureMap {
+  diffuse?: string;
+  normal?: string;
+  roughness?: string;
+  metalness?: string;
+  ao?: string;
+  emissive?: string;
+}
+
+const TEXTURE_CHANNELS: { key: keyof TextureMap; label: string }[] = [
+  { key: "diffuse", label: "Diffuse / Color" },
+  { key: "normal", label: "Normal" },
+  { key: "roughness", label: "Roughness" },
+  { key: "metalness", label: "Metalness" },
+  { key: "ao", label: "Ambient Occlusion" },
+  { key: "emissive", label: "Emissive" },
+];
 
 /* ── Types ─────────────────────────────────────────────────── */
 
@@ -134,8 +154,79 @@ function detectModelFormat(url: string): "glb" | "fbx" | "obj" | "gltf" {
 function WorkshopGLTFScene({ url, onScene }: { url: string; onScene: (s: THREE.Group) => void }) {
   const cleanUrl = url.split("#")[0];
   const { scene } = useGLTF(cleanUrl);
-  useEffect(() => { onScene(scene); }, [scene, onScene]);
+  useEffect(() => {
+    autoFitModel(scene);
+    onScene(scene);
+  }, [scene, onScene]);
   return null;
+}
+
+function applyTexturesToGroup(group: THREE.Group | THREE.Object3D, textures?: TextureMap) {
+  if (!textures) return;
+  const loader = new THREE.TextureLoader();
+  const load = (url?: string) => url ? loader.load(url) : undefined;
+  const maps: Partial<Record<string, THREE.Texture>> = {};
+  if (textures.diffuse) maps.map = load(textures.diffuse);
+  if (textures.normal) maps.normalMap = load(textures.normal);
+  if (textures.roughness) maps.roughnessMap = load(textures.roughness);
+  if (textures.metalness) maps.metalnessMap = load(textures.metalness);
+  if (textures.ao) maps.aoMap = load(textures.ao);
+  if (textures.emissive) maps.emissiveMap = load(textures.emissive);
+  if (Object.keys(maps).length === 0) return;
+  group.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      const mat = new THREE.MeshStandardMaterial();
+      if (maps.map) mat.map = maps.map;
+      if (maps.normalMap) mat.normalMap = maps.normalMap;
+      if (maps.roughnessMap) mat.roughnessMap = maps.roughnessMap;
+      if (maps.metalnessMap) { mat.metalnessMap = maps.metalnessMap; mat.metalness = 1; }
+      if (maps.aoMap) mat.aoMap = maps.aoMap;
+      if (maps.emissiveMap) { mat.emissiveMap = maps.emissiveMap; mat.emissive = new THREE.Color(1, 1, 1); }
+      mat.needsUpdate = true;
+      child.material = mat;
+    }
+  });
+}
+
+function stripGroundPlanes(group: THREE.Group) {
+  const toRemove: THREE.Object3D[] = [];
+  group.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    const geo = child.geometry;
+    if (!geo) return;
+    geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    if (!bb) return;
+    const s = new THREE.Vector3();
+    bb.getSize(s);
+    const dims = [s.x, s.y, s.z].sort((a, b) => a - b);
+    const thin = dims[0];
+    const wide = dims[2];
+    if (wide > 0 && thin / wide < 0.005) {
+      toRemove.push(child);
+    }
+  });
+  for (const obj of toRemove) obj.removeFromParent();
+}
+
+function autoFitModel(group: THREE.Group) {
+  stripGroundPlanes(group);
+
+  const box = new THREE.Box3().setFromObject(group);
+  if (box.isEmpty()) return;
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const maxDim = Math.max(size.x, size.y, size.z);
+  if (maxDim > 0) {
+    const TARGET = 2;
+    const s = TARGET / maxDim;
+    group.scale.multiplyScalar(s);
+  }
+  box.setFromObject(group);
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  group.position.sub(center);
+  group.position.y -= box.min.y - center.y;
 }
 
 function WorkshopFBXOBJScene({ url, fmt, onScene }: { url: string; fmt: "fbx" | "obj"; onScene: (s: THREE.Group) => void }) {
@@ -145,8 +236,9 @@ function WorkshopFBXOBJScene({ url, fmt, onScene }: { url: string; fmt: "fbx" | 
     loader.load(
       cleanUrl,
       (result) => {
-        if (fmt === "fbx") (result as THREE.Group).scale.setScalar(0.01);
-        onScene(result as THREE.Group);
+        const group = result as THREE.Group;
+        autoFitModel(group);
+        onScene(group);
       },
       undefined,
       () => { /* error handled by error boundary */ },
@@ -157,13 +249,18 @@ function WorkshopFBXOBJScene({ url, fmt, onScene }: { url: string; fmt: "fbx" | 
 
 /* ── Model Scene ── */
 
-function WorkshopModelScene({ url }: { url: string }) {
+function WorkshopModelScene({ url, textures }: { url: string; textures?: TextureMap }) {
   const { state, actions } = useModelWorkshop();
   const fmt = useMemo(() => detectModelFormat(url), [url]);
   const isGltf = fmt === "glb" || fmt === "gltf";
   const [rawScene, setRawScene] = useState<THREE.Group | null>(null);
   const onScene = useCallback((s: THREE.Group) => setRawScene(s), []);
   const clonedScene = useMemo(() => rawScene?.clone(true) ?? null, [rawScene]);
+
+  useEffect(() => {
+    if (!clonedScene || !textures || Object.keys(textures).length === 0) return;
+    applyTexturesToGroup(clonedScene, textures);
+  }, [clonedScene, textures]);
   const groupRef = useRef<THREE.Group>(null);
 
   useEffect(() => {
@@ -213,9 +310,7 @@ function WorkshopModelScene({ url }: { url: string }) {
       )}
       {clonedScene && (
         <group ref={groupRef}>
-          <Center disableY disableZ={false}>
-            <primitive object={clonedScene} />
-          </Center>
+          <primitive object={clonedScene} />
         </group>
       )}
     </>
@@ -360,7 +455,7 @@ const TOOL_ITEMS: { tool: EditorTool; icon: typeof MousePointer2; label: string;
 
 /* ── Properties Panel ── */
 
-function PropertiesPanel() {
+function PropertiesPanelInline() {
   const { state, actions } = useModelWorkshop();
   const pos = state.position;
   const rot = state.rotation;
@@ -384,10 +479,7 @@ function PropertiesPanel() {
   } : null;
 
   return (
-    <div
-      className="shrink-0 overflow-y-auto"
-      style={{ width: 220, borderLeft: "1px solid var(--color-border)", background: "var(--color-card)" }}
-    >
+    <>
       {/* Transform */}
       <Section title="Transform">
         <div style={{ marginBottom: 8 }}>
@@ -558,7 +650,7 @@ function PropertiesPanel() {
           </div>
         </div>
       </Section>
-    </div>
+    </>
   );
 }
 
@@ -646,10 +738,15 @@ const iconBtnStyle: React.CSSProperties = {
 
 function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLoadModel }: ModelWorkshopTabProps) {
   const { state, actions } = useModelWorkshop();
+  const { addToast } = useToastContext();
   const [modelUrl, setModelUrl] = useState<string | null>(initialModelUrl ?? null);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(initialJobId ?? null);
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textureInputRef = useRef<HTMLInputElement>(null);
+  const activeChannelRef = useRef<keyof TextureMap | null>(null);
+  const [textures, setTextures] = useState<TextureMap>({});
+  const [texturePreviews, setTexturePreviews] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (initialModelUrl && initialModelUrl !== modelUrl) {
@@ -672,19 +769,65 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
     setLoading(false);
   }, [succeededJobs, onLoadModel]);
 
-  const handleFileImport = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileImport = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = "";
-    setLoading(true);
-    try {
-      const blobUrl = URL.createObjectURL(file);
-      const url = `${blobUrl}#${file.name}`;
-      setModelUrl(url);
-      setSelectedJobId(null);
-    } catch { /* ignore */ }
-    setLoading(false);
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+    if (!["fbx", "glb", "gltf", "obj"].includes(ext)) {
+      addToast("Unsupported format — use FBX, GLB, GLTF, or OBJ", "error");
+      return;
+    }
+    const blobUrl = URL.createObjectURL(file);
+    setModelUrl(`${blobUrl}#${file.name}`);
+    setSelectedJobId(null);
+    addToast(`Loaded ${file.name}`, "success");
+  }, [addToast]);
+
+  const handleTextureSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const channel = activeChannelRef.current;
+    if (!file || !channel) return;
+    e.target.value = "";
+    const url = URL.createObjectURL(file);
+    setTextures((prev) => ({ ...prev, [channel]: url }));
+    setTexturePreviews((prev) => ({ ...prev, [channel]: url }));
+    addToast(`${channel} texture loaded`, "success");
+  }, [addToast]);
+
+  const removeTexture = useCallback((channel: keyof TextureMap) => {
+    setTextures((prev) => { const n = { ...prev }; if (n[channel]) URL.revokeObjectURL(n[channel]!); delete n[channel]; return n; });
+    setTexturePreviews((prev) => { const n = { ...prev }; delete n[channel]; return n; });
   }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    for (const file of Array.from(e.dataTransfer.files)) {
+      const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+      if (["fbx", "glb", "gltf", "obj"].includes(ext)) {
+        const blobUrl = URL.createObjectURL(file);
+        setModelUrl(`${blobUrl}#${file.name}`);
+        setSelectedJobId(null);
+        addToast(`Loaded ${file.name}`, "success");
+      } else if (["png", "jpg", "jpeg", "tga", "bmp", "webp"].includes(ext)) {
+        const url = URL.createObjectURL(file);
+        const name = file.name.toLowerCase();
+        let channel: keyof TextureMap = "diffuse";
+        if (name.includes("normal") || name.includes("nrm")) channel = "normal";
+        else if (name.includes("rough")) channel = "roughness";
+        else if (name.includes("metal")) channel = "metalness";
+        else if (name.includes("ao") || name.includes("occlusion") || name.includes("ambient")) channel = "ao";
+        else if (name.includes("emissive") || name.includes("emission")) channel = "emissive";
+        else if (name.includes("diffuse") || name.includes("color") || name.includes("albedo") || name.includes("base")) channel = "diffuse";
+        setTextures((prev) => ({ ...prev, [channel]: url }));
+        setTexturePreviews((prev) => ({ ...prev, [channel]: url }));
+        addToast(`Auto-assigned ${file.name} → ${channel}`, "success");
+      }
+    }
+  }, [addToast]);
+
+  const hasTextures = Object.keys(textures).length > 0;
 
   return (
     <div className="flex flex-col h-full overflow-hidden" style={{ background: "var(--color-background)" }}>
@@ -776,6 +919,8 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
         </button>
       </div>
 
+      <input ref={textureInputRef} type="file" accept="image/*,.tga" className="hidden" onChange={handleTextureSelect} />
+
       {/* ── Main area ── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Viewport */}
@@ -783,6 +928,8 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
           className="flex-1 min-w-0 min-h-0 relative"
           ref={(el) => { (state.canvasRef as React.MutableRefObject<HTMLDivElement | null>).current = el; }}
           onContextMenu={(e) => e.preventDefault()}
+          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onDrop={handleDrop}
         >
           {loading ? (
             <div className="absolute inset-0 flex items-center justify-center" style={{ background: "var(--color-background)" }}>
@@ -791,9 +938,10 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
           ) : modelUrl ? (
             <Canvas
               camera={{ position: [0, 2, 5], fov: 45, near: 0.1, far: 200 }}
-              style={{ width: "100%", height: "100%" }}
+              style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}
               gl={{ antialias: true, alpha: false, preserveDrawingBuffer: true }}
               dpr={[1, 2]}
+              resize={{ scroll: false, debounce: { scroll: 0, resize: 0 } }}
               onContextMenu={(e) => e.preventDefault()}
             >
               <CameraCapture />
@@ -803,7 +951,7 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
               <directionalLight position={[-4, 4, -3]} intensity={0.35} />
               <Suspense fallback={null}>
                 <Environment preset="studio" />
-                <WorkshopModelScene url={modelUrl} />
+                <WorkshopModelScene url={modelUrl} textures={hasTextures ? textures : undefined} />
               </Suspense>
               <WorkshopTransformGizmo />
               <ModelWorkshopFFD />
@@ -823,12 +971,12 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
             </Canvas>
           ) : (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8">
-              <Box size={40} style={{ color: "var(--color-text-muted)", opacity: 0.3 }} />
+              <Upload size={40} style={{ color: "var(--color-text-muted)", opacity: 0.3 }} />
               <p className="text-xs font-medium text-center" style={{ color: "var(--color-text-muted)" }}>
-                Select a completed model from the dropdown, or import a .glb file
+                Drag & drop a model file here, or use Import Model above
               </p>
               <p className="text-[10px] text-center" style={{ color: "var(--color-text-muted)", opacity: 0.7 }}>
-                Completed models from the Generation Queue will appear in the selector above
+                Supports FBX, GLB, GLTF, OBJ — you can also drop texture images
               </p>
             </div>
           )}
@@ -848,7 +996,54 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
         </div>
 
         {/* Properties panel */}
-        <PropertiesPanel />
+        <div
+          className="shrink-0 overflow-y-auto flex flex-col"
+          style={{ width: 220, borderLeft: "1px solid var(--color-border)", background: "var(--color-card)" }}
+        >
+          <PropertiesPanelInline />
+
+          {/* Textures section */}
+          <Section title="Textures">
+            <p className="text-[9px] mb-2" style={{ color: "var(--color-text-muted)" }}>
+              Upload per channel or drag & drop onto the viewport.
+            </p>
+            <div className="flex flex-col gap-1.5">
+              {TEXTURE_CHANNELS.map(({ key, label }) => (
+                <div key={key} className="flex items-center gap-2 px-1 py-1 rounded"
+                  style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--color-border)" }}>
+                  {texturePreviews[key] ? (
+                    <img src={texturePreviews[key]} alt={key} className="w-6 h-6 rounded object-cover shrink-0" style={{ border: "1px solid var(--color-border)" }} />
+                  ) : (
+                    <div className="w-6 h-6 rounded shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid var(--color-border)" }}>
+                      <ImageIcon size={10} style={{ color: "var(--color-text-muted)" }} />
+                    </div>
+                  )}
+                  <span className="flex-1 text-[9px] truncate" style={{ color: "var(--color-text-primary)" }}>{label}</span>
+                  {texturePreviews[key] ? (
+                    <button type="button" onClick={() => removeTexture(key)}
+                      className="p-0.5 rounded hover:bg-white/10 cursor-pointer"
+                      style={{ color: "var(--color-text-muted)", background: "transparent", border: "none" }}>
+                      <X size={10} />
+                    </button>
+                  ) : (
+                    <button type="button"
+                      onClick={() => { activeChannelRef.current = key; textureInputRef.current?.click(); }}
+                      className="text-[8px] px-1.5 py-0.5 rounded cursor-pointer"
+                      style={{ background: "rgba(255,255,255,0.06)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}>
+                      +
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            {hasTextures && (
+              <button type="button" onClick={() => {
+                Object.values(textures).forEach((u) => { if (u) URL.revokeObjectURL(u); });
+                setTextures({}); setTexturePreviews({});
+              }} style={propsBtnStyle(false)} className="mt-2 w-full">Clear All Textures</button>
+            )}
+          </Section>
+        </div>
       </div>
 
       {/* Status bar */}
