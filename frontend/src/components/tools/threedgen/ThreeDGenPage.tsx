@@ -88,7 +88,13 @@ function StatusIcon({ status }: { status: string }) {
 
 /* ── Main page ─────────────────────────────────────────────── */
 
-export function ThreeDGenPage({ visible = true }: { visible?: boolean }) {
+interface ThreeDGenPageProps {
+  visible?: boolean;
+  instanceId?: number;
+  projectUid?: string;
+}
+
+export function ThreeDGenPage({ visible = true, instanceId, projectUid }: ThreeDGenPageProps) {
   const { addToast } = useToastContext();
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("create");
@@ -374,32 +380,27 @@ export function ThreeDGenPage({ visible = true }: { visible?: boolean }) {
       </div>
 
       {/* ── New Generation tab content ── */}
-      {activeTab === "create" && (
+      <div style={{ display: activeTab === "create" ? "contents" : "none" }}>
         <NewGenerationPanel onJobStarted={() => { setActiveTab("queue"); refreshJobList(); }} />
-      )}
+      </div>
 
-      {/* ── Model Workshop tab content ── */}
-      {activeTab === "model" && (
-        <div className="flex-1 min-h-0">
-          <ModelWorkshopTab
-            succeededJobs={succeededJobs}
-            initialModelUrl={modelWsUrl}
-            initialJobId={modelWsJobId}
-            onLoadModel={loadModelForWorkshop}
-          />
-        </div>
-      )}
+      {/* ── Model Workshop tab content (kept mounted for state persistence) ── */}
+      <div className="flex-1 min-h-0" style={{ display: activeTab === "model" ? "flex" : "none", flexDirection: "column" }}>
+        <ModelWorkshopTab
+          succeededJobs={succeededJobs}
+          initialModelUrl={modelWsUrl}
+          initialJobId={modelWsJobId}
+          onLoadModel={loadModelForWorkshop}
+        />
+      </div>
 
-      {/* ── Material Workshop tab content ── */}
-      {activeTab === "workshop" && (
-        <div className="flex-1 min-h-0">
-          <MaterialWorkshop initialJob={workshopJob} />
-        </div>
-      )}
+      {/* ── Material Workshop tab content (kept mounted for state persistence) ── */}
+      <div className="flex-1 min-h-0" style={{ display: activeTab === "workshop" ? "flex" : "none", flexDirection: "column" }}>
+        <MaterialWorkshop initialJob={workshopJob} />
+      </div>
 
       {/* ── Queue tab content ── */}
-      {activeTab === "queue" && (
-    <div className="flex flex-1 min-h-0 overflow-hidden">
+    <div className="flex flex-1 min-h-0 overflow-hidden" style={{ display: activeTab === "queue" ? "flex" : "none" }}>
       {/* ── Left: Job Queue ── */}
       <div
         className="flex flex-col shrink-0 overflow-hidden"
@@ -571,7 +572,6 @@ export function ThreeDGenPage({ visible = true }: { visible?: boolean }) {
         )}
       </div>
     </div>
-      )}
     </div>
   );
 }

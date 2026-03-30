@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, Component, type ReactNode, type ErrorInfo } from "react";
+import { useState, useCallback, useEffect, lazy, Suspense, Component, type ReactNode, type ErrorInfo } from "react";
 import { AppShell } from "./components/shell/AppShell";
 import { GeminiPage } from "./components/tools/gemini/GeminiPage";
 import { MultiviewPage } from "./components/tools/multiview/MultiviewPage";
@@ -23,7 +23,7 @@ import { ArtDirectorProvider } from "./hooks/ArtDirectorContext";
 import { ModelsProvider } from "./hooks/ModelsContext";
 import { ActivePageProvider } from "./hooks/ActivePageContext";
 import { TranscriptsPage } from "./components/tools/transcripts/TranscriptsPage";
-import { ThreeDGenPage } from "./components/tools/threedgen/ThreeDGenPage";
+const ThreeDGenWrapper = lazy(() => import("./components/tools/threedgen/ThreeDGenWrapper").then(m => ({ default: m.ThreeDGenWrapper })));
 import { BrainstormPage } from "./components/tools/brainstorm/BrainstormPage";
 import { WritingRoomPage } from "./components/tools/writingroom/WritingRoomPage";
 import { HelpPage } from "./components/tools/help/HelpPage";
@@ -57,7 +57,7 @@ function AppInner() {
         <div className="h-full" style={{ display: activePage === "environment" ? "contents" : "none" }}><EnvironmentLabWrapper /></div>
         <div className="h-full" style={{ display: activePage === "uilab" ? "contents" : "none" }}><UILabWrapper /></div>
         <div className="h-full" style={{ display: activePage === "transcripts" ? "contents" : "none" }}><TranscriptsPage /></div>
-        <div className="h-full" style={{ display: activePage === "3d" ? "contents" : "none" }}><ThreeDGenPage visible={activePage === "3d"} /></div>
+        <div className="h-full" style={{ display: activePage === "3d" ? "contents" : "none" }}><Suspense fallback={<div className="flex items-center justify-center h-full text-neutral-500">Loading 3D tools...</div>}><ThreeDGenWrapper visible={activePage === "3d"} /></Suspense></div>
         <div className="h-full" style={{ display: activePage === "brainstorm" ? "contents" : "none" }}><BrainstormPage /></div>
         <div className="h-full" style={{ display: activePage === "writingroom" ? "contents" : "none" }}><WritingRoomPage /></div>
         <div className="h-full" style={{ display: activePage === "help" ? "contents" : "none" }}><HelpPage /></div>

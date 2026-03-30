@@ -161,29 +161,66 @@ function WorkshopGLTFScene({ url, onScene }: { url: string; onScene: (s: THREE.G
   return null;
 }
 
-function applyTexturesToGroup(group: THREE.Group | THREE.Object3D, textures?: TextureMap) {
-  if (!textures) return;
+function buildTextureMaps(tex: TextureMap): Partial<Record<string, THREE.Texture>> {
   const loader = new THREE.TextureLoader();
   const load = (url?: string) => url ? loader.load(url) : undefined;
   const maps: Partial<Record<string, THREE.Texture>> = {};
-  if (textures.diffuse) maps.map = load(textures.diffuse);
-  if (textures.normal) maps.normalMap = load(textures.normal);
-  if (textures.roughness) maps.roughnessMap = load(textures.roughness);
-  if (textures.metalness) maps.metalnessMap = load(textures.metalness);
-  if (textures.ao) maps.aoMap = load(textures.ao);
-  if (textures.emissive) maps.emissiveMap = load(textures.emissive);
-  if (Object.keys(maps).length === 0) return;
+  if (tex.diffuse) maps.map = load(tex.diffuse);
+  if (tex.normal) maps.normalMap = load(tex.normal);
+  if (tex.roughness) maps.roughnessMap = load(tex.roughness);
+  if (tex.metalness) maps.metalnessMap = load(tex.metalness);
+  if (tex.ao) maps.aoMap = load(tex.ao);
+  if (tex.emissive) maps.emissiveMap = load(tex.emissive);
+  return maps;
+}
+
+function applyMapsToMesh(mesh: THREE.Mesh, maps: Partial<Record<string, THREE.Texture>>) {
+  const mat = new THREE.MeshStandardMaterial();
+  if (maps.map) mat.map = maps.map;
+  if (maps.normalMap) mat.normalMap = maps.normalMap;
+  if (maps.roughnessMap) mat.roughnessMap = maps.roughnessMap;
+  if (maps.metalnessMap) { mat.metalnessMap = maps.metalnessMap; mat.metalness = 1; }
+  if (maps.aoMap) mat.aoMap = maps.aoMap;
+  if (maps.emissiveMap) { mat.emissiveMap = maps.emissiveMap; mat.emissive = new THREE.Color(1, 1, 1); }
+  mat.needsUpdate = true;
+  mesh.material = mat;
+}
+
+function applySlotTexturesToGroup(
+  group: THREE.Group | THREE.Object3D,
+  slotTextures: Record<number, TextureMap>,
+  materialSlots: import("./ModelWorkshopContext").MaterialSlot[],
+) {
+  const slotUuids = new Map<string, number>();
+  const allMats: THREE.Material[] = [];
   group.traverse((child) => {
-    if (child instanceof THREE.Mesh) {
-      const mat = new THREE.MeshStandardMaterial();
-      if (maps.map) mat.map = maps.map;
-      if (maps.normalMap) mat.normalMap = maps.normalMap;
-      if (maps.roughnessMap) mat.roughnessMap = maps.roughnessMap;
-      if (maps.metalnessMap) { mat.metalnessMap = maps.metalnessMap; mat.metalness = 1; }
-      if (maps.aoMap) mat.aoMap = maps.aoMap;
-      if (maps.emissiveMap) { mat.emissiveMap = maps.emissiveMap; mat.emissive = new THREE.Color(1, 1, 1); }
-      mat.needsUpdate = true;
-      child.material = mat;
+    if (!(child instanceof THREE.Mesh)) return;
+    const mats = Array.isArray(child.material) ? child.material : [child.material];
+    for (const m of mats) if (!allMats.find((x) => x.uuid === m.uuid)) allMats.push(m);
+  });
+  materialSlots.forEach((slot) => {
+    if (allMats[slot.index]) slotUuids.set(allMats[slot.index].uuid, slot.index);
+  });
+
+  const allTex = slotTextures[-1];
+  const allMaps = allTex && Object.keys(allTex).length > 0 ? buildTextureMaps(allTex) : null;
+
+  const slotMapsCache = new Map<number, Partial<Record<string, THREE.Texture>>>();
+  for (const [idx, tex] of Object.entries(slotTextures)) {
+    const i = Number(idx);
+    if (i < 0) continue;
+    if (Object.keys(tex).length > 0) slotMapsCache.set(i, buildTextureMaps(tex));
+  }
+
+  if (!allMaps && slotMapsCache.size === 0) return;
+
+  group.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    const mats = Array.isArray(child.material) ? child.material : [child.material];
+    for (const mat of mats) {
+      const slotIdx = slotUuids.get(mat.uuid);
+      const maps = (slotIdx !== undefined && slotMapsCache.get(slotIdx)) || allMaps;
+      if (maps && Object.keys(maps).length > 0) applyMapsToMesh(child, maps);
     }
   });
 }
@@ -249,7 +286,11 @@ function WorkshopFBXOBJScene({ url, fmt, onScene }: { url: string; fmt: "fbx" | 
 
 /* ── Model Scene ── */
 
-function WorkshopModelScene({ url, textures }: { url: string; textures?: TextureMap }) {
+function WorkshopModelScene({ url, slotTextures, materialSlots }: {
+  url: string;
+  slotTextures?: Record<number, TextureMap>;
+  materialSlots?: import("./ModelWorkshopContext").MaterialSlot[];
+}) {
   const { state, actions } = useModelWorkshop();
   const fmt = useMemo(() => detectModelFormat(url), [url]);
   const isGltf = fmt === "glb" || fmt === "gltf";
@@ -258,16 +299,36 @@ function WorkshopModelScene({ url, textures }: { url: string; textures?: Texture
   const clonedScene = useMemo(() => rawScene?.clone(true) ?? null, [rawScene]);
 
   useEffect(() => {
-    if (!clonedScene || !textures || Object.keys(textures).length === 0) return;
-    applyTexturesToGroup(clonedScene, textures);
-  }, [clonedScene, textures]);
+    if (!clonedScene || !slotTextures) return;
+    const hasAny = Object.values(slotTextures).some((t) => Object.keys(t).length > 0);
+    if (!hasAny) return;
+    applySlotTexturesToGroup(clonedScene, slotTextures, materialSlots ?? []);
+  }, [clonedScene, slotTextures, materialSlots]);
   const groupRef = useRef<THREE.Group>(null);
 
   useEffect(() => {
     if (groupRef.current) {
       (state.modelRef as React.MutableRefObject<THREE.Group | null>).current = groupRef.current;
+      actions.notifyModelReady();
+
+      const slots: import("./ModelWorkshopContext").MaterialSlot[] = [];
+      const matMap = new Map<string, { index: number; name: string; meshNames: string[] }>();
+      let idx = 0;
+      groupRef.current.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        for (const mat of mats) {
+          const key = mat.uuid;
+          if (!matMap.has(key)) {
+            matMap.set(key, { index: idx++, name: mat.name || `Material ${idx}`, meshNames: [] });
+          }
+          matMap.get(key)!.meshNames.push(child.name || "unnamed");
+        }
+      });
+      matMap.forEach((v) => slots.push(v));
+      actions.setMaterialSlots(slots);
     }
-  }, [state.modelRef]);
+  }, [clonedScene, state.modelRef, actions]);
 
   useEffect(() => {
     if (!groupRef.current) return;
@@ -322,8 +383,10 @@ function WorkshopModelScene({ url, textures }: { url: string; textures?: Texture
 function WorkshopTransformGizmo() {
   const { state, actions } = useModelWorkshop();
   const transformRef = useRef<any>(null);
+  const controls = useThree((s) => s.controls) as any;
 
   const showGizmo =
+    state.modelReady > 0 &&
     state.modelRef.current &&
     (state.activeTool === "move" || state.activeTool === "rotate" || state.activeTool === "scale");
 
@@ -339,7 +402,7 @@ function WorkshopTransformGizmo() {
     };
     ctrl.addEventListener("objectChange", handler);
     return () => ctrl.removeEventListener("objectChange", handler);
-  }, [state.modelRef, actions]);
+  }, [state.modelRef, state.modelReady, actions]);
 
   useEffect(() => {
     if (!transformRef.current) return;
@@ -348,6 +411,19 @@ function WorkshopTransformGizmo() {
     ctrl.addEventListener("mouseDown", onDown);
     return () => ctrl.removeEventListener("mouseDown", onDown);
   }, [actions]);
+
+  useEffect(() => {
+    if (!transformRef.current || !controls) return;
+    const ctrl = transformRef.current;
+    const onDragging = (e: { value: boolean }) => {
+      controls.enabled = !e.value;
+    };
+    ctrl.addEventListener("dragging-changed", onDragging);
+    return () => {
+      ctrl.removeEventListener("dragging-changed", onDragging);
+      controls.enabled = true;
+    };
+  }, [controls, showGizmo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!showGizmo || !state.modelRef.current) return null;
 
@@ -498,12 +574,27 @@ function PropertiesPanelInline() {
             <NumInput label="Z" value={(rot.z * 180) / Math.PI} color="#2196f3" onChange={(v) => setRot("z", v)} />
           </div>
         </div>
-        <div>
+        <div style={{ marginBottom: 8 }}>
           <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginBottom: 4, fontWeight: 600 }}>Scale</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
             <NumInput label="X" value={scl.x} color="#f44336" onChange={(v) => setScl("x", v)} />
             <NumInput label="Y" value={scl.y} color="#4caf50" onChange={(v) => setScl("y", v)} />
             <NumInput label="Z" value={scl.z} color="#2196f3" onChange={(v) => setScl("z", v)} />
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginBottom: 4, fontWeight: 600 }}>Axis Correction</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+            {(["x", "y", "z"] as const).map((axis) => (
+              <button key={axis} type="button" style={propsBtnStyle(false)} onClick={() => {
+                actions.pushUndo("Axis correction");
+                const r = rot.clone();
+                r[axis] += Math.PI / 2;
+                actions.setRotation(r);
+              }}>
+                <RotateCw size={10} /> +90 {axis.toUpperCase()}
+              </button>
+            ))}
           </div>
         </div>
       </Section>
@@ -623,7 +714,7 @@ function PropertiesPanelInline() {
               </div>
             )}
             <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 4 }}>
-              Shift + drag to box-select points
+              Shift + click to multi-select points
             </div>
           </div>
         )}
@@ -745,8 +836,12 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textureInputRef = useRef<HTMLInputElement>(null);
   const activeChannelRef = useRef<keyof TextureMap | null>(null);
-  const [textures, setTextures] = useState<TextureMap>({});
-  const [texturePreviews, setTexturePreviews] = useState<Record<string, string>>({});
+  const [selectedTexSlot, setSelectedTexSlot] = useState(-1);
+  const [slotTextures, setSlotTextures] = useState<Record<number, TextureMap>>({});
+  const [slotTexPreviews, setSlotTexPreviews] = useState<Record<number, Record<string, string>>>({});
+
+  const textures = slotTextures[selectedTexSlot] ?? {};
+  const texturePreviews = slotTexPreviews[selectedTexSlot] ?? {};
 
   useEffect(() => {
     if (initialModelUrl && initialModelUrl !== modelUrl) {
@@ -790,15 +885,26 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
     if (!file || !channel) return;
     e.target.value = "";
     const url = URL.createObjectURL(file);
-    setTextures((prev) => ({ ...prev, [channel]: url }));
-    setTexturePreviews((prev) => ({ ...prev, [channel]: url }));
+    const slot = selectedTexSlot;
+    setSlotTextures((prev) => ({ ...prev, [slot]: { ...(prev[slot] ?? {}), [channel]: url } }));
+    setSlotTexPreviews((prev) => ({ ...prev, [slot]: { ...(prev[slot] ?? {}), [channel]: url } }));
     addToast(`${channel} texture loaded`, "success");
-  }, [addToast]);
+  }, [addToast, selectedTexSlot]);
 
   const removeTexture = useCallback((channel: keyof TextureMap) => {
-    setTextures((prev) => { const n = { ...prev }; if (n[channel]) URL.revokeObjectURL(n[channel]!); delete n[channel]; return n; });
-    setTexturePreviews((prev) => { const n = { ...prev }; delete n[channel]; return n; });
-  }, []);
+    const slot = selectedTexSlot;
+    setSlotTextures((prev) => {
+      const cur = { ...(prev[slot] ?? {}) };
+      if (cur[channel]) URL.revokeObjectURL(cur[channel]!);
+      delete cur[channel];
+      return { ...prev, [slot]: cur };
+    });
+    setSlotTexPreviews((prev) => {
+      const cur = { ...(prev[slot] ?? {}) };
+      delete cur[channel];
+      return { ...prev, [slot]: cur };
+    });
+  }, [selectedTexSlot]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -820,14 +926,15 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
         else if (name.includes("ao") || name.includes("occlusion") || name.includes("ambient")) channel = "ao";
         else if (name.includes("emissive") || name.includes("emission")) channel = "emissive";
         else if (name.includes("diffuse") || name.includes("color") || name.includes("albedo") || name.includes("base")) channel = "diffuse";
-        setTextures((prev) => ({ ...prev, [channel]: url }));
-        setTexturePreviews((prev) => ({ ...prev, [channel]: url }));
+        const slot = selectedTexSlot;
+        setSlotTextures((prev) => ({ ...prev, [slot]: { ...(prev[slot] ?? {}), [channel]: url } }));
+        setSlotTexPreviews((prev) => ({ ...prev, [slot]: { ...(prev[slot] ?? {}), [channel]: url } }));
         addToast(`Auto-assigned ${file.name} → ${channel}`, "success");
       }
     }
-  }, [addToast]);
+  }, [addToast, selectedTexSlot]);
 
-  const hasTextures = Object.keys(textures).length > 0;
+  const hasTextures = Object.values(slotTextures).some((t) => Object.keys(t).length > 0);
 
   return (
     <div className="flex flex-col h-full overflow-hidden" style={{ background: "var(--color-background)" }}>
@@ -951,7 +1058,7 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
               <directionalLight position={[-4, 4, -3]} intensity={0.35} />
               <Suspense fallback={null}>
                 <Environment preset="studio" />
-                <WorkshopModelScene url={modelUrl} textures={hasTextures ? textures : undefined} />
+                <WorkshopModelScene url={modelUrl} slotTextures={hasTextures ? slotTextures : undefined} materialSlots={state.materialSlots} />
               </Suspense>
               <WorkshopTransformGizmo />
               <ModelWorkshopFFD />
@@ -990,7 +1097,7 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
                 pointerEvents: "none",
               }}
             >
-              FFD Active — Hold Shift + drag to select points
+              FFD Active — Click points to select, Shift + click to multi-select
             </div>
           )}
         </div>
@@ -1003,7 +1110,28 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
           <PropertiesPanelInline />
 
           {/* Textures section */}
-          <Section title="Textures">
+          <Section title={`Textures${state.materialSlots.length > 1 ? ` (${state.materialSlots.length} slots)` : ""}`}>
+            {state.materialSlots.length > 1 && (
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginBottom: 3, fontWeight: 600 }}>Material Slot</div>
+                <select
+                  value={selectedTexSlot}
+                  onChange={(e) => setSelectedTexSlot(Number(e.target.value))}
+                  style={{
+                    width: "100%", padding: "4px 6px", fontSize: 10, borderRadius: 4,
+                    background: "var(--color-input-bg)", border: "1px solid var(--color-border)",
+                    color: "var(--color-text-primary)", cursor: "pointer",
+                  }}
+                >
+                  <option value={-1}>All Materials</option>
+                  {state.materialSlots.map((slot) => (
+                    <option key={slot.index} value={slot.index}>
+                      {slot.name} ({slot.meshNames.length} mesh{slot.meshNames.length !== 1 ? "es" : ""})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <p className="text-[9px] mb-2" style={{ color: "var(--color-text-muted)" }}>
               Upload per channel or drag & drop onto the viewport.
             </p>
@@ -1038,8 +1166,8 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
             </div>
             {hasTextures && (
               <button type="button" onClick={() => {
-                Object.values(textures).forEach((u) => { if (u) URL.revokeObjectURL(u); });
-                setTextures({}); setTexturePreviews({});
+                Object.values(slotTextures).forEach((tex) => Object.values(tex).forEach((u) => { if (u) URL.revokeObjectURL(u); }));
+                setSlotTextures({}); setSlotTexPreviews({});
               }} style={propsBtnStyle(false)} className="mt-2 w-full">Clear All Textures</button>
             )}
           </Section>

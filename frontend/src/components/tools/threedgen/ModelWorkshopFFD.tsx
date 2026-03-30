@@ -176,7 +176,7 @@ export default function ModelWorkshopFFD() {
     latticeRef.current = grid.map((p) => p.clone());
     actions.setFFDLatticePoints(grid);
     bindingsRef.current = computeBindings(state.modelRef.current, state.modelBBox, divX, divY, divZ);
-  }, [enabled, divX, divY, divZ, state.modelBBox]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [enabled, divX, divY, divZ, state.modelBBox, state.modelReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handlePointerDown = useCallback((idx: number, shiftKey: boolean) => {
     let indices: number[];

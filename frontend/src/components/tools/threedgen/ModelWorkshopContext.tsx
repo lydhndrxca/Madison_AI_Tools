@@ -42,6 +42,12 @@ interface UndoSnapshot {
 
 const MAX_UNDO = 50;
 
+export interface MaterialSlot {
+  index: number;
+  name: string;
+  meshNames: string[];
+}
+
 export interface ModelWorkshopState {
   activeTool: EditorTool;
   transformMode: TransformMode;
@@ -57,6 +63,8 @@ export interface ModelWorkshopState {
   modelRef: React.RefObject<THREE.Group | null>;
   cameraRef: React.RefObject<THREE.Camera | null>;
   canvasRef: React.RefObject<HTMLDivElement | null>;
+  modelReady: number;
+  materialSlots: MaterialSlot[];
   refBlocks: RefBlock[];
   selectedBlockId: string | null;
   gridSnap: SnapSettings;
@@ -103,6 +111,9 @@ export interface ModelWorkshopActions {
   setScaleSnap: (patch: Partial<SnapSettings>) => void;
   setRotateSnap: (patch: Partial<SnapSettings>) => void;
 
+  notifyModelReady: () => void;
+  setMaterialSlots: (slots: MaterialSlot[]) => void;
+
   pushUndo: (label?: string) => void;
   undo: () => void;
   redo: () => void;
@@ -139,6 +150,8 @@ export function ModelWorkshopProvider({ children }: { children: React.ReactNode 
   const [modelSize, setModelSizeState] = useState<THREE.Vector3 | null>(null);
   const [wireframe, setWireframe] = useState(false);
   const [showNormals, setShowNormals] = useState(false);
+  const [modelReady, setModelReady] = useState(0);
+  const [materialSlots, setMaterialSlots] = useState<MaterialSlot[]>([]);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -299,6 +312,10 @@ export function ModelWorkshopProvider({ children }: { children: React.ReactNode 
     setSelectedBlockId(null);
   }, []);
 
+  const notifyModelReady = useCallback(() => {
+    setModelReady((n) => n + 1);
+  }, []);
+
   const setGridSnap = useCallback((patch: Partial<SnapSettings>) => {
     setGridSnapState((prev) => ({ ...prev, ...patch }));
   }, []);
@@ -342,23 +359,27 @@ export function ModelWorkshopProvider({ children }: { children: React.ReactNode 
     setGridSnap,
     setScaleSnap,
     setRotateSnap,
+    notifyModelReady,
+    setMaterialSlots,
     pushUndo,
     undo,
     redo,
     setShowHistory,
   }), [setToolWithMode, snapPivotToBottom, snapPivotToCenter, centerToOrigin, resetTransform, setModelBBox,
     addRefBlock, removeRefBlock, duplicateRefBlock, updateRefBlock, toggleBlockVisibility, clearAllBlocks,
-    setGridSnap, setScaleSnap, setRotateSnap, pushUndo, undo, redo]);
+    setGridSnap, setScaleSnap, setRotateSnap, notifyModelReady, pushUndo, undo, redo]);
 
   const state: ModelWorkshopState = useMemo(() => ({
     activeTool, transformMode, pivotOffset, ffd,
     position, rotation, scale, modelBBox, modelSize,
     wireframe, showNormals, modelRef, cameraRef, canvasRef,
+    modelReady, materialSlots,
     refBlocks, selectedBlockId, gridSnap, scaleSnap, rotateSnap,
     canUndo, canRedo, showHistory, historyEntries,
   }), [activeTool, transformMode, pivotOffset, ffd,
     position, rotation, scale, modelBBox, modelSize,
-    wireframe, showNormals, refBlocks, selectedBlockId,
+    wireframe, showNormals, modelReady, materialSlots,
+    refBlocks, selectedBlockId,
     gridSnap, scaleSnap, rotateSnap,
     canUndo, canRedo, showHistory, historyEntries]);
 

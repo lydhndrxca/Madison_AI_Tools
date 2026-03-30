@@ -16,6 +16,7 @@ export default defineConfig({
       "/api": { target: "http://127.0.0.1:8420", ws: true },
       "/ws": { target: "ws://127.0.0.1:8420", ws: true },
     },
+    hmr: { overlay: false },
   },
   base: "./",
 });
