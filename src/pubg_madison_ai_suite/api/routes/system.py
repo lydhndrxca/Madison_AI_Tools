@@ -28,6 +28,21 @@ async def health():
 
 
 # ---------------------------------------------------------------------------
+# API cost tracking
+# ---------------------------------------------------------------------------
+
+@router.get("/api-costs")
+async def get_api_costs():
+    return core.get_cost_data()
+
+
+@router.delete("/api-costs")
+async def reset_api_costs():
+    core.reset_cost_data()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # API key management
 # ---------------------------------------------------------------------------
 
@@ -45,6 +60,32 @@ async def get_api_key():
 @router.post("/api-key")
 async def set_api_key(body: ApiKeyRequest):
     core.set_api_key(body.key)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Extra API keys (Pexels, Pixabay, etc.)
+# ---------------------------------------------------------------------------
+
+class ExtraKeyRequest(BaseModel):
+    name: str
+    key: str
+
+
+@router.get("/extra-keys")
+async def get_extra_keys():
+    """Return masked status for all optional API keys."""
+    result = {}
+    for name in ("pexels_api_key", "pixabay_api_key"):
+        val = core.get_extra_key(name)
+        masked = val[:4] + "..." + val[-4:] if len(val) > 8 else ("***" if val else "")
+        result[name] = {"has_key": bool(val), "key_masked": masked}
+    return result
+
+
+@router.post("/extra-key")
+async def set_extra_key(body: ExtraKeyRequest):
+    core.set_extra_key(body.name, body.key)
     return {"ok": True}
 
 
@@ -228,6 +269,7 @@ async def transcribe(body: TranscribeRequest):
         )
         result = core.rest_generate_text_multimodal(
             api_key, "gemini-2.0-flash", [audio_part, prompt], timeout=30,
+            cost_category="voice_transcription",
         )
         text = (result or "").strip()
         if text.lower().startswith("here is") or text.lower().startswith("the transcription"):
@@ -291,7 +333,7 @@ _GLOBAL_TOOLS: list[dict] = [
                 "page": {
                     "type": "STRING",
                     "description": "Target page id",
-                    "enum": ["character", "prop", "environment", "uilab", "gemini", "multiview", "weapon", "style-library", "generated-images", "favorites", "prompt-builder", "history"],
+                    "enum": ["character", "prop", "environment", "uilab", "gemini", "multiview", "weapon", "style-library", "generated-images", "favorites", "prompt-builder", "transcripts"],
                 }
             },
             "required": ["page"],

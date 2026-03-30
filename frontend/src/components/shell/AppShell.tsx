@@ -10,6 +10,7 @@ import { useVoiceToText, nativeSpeechSupported } from "@/hooks/useVoiceToText";
 import type { VoiceEngine } from "@/hooks/useVoiceToText";
 import { useVoiceDirector } from "@/hooks/useVoiceDirector";
 import { useShortcuts } from "@/hooks/useShortcuts";
+import { CostCounter } from "./CostCounter";
 import type { PageId } from "@/app";
 
 interface AppShellProps {
@@ -149,7 +150,6 @@ const PAGE_LABELS: Record<PageId, string> = {
   "prompt-builder": "Prompt Builder",
   "generated-images": "Generated Images",
   "favorites": "Generated Images",
-  "history": "Generation History",
   "gemini": "Default Gemini",
   "multiview": "Multiview",
   "character": "AI Character Lab",
@@ -324,6 +324,8 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
             {!director.active && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 4-8 8 3 3 8-8"/><path d="m18 7-3-3"/><path d="M9 15 4.4 19.6a2.1 2.1 0 1 0 3 3L12 18"/></svg>}
             {director.active ? "Director Listening..." : "Voice Director"}
           </button>
+
+          <CostCounter />
         </div>
         <main
           className="flex-1 overflow-hidden relative"

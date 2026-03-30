@@ -35,6 +35,7 @@ import type { StyleFusionState } from "@/components/shared/StyleFusionPanel";
 
 const BUILTIN_TABS: TabDef[] = [
   { id: "main", label: "Main Stage", group: "stage", prompt: "Three-quarter hero shot showing the prop from its most visually interesting angle." },
+  { id: "grid", label: "4×4 Grid", group: "stage" },
   { id: "3/4", label: "3/4", group: "views", prompt: "Three-quarter view of the prop showing its dimensional form." },
   { id: "front", label: "Front", group: "views", prompt: "Front elevation view" },
   { id: "back", label: "Back", group: "views", prompt: "Rear elevation view" },
@@ -640,32 +641,43 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
 
   const handleGridGenerate = useCallback(async () => {
     busy.start("gen");
+    setActiveTab("grid");
     try {
       const body = buildRequestBody("main");
-      const promises = Array.from({ length: 16 }, (_, i) =>
-        apiFetch<{ image_b64?: string; width?: number; height?: number; error?: string }>("/prop/generate", {
-          method: "POST",
-          body: JSON.stringify(body),
-        }).then((resp) => ({ ok: true as const, resp, idx: i }))
-         .catch((e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e), idx: i })),
-      );
-      const results = await Promise.all(promises);
-      const newResults: GridGalleryResult[] = [];
-      for (const r of results.sort((a, b) => a.idx - b.idx)) {
-        if (r.ok && r.resp.image_b64) {
+      const res = await apiFetch<{
+        cells?: string[]; full_grid_b64?: string; error?: string;
+        cell_width?: number; cell_height?: number;
+      }>("/prop/generate-grid", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      if (res.error) {
+        addToast(res.error, "error");
+      } else if (res.cells) {
+        const cw = res.cell_width || 256;
+        const ch = res.cell_height || 256;
+        const newResults: GridGalleryResult[] = res.cells.map((b64, i) => ({
+          id: `grid_${Date.now()}_${i}`,
+          image_b64: b64,
+          width: cw,
+          height: ch,
+          label: `${String.fromCharCode(65 + Math.floor(i / 4))}${(i % 4) + 1}`,
+        }));
+        if (res.full_grid_b64) {
           newResults.push({
-            id: `grid_${Date.now()}_${r.idx}`,
-            image_b64: r.resp.image_b64,
-            width: r.resp.width || 1024,
-            height: r.resp.height || 1024,
+            id: `grid_full_${Date.now()}`,
+            image_b64: res.full_grid_b64,
+            width: cw * 4,
+            height: ch * 4,
+            label: "Full",
           });
-        } else if (r.ok && r.resp.error) { addToast(r.resp.error, "error"); }
-        else if (!r.ok) { addToast(r.error, "error"); }
+        }
+        setGridResults((prev) => [...prev, ...newResults]);
+        addToast("Generated 16 variations on one sheet", "success");
+      } else {
+        addToast("Grid generation failed", "error");
       }
-      setGridResults((prev) => [...prev, ...newResults]);
-      if (newResults.length > 0) addToast(`Generated ${newResults.length} images`, "success");
-      else addToast("All grid generation attempts failed", "error");
-    } catch (e) { addToast(String(e), "error"); }
+    } catch (e) { addToast(e instanceof Error ? e.message : "Generation failed", "error"); }
     busy.end("gen");
   }, [buildRequestBody, addToast, busy]);
 
@@ -710,6 +722,19 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
     } catch (e) { addToast(e instanceof Error ? e.message : "Edit failed", "error"); }
     setGridEditBusy((prev) => ({ ...prev, [id]: false }));
   }, [gridResults, buildRequestBody, addToast]);
+
+  const handleGridSendToMainstage = useCallback(
+    (id: string) => {
+      const result = gridResults.find((r) => r.id === id);
+      if (!result) return;
+      const src = `data:image/png;base64,${result.image_b64}`;
+      const histLabel = result.label ? `Grid ${result.label}` : "From grid";
+      setTabImage("main", src, histLabel);
+      setActiveTab("main");
+      addToast("Sent to main stage", "success");
+    },
+    [gridResults, setTabImage, addToast],
+  );
 
   // Extract attributes
   const handleExtractAttributes = useCallback(async () => {
@@ -850,7 +875,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
     const b64 = getMainImageB64();
     if (!b64) { addToast("No image to send", "info"); return; }
     try {
-      await apiFetch("/system/send-to-ps", { method: "POST", body: JSON.stringify({ image_b64: b64, label: "AI PropLab" }) });
+      await apiFetch("/system/send-to-ps", { method: "POST", body: JSON.stringify({ images: [{ image_b64: b64, label: "AI PropLab" }] }) });
       addToast("Sent to Photoshop", "success");
     } catch (e) { addToast(String(e), "error"); }
   }, [getMainImageB64, addToast]);
@@ -1113,6 +1138,30 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
     if (active) {
       setOnApplyFeedback(() => (suggestion: string) => {
         setEditPrompt((prev) => prev ? `${prev}\n${suggestion}` : suggestion);
+
+        const colonIdx = suggestion.indexOf(":");
+        if (colonIdx < 0) return;
+        const label = suggestion.slice(0, colonIdx).trim().toLowerCase();
+        const body = suggestion.slice(colonIdx + 1).trim();
+        if (!body) return;
+
+        const attrMap: Record<string, string> = {
+          material: "primaryMaterial", "primary material": "primaryMaterial",
+          "secondary material": "secondaryMaterials", "secondary materials": "secondaryMaterials",
+          surface: "surfaceFinish", "surface finish": "surfaceFinish", finish: "surfaceFinish",
+          wear: "wearPattern", damage: "wearPattern", "wear & damage": "wearPattern", weathering: "wearPattern",
+          color: "colorPalette", "color palette": "colorPalette", palette: "colorPalette",
+          texture: "textureDetail", "texture detail": "textureDetail",
+          function: "functionalElements", "functional elements": "functionalElements", mechanism: "functionalElements",
+          decorative: "decorativeDetail", "decorative detail": "decorativeDetail", ornament: "decorativeDetail",
+          lighting: "lightingEffects", "material response": "lightingEffects", reflection: "lightingEffects",
+          context: "contextualStory", story: "contextualStory", "context & story": "contextualStory", lore: "contextualStory",
+        };
+
+        const matchedKey = attrMap[label] || Object.entries(attrMap).find(([k]) => label.includes(k))?.[1];
+        if (matchedKey) {
+          setAttributes((prev) => ({ ...prev, [matchedKey]: body }));
+        }
       });
       return () => setOnApplyFeedback(null);
     }
@@ -1256,7 +1305,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
           disabled={busy.any}
         >
           <option value="single">Single Image</option>
-          <option value="grid">4×4 Grid (16 images)</option>
+          <option value="grid">4×4 Grid (16 Variations)</option>
         </select>
       </div>
     </>
@@ -1997,22 +2046,21 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
             <ArtboardCanvas />
           ) : activeTab === "deepSearch" ? (
             <DeepSearchPanel onSendToArtboard={handleSendSearchToArtboard} />
-          ) : generationMode === "grid" && activeTab === "main" && gridResults.length > 0 ? (
-            <div className="flex-1 min-w-0">
-              <GridGallery
-                results={gridResults}
-                title="Prop Variations"
-                toolLabel="prop"
-                generating={busy.is("gen")}
-                emptyMessage="No grid results yet. Switch to grid mode and generate."
-                onDelete={handleGridDelete}
-                onCopy={handleGridCopy}
-                onEditSubmit={handleGridEdit}
-                editBusy={gridEditBusy}
-                isFavorited={(b64) => isFavorited(b64)}
-                onToggleFavorite={(id, b64, w, h) => { if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "prop", label: `grid-${id}`, prompt: "", source: "grid", width: w, height: h }); }}
-              />
-            </div>
+          ) : activeTab === "grid" ? (
+            <GridGallery
+              results={gridResults}
+              title="Prop Variations"
+              toolLabel="prop"
+              generating={busy.is("gen")}
+              emptyMessage="No grid results yet. Select 4×4 Grid mode and generate."
+              onDelete={handleGridDelete}
+              onCopy={handleGridCopy}
+              onEditSubmit={handleGridEdit}
+              onSendToMainstage={handleGridSendToMainstage}
+              editBusy={gridEditBusy}
+              isFavorited={(b64) => isFavorited(b64)}
+              onToggleFavorite={(id, b64, w, h) => { if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "prop", label: `grid-${id}`, prompt: "", source: "grid", width: w, height: h }); }}
+            />
           ) : (
             <div className="flex-1 min-w-0 relative">
               <ImageViewer

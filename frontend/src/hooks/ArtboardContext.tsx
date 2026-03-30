@@ -365,6 +365,8 @@ export function ArtboardProvider({ children }: { children: ReactNode }) {
         setActiveBoardId(fallback);
         setItems(loadBoardItems(fallback));
         setSelection(new Set());
+        setViewport({ zoom: 1, panX: 0, panY: 0 });
+        setViewportTouched(false);
         undoStack.current = [];
         redoStack.current = [];
         setCanUndo(false);

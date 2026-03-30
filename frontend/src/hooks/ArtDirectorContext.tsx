@@ -224,7 +224,13 @@ export function ArtDirectorProvider({ children }: { children: React.ReactNode })
         );
       }
     } catch (e) {
-      if ((e as Error).name !== "AbortError") {
+      if ((e as Error).name === "AbortError") {
+        setMessages((prev) => {
+          const msg = prev.find((m) => m.id === botMsgId);
+          if (msg && !msg.text) return prev.filter((m) => m.id !== botMsgId);
+          return prev;
+        });
+      } else {
         setMessages((prev) =>
           prev.map((m) => (m.id === botMsgId ? { ...m, text: m.text || "Connection error" } : m)),
         );

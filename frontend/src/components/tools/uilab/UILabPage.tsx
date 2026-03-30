@@ -1136,7 +1136,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
                 onChange={(e) => setUseGrid(e.target.value === "grid")}
                 disabled={busy.any}
               >
-                <option value="grid">4×4 Grid (16)</option>
+                <option value="grid">4×4 Grid (16 Variations)</option>
                 <option value="single">Single Image</option>
               </select>
             </div>
@@ -1520,13 +1520,14 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
   useEffect(() => {
     if (!ctxMenu) return;
     const dismiss = () => setCtxMenu(null);
+    const dismissOnEscape = (e: KeyboardEvent) => { if (e.key === "Escape") dismiss(); };
     window.addEventListener("click", dismiss);
     window.addEventListener("contextmenu", dismiss);
-    window.addEventListener("keydown", (e) => { if (e.key === "Escape") dismiss(); });
+    window.addEventListener("keydown", dismissOnEscape);
     return () => {
       window.removeEventListener("click", dismiss);
       window.removeEventListener("contextmenu", dismiss);
-      window.removeEventListener("keydown", (e) => { if (e.key === "Escape") dismiss(); });
+      window.removeEventListener("keydown", dismissOnEscape);
     };
   }, [ctxMenu]);
 

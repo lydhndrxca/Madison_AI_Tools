@@ -55,6 +55,16 @@ class CharacterResponse(BaseModel):
     error: Optional[str] = None
 
 
+class CharacterGridResponse(BaseModel):
+    cells: Optional[list[str]] = None
+    full_grid_b64: Optional[str] = None
+    width: int = 0
+    height: int = 0
+    cell_width: int = 0
+    cell_height: int = 0
+    error: Optional[str] = None
+
+
 class AttributeRequest(BaseModel):
     description: str = ""
     image_b64: Optional[str] = None
@@ -387,6 +397,91 @@ def _do_generate(req: CharacterGenerateRequest) -> CharacterResponse:
     )
 
 
+def _do_generate_grid(req: CharacterGenerateRequest) -> CharacterGridResponse:
+    """Generate a 4×4 sprite sheet of character variations, then crop into 16 cells."""
+    from PIL import Image
+
+    api_key = core.get_api_key()
+    if not api_key:
+        return CharacterGridResponse(error="No API key configured")
+
+    from pubg_madison_ai_suite.api.cancel import reset_cancel_event, release_cancel_event
+    cancel = reset_cancel_event()
+
+    base_prompt = _build_character_prompt(req)
+
+    grid_header = (
+        "4×4 character variation sheet: Generate a single image containing a 4×4 grid "
+        "(4 columns, 4 rows = 16 cells) of character variations.\n"
+        "Each cell shows ONE full-body character based on the description below, but each "
+        "of the 16 MUST be a DIFFERENT creative variation — vary the pose, camera angle, "
+        "lighting mood, expression, costume details, color accents, and overall energy. "
+        "No two cells should look the same.\n"
+        "Background: solid dark grey #343434 behind every cell.\n"
+        "Keep all 16 characters evenly spaced in a clean grid with no overlap or grid lines.\n"
+        "Realistic 3D-rendered style. NOT illustrated, NOT cartoon, NOT painted.\n"
+        "No text, labels, or annotations anywhere."
+    )
+
+    prompt = f"{grid_header}\n\n--- Character Description ---\n{base_prompt}"
+
+    contents: list = []
+    if req.reference_image_b64:
+        contents.append(core.b64_to_image(req.reference_image_b64))
+    for b64 in [req.ref_a_b64, req.ref_b_b64, req.ref_c_b64]:
+        if b64:
+            contents.append(core.b64_to_image(b64))
+    for b64 in [req.fusion_image_1_b64, req.fusion_image_2_b64]:
+        if b64:
+            contents.append(core.b64_to_image(b64))
+    for b64 in (req.custom_section_images or []):
+        if b64:
+            contents.append(core.b64_to_image(b64))
+    contents.append(prompt)
+
+    try:
+        result = core.gemini_generate_image(
+            api_key, contents, aspect_ratio="3:4", image_size="4K",
+            cancel_event=cancel, model_id=req.model_id,
+        )
+    except RuntimeError as e:
+        return CharacterGridResponse(error=str(e))
+    finally:
+        release_cancel_event(cancel)
+
+    if result is None:
+        return CharacterGridResponse(error="Generation failed")
+
+    canvas_w, canvas_h = result.size
+    cell_w = canvas_w // 4
+    cell_h = canvas_h // 4
+
+    if result.size != (cell_w * 4, cell_h * 4):
+        result = result.resize((cell_w * 4, cell_h * 4), Image.Resampling.LANCZOS)
+
+    cells_b64: list[str] = []
+    for row in range(4):
+        for col in range(4):
+            x1, y1 = col * cell_w, row * cell_h
+            cell = result.crop((x1, y1, x1 + cell_w, y1 + cell_h)).copy()
+            cells_b64.append(core.image_to_b64(cell))
+            core.save_generated_image(
+                cell, "Character Generator",
+                view_name=f"grid_{row}_{col}",
+                generation_type="grid",
+                metadata={"description": req.description[:200]},
+            )
+
+    return CharacterGridResponse(
+        cells=cells_b64,
+        full_grid_b64=core.image_to_b64(result),
+        width=canvas_w,
+        height=canvas_h,
+        cell_width=cell_w,
+        cell_height=cell_h,
+    )
+
+
 def _do_extract_attributes(description: str, image_b64: str | None = None) -> AttributeResponse:
     api_key = core.get_api_key()
     if not api_key:
@@ -448,7 +543,7 @@ def _do_extract_attributes(description: str, image_b64: str | None = None) -> At
 
         contents.append(prompt)
 
-        data = core.rest_generate_json(api_key, "gemini-2.0-flash", contents)
+        data = core.rest_generate_json(api_key, "gemini-2.0-flash", contents, cost_category="extraction")
         if data is None:
             return AttributeResponse(error="No response from Gemini")
         return AttributeResponse(
@@ -662,6 +757,16 @@ async def generate(body: CharacterGenerateRequest):
     return result
 
 
+@router.post("/generate-grid", response_model=CharacterGridResponse)
+async def generate_grid(body: CharacterGenerateRequest):
+    """Generate a 4×4 sprite sheet of character variations."""
+    loop = asyncio.get_event_loop()
+    await manager.broadcast("status", {"message": "Generating 4×4 character sheet..."})
+    result = await loop.run_in_executor(_pool, _do_generate_grid, body)
+    await manager.broadcast("status", {"message": result.error or "Grid generated"})
+    return result
+
+
 @router.post("/edit", response_model=CharacterResponse)
 async def edit(body: CharacterGenerateRequest):
     """Apply edits to existing character (same pipeline, edit_prompt required)."""
@@ -794,7 +899,7 @@ def _do_restore(req: RestoreRequest) -> CharacterResponse:
         # Step 1: Forensic description
         description = core.rest_generate_text_multimodal(
             api_key, "gemini-2.0-flash", [source, _DESCRIBE_FOR_RESTORE_PROMPT],
-            cancel_event=cancel,
+            cancel_event=cancel, cost_category="editing",
         )
         if not description:
             return CharacterResponse(error="Restore failed \u2014 could not analyze image")

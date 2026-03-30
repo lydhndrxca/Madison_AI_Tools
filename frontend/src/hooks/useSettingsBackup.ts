@@ -103,9 +103,11 @@ export function useSettingsBackup() {
       if (MADISON_PREFIX_RE.test(key)) scheduleBackup();
     };
 
-    window.addEventListener("beforeunload", () => { pushBackupToDisk(); });
+    const handleBeforeUnload = () => { pushBackupToDisk(); };
+    window.addEventListener("beforeunload", handleBeforeUnload);
 
     return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
       localStorage.setItem = origSetItem;
       localStorage.removeItem = origRemoveItem;
       if (timerRef.current) clearTimeout(timerRef.current);

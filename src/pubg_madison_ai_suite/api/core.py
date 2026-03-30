@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import base64
 import io
+import json as _json_mod
 import os
 import time
+import threading
 from pathlib import Path
 from threading import Event
 from typing import Any, Optional
@@ -143,6 +145,22 @@ def set_api_key(key: str) -> None:
     kp.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+def get_extra_key(name: str) -> str:
+    """Read an auxiliary API key (pexels_api_key, pixabay_api_key, etc.) from keys.json."""
+    data = _read_keys_data()
+    val = data.get(name, "")
+    return val.strip() if isinstance(val, str) else ""
+
+
+def set_extra_key(name: str, value: str) -> None:
+    """Write an auxiliary API key to keys.json."""
+    kp = CONFIG_ROOT / "keys.json"
+    kp.parent.mkdir(parents=True, exist_ok=True)
+    data = _read_keys_data()
+    data[name] = value.strip()
+    kp.write_text(_json_mod.dumps(data, indent=2), encoding="utf-8")
+
+
 def get_image_model() -> str:
     val = os.environ.get("PUBG_IMAGE_MODEL", "").strip()
     if val:
@@ -168,6 +186,138 @@ def get_model_info(model_id: str | None = None) -> dict:
         if m["id"] == model_id:
             return m
     return IMAGE_MODELS[0]
+
+
+# ---------------------------------------------------------------------------
+# API Cost Tracker
+# ---------------------------------------------------------------------------
+
+_COST_PER_M_INPUT = {
+    "gemini-2.0-flash": 0.10,
+    "gemini-2.5-flash": 0.30,
+    "gemini-2.5-pro": 1.25,
+    "gemini-3-pro-image-preview": 1.25,
+    "gemini-3.1-flash-image-preview": 0.30,
+}
+
+_COST_PER_M_OUTPUT = {
+    "gemini-2.0-flash": 0.40,
+    "gemini-2.5-flash": 2.50,
+    "gemini-2.5-pro": 10.00,
+    "gemini-3-pro-image-preview": 10.00,
+    "gemini-3.1-flash-image-preview": 2.50,
+}
+
+_COST_PER_IMAGE_OUTPUT = {
+    "gemini-3-pro-image-preview": 0.134,
+    "gemini-3.1-flash-image-preview": 0.067,
+    "imagen-4.0-ultra-generate-001": 0.06,
+    "imagen-4.0-generate-001": 0.04,
+    "imagen-4.0-fast-generate-001": 0.02,
+}
+
+_GROUNDING_COST_PER_QUERY = 0.014
+
+_cost_lock = threading.Lock()
+_cost_data: dict | None = None
+_COST_FILE = CONFIG_ROOT / "api_costs.json"
+
+
+def _empty_cost_data() -> dict:
+    return {
+        "total": 0.0,
+        "categories": {},
+        "history": [],
+    }
+
+
+def _load_cost_data() -> dict:
+    global _cost_data
+    if _cost_data is not None:
+        return _cost_data
+    if _COST_FILE.is_file():
+        try:
+            _cost_data = _json_mod.loads(_COST_FILE.read_text(encoding="utf-8"))
+            if "total" not in _cost_data:
+                _cost_data = _empty_cost_data()
+            return _cost_data
+        except Exception:
+            pass
+    _cost_data = _empty_cost_data()
+    return _cost_data
+
+
+def _save_cost_data() -> None:
+    try:
+        _COST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _COST_FILE.write_text(_json_mod.dumps(_cost_data, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def track_cost(category: str, model: str, input_tokens: int = 0,
+               output_tokens: int = 0, images_generated: int = 0,
+               grounding_queries: int = 0) -> float:
+    """Record an API cost event. Returns the cost delta."""
+    cost = 0.0
+
+    if input_tokens > 0:
+        rate = _COST_PER_M_INPUT.get(model, 0.10)
+        cost += (input_tokens / 1_000_000) * rate
+
+    if output_tokens > 0:
+        rate = _COST_PER_M_OUTPUT.get(model, 0.40)
+        cost += (output_tokens / 1_000_000) * rate
+
+    if images_generated > 0:
+        img_rate = _COST_PER_IMAGE_OUTPUT.get(model, 0.134)
+        cost += images_generated * img_rate
+
+    if grounding_queries > 0:
+        cost += grounding_queries * _GROUNDING_COST_PER_QUERY
+
+    if cost <= 0:
+        return 0.0
+
+    with _cost_lock:
+        data = _load_cost_data()
+        data["total"] = round(data["total"] + cost, 6)
+        cats = data.setdefault("categories", {})
+        cats[category] = round(cats.get(category, 0.0) + cost, 6)
+        data.setdefault("history", []).append({
+            "ts": time.time(),
+            "cat": category,
+            "model": model,
+            "cost": round(cost, 6),
+        })
+        if len(data["history"]) > 500:
+            data["history"] = data["history"][-500:]
+        _save_cost_data()
+
+    return round(cost, 6)
+
+
+def _extract_usage_and_track(resp_data: dict, model: str, category: str,
+                              images_generated: int = 0,
+                              grounding_queries: int = 0) -> float:
+    """Extract usageMetadata from a Gemini response and track cost."""
+    usage = resp_data.get("usageMetadata", {})
+    input_tok = usage.get("promptTokenCount", 0)
+    output_tok = usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0)
+    return track_cost(category, model, input_tok, output_tok,
+                      images_generated, grounding_queries)
+
+
+def get_cost_data() -> dict:
+    with _cost_lock:
+        return dict(_load_cost_data())
+
+
+def reset_cost_data() -> None:
+    global _cost_data
+    with _cost_lock:
+        _cost_data = _empty_cost_data()
+        _save_cost_data()
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +355,7 @@ def rest_generate_json(
     contents_raw: list,
     timeout: int = 120,
     cancel_event: Event | None = None,
+    cost_category: str = "text_generation",
 ) -> dict | None:
     """REST call to Gemini that returns parsed JSON text (no image output)."""
     if cancel_event and cancel_event.is_set():
@@ -239,13 +390,13 @@ def rest_generate_json(
     if resp.status_code != 200:
         raise RuntimeError(f"Gemini API returned {resp.status_code}: {resp.text[:300]}")
     data = resp.json()
+    _extract_usage_and_track(data, model_name, cost_category)
     for cand in data.get("candidates", []):
         for part in cand.get("content", {}).get("parts", []):
             if "text" in part:
-                import json as _json
                 try:
-                    parsed = _json.loads(part["text"])
-                except (ValueError, _json.JSONDecodeError):
+                    parsed = _json_mod.loads(part["text"])
+                except (ValueError, _json_mod.JSONDecodeError):
                     print(f"[rest_generate_json] Non-JSON response text: {part['text'][:200]}")
                     return None
                 if isinstance(parsed, list):
@@ -260,6 +411,7 @@ def rest_generate_text(
     prompt: str,
     timeout: int = 120,
     cancel_event: Event | None = None,
+    cost_category: str = "text_generation",
 ) -> str | None:
     """REST call to Gemini that returns plain text (no SDK)."""
     if cancel_event and cancel_event.is_set():
@@ -277,6 +429,7 @@ def rest_generate_text(
     if resp.status_code != 200:
         raise RuntimeError(f"Gemini API returned {resp.status_code}: {resp.text[:300]}")
     data = resp.json()
+    _extract_usage_and_track(data, model_name, cost_category)
     for cand in data.get("candidates", []):
         for part in cand.get("content", {}).get("parts", []):
             if "text" in part:
@@ -290,6 +443,7 @@ def rest_generate_text_multimodal(
     contents_raw: list,
     timeout: int = 120,
     cancel_event: Event | None = None,
+    cost_category: str = "text_generation",
 ) -> str | None:
     """REST call to Gemini with mixed content (images + text) returning plain text."""
     if cancel_event and cancel_event.is_set():
@@ -316,6 +470,7 @@ def rest_generate_text_multimodal(
     if resp.status_code != 200:
         raise RuntimeError(f"Gemini API returned {resp.status_code}: {resp.text[:300]}")
     data = resp.json()
+    _extract_usage_and_track(data, model_name, cost_category)
     for cand in data.get("candidates", []):
         for part in cand.get("content", {}).get("parts", []):
             if "text" in part:
@@ -334,6 +489,7 @@ def rest_generate_with_tools(
     tool_declarations: list[dict],
     timeout: int = 30,
     cancel_event: Event | None = None,
+    cost_category: str = "voice_director",
 ) -> dict:
     """REST call to Gemini with function-calling tools.
 
@@ -366,6 +522,7 @@ def rest_generate_with_tools(
     if resp.status_code != 200:
         raise RuntimeError(f"Gemini API returned {resp.status_code}: {resp.text[:300]}")
     data = resp.json()
+    _extract_usage_and_track(data, model_name, cost_category)
     for cand in data.get("candidates", []):
         for part in cand.get("content", {}).get("parts", []):
             if "functionCall" in part:
@@ -387,6 +544,7 @@ def rest_generate(
     timeout: int = 180,
     max_retries: int = 2,
     cancel_event: Event | None = None,
+    cost_category: str = "image_generation",
 ) -> Image.Image | None:
     """Direct REST call to Gemini generateContent with retry and cancel."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
@@ -413,12 +571,17 @@ def rest_generate(
             resp = requests.post(url, json=body, headers=headers, timeout=timeout)
             if resp.status_code == 200:
                 data = resp.json()
+                has_image = False
+                result_img = None
                 for cand in data.get("candidates", []):
                     for part in cand.get("content", {}).get("parts", []):
                         if "inlineData" in part:
+                            has_image = True
                             img_bytes = base64.b64decode(part["inlineData"]["data"])
-                            return Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-                return None
+                            result_img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+                _extract_usage_and_track(data, model_name, cost_category,
+                                         images_generated=1 if has_image else 0)
+                return result_img
             if resp.status_code in (500, 503) and attempt < max_retries:
                 time.sleep(5)
                 continue
@@ -538,6 +701,7 @@ def imagen_generate(
             )
             if resp and resp.generated_images:
                 img_bytes = resp.generated_images[0].image.image_bytes
+                track_cost("image_generation", mid, images_generated=1)
                 return Image.open(io.BytesIO(img_bytes)).convert("RGBA")
         except Exception as e:
             print(f"[Imagen] {mid} failed: {e}")

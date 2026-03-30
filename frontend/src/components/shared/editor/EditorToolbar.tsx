@@ -111,7 +111,7 @@ export function EditorToolbar({
   };
 
   const showToolSpecificOptions = activeTool !== "select" && !annotationActive;
-  const showInpaintBar = annotationActive || (activeTool === "brush" || activeTool === "marquee" || activeTool === "lasso");
+  const showInpaintBar = activeTool === "brush" || activeTool === "marquee" || activeTool === "lasso";
 
   return (
     <div className="shrink-0" style={{ borderBottom: "1px solid var(--color-border)", background: "var(--color-card)" }}>
@@ -150,7 +150,7 @@ export function EditorToolbar({
       {showInpaintBar && (
         <div className="flex items-center gap-1 px-2 py-1 flex-1 min-w-0" style={{ borderTop: "1px solid var(--color-border)" }}>
           <input className="flex-1 px-2 py-0.5 text-[10px] min-w-0" style={inputStyle} disabled={locked}
-            placeholder={annotationActive ? "Draw annotations, then describe changes here and Apply Inpaint..." : "Describe what you want in the painted area (e.g. a leather belt, blue sky)..."}
+            placeholder="Describe what you want in the painted area (e.g. a leather belt, blue sky)..."
             value={inpaintPrompt} onChange={(e) => setInpaintPrompt(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") onApplyInpaint(inpaintPrompt); }}
           />

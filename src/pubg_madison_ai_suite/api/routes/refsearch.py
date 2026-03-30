@@ -54,11 +54,11 @@ _HEADERS = {
 def _download_image(url: str, timeout: int = 15) -> dict | None:
     """Download an image URL and return {url, b64, width, height} or None."""
     try:
-        resp = requests.get(url, headers=_HEADERS, timeout=timeout, stream=True)
+        resp = requests.get(url, headers=_HEADERS, timeout=timeout, stream=True, allow_redirects=True)
         if resp.status_code != 200:
             return None
-        ct = resp.headers.get("content-type", "")
-        if not ct.startswith("image/"):
+        ct = resp.headers.get("content-type", "").lower()
+        if not (ct.startswith("image/") or ct in ("application/octet-stream",)):
             return None
         data = resp.content
         if len(data) < 2000:
@@ -92,28 +92,52 @@ def _extract_image_urls_from_text(text: str) -> list[str]:
     return list(dict.fromkeys(urls))
 
 
+def _extract_page_urls_from_text(text: str) -> list[str]:
+    """Pull any HTTP(S) URLs from text, including non-image page URLs for scraping."""
+    url_pattern = r'https?://[^\s\"\'\)>\],}]+'
+    all_urls = re.findall(url_pattern, text, re.IGNORECASE)
+    page_urls = []
+    skip_domains = ("google.com", "googleapis.com", "gstatic.com", "youtube.com", "schema.org")
+    for u in all_urls:
+        u = u.rstrip(".")
+        low = u.lower()
+        if any(d in low for d in skip_domains):
+            continue
+        if any(low.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")):
+            continue
+        page_urls.append(u)
+    return list(dict.fromkeys(page_urls))
+
+
 def _grounded_search(api_key: str, model: str, query: str, image_b64: str | None,
-                     num_images: int, depth: str) -> dict:
+                     num_images: int, depth: str, search_angle: str = "") -> dict:
     """Use Gemini with google_search tool to find reference images."""
     depth_instruction = {
-        "quick": "Do a quick search. Find direct image URLs for 5-10 reference images.",
-        "medium": "Do a thorough search across multiple queries. Find direct image URLs for 10-20 reference images.",
-        "deep": "Do an extensive, multi-query deep search. Find direct image URLs for 20-40 reference images. Try many search angles and variations.",
+        "quick": f"Do a quick search. Find direct image URLs for at least {max(num_images, 8)} reference images.",
+        "medium": f"Do a thorough search across multiple queries and search terms. Find direct image URLs for at least {max(num_images, 15)} reference images. Try different phrasings and related keywords.",
+        "deep": f"Do an extensive, multi-query deep search. Find direct image URLs for at least {max(num_images, 30)} reference images. Try MANY search angles, synonym variations, related materials, styles, and sub-categories.",
     }
+
+    angle_instruction = f"\nSearch angle to focus on: {search_angle}\n" if search_angle else ""
 
     system_prompt = (
         "You are a visual reference researcher for concept artists and designers. "
         "Your job is to find high-quality reference images from the web.\n\n"
         "CRITICAL INSTRUCTIONS:\n"
-        "1. Use Google Search to find relevant reference images\n"
-        "2. For each image found, provide its DIRECT image URL (ending in .jpg, .png, .webp, etc.)\n"
+        "1. Use Google Search MULTIPLE TIMES with different search queries to find images\n"
+        "2. For each image found, provide its DIRECT image URL (must end in .jpg, .jpeg, .png, .webp, .gif)\n"
         "3. Along with each URL, give a short description of what the image shows\n"
-        "4. Focus on high-quality, relevant images that match the query\n"
+        "4. Focus on high-quality, relevant images from diverse sources\n"
         "5. Avoid stock photo watermarked images when possible\n"
-        "6. Look for images from art reference sites, Pinterest, ArtStation, DeviantArt, "
-        "museum archives, design blogs, etc.\n\n"
-        f"{depth_instruction.get(depth, depth_instruction['medium'])}\n\n"
-        f"Target: Find at least {num_images} relevant reference images.\n\n"
+        "6. Search across: Pinterest, ArtStation, DeviantArt, Behance, Dribbble, museum archives, "
+        "design blogs, fashion sites, Flickr, 500px, Unsplash, product photography sites, "
+        "concept art portfolios, and image-heavy articles\n"
+        "7. Use VARIED search terms — try synonyms, related concepts, material names, "
+        "style descriptors, and specific brands or eras\n"
+        "8. For each search, also look for Google Image results that show image source URLs\n\n"
+        f"{depth_instruction.get(depth, depth_instruction['medium'])}\n"
+        f"{angle_instruction}\n"
+        f"Target: Find at least {num_images} relevant reference images. More is better.\n\n"
         "FORMAT YOUR RESPONSE as a JSON array of objects:\n"
         '[{"url": "https://example.com/image.jpg", "description": "Brief description", "relevance": "Why this matches"}]\n\n'
         "Return ONLY the JSON array, no other text."
@@ -141,6 +165,8 @@ def _grounded_search(api_key: str, model: str, query: str, image_b64: str | None
 
     data = resp.json()
 
+    core._extract_usage_and_track(data, model, "deep_search", grounding_queries=1)
+
     response_text = ""
     for cand in data.get("candidates", []):
         for part in cand.get("content", {}).get("parts", []):
@@ -166,21 +192,28 @@ def _grounded_search(api_key: str, model: str, query: str, image_b64: str | None
     }
 
 
-def _scrape_images_from_page(page_url: str, query: str, max_imgs: int = 5) -> list[str]:
+def _scrape_images_from_page(page_url: str, query: str, max_imgs: int = 10) -> list[str]:
     """Fetch a web page and extract image URLs from it."""
     try:
         resp = requests.get(page_url, headers={
             **_HEADERS,
             "Accept": "text/html,application/xhtml+xml,*/*",
-        }, timeout=10)
+        }, timeout=12, allow_redirects=True)
         if resp.status_code != 200:
             return []
-        html = resp.text[:500_000]
-        img_pattern = r'(?:src|href|data-src|data-original|content)=["\']([^"\']*\.(?:jpg|jpeg|png|webp|gif)[^"\']*)["\']'
+        html = resp.text[:800_000]
+
+        img_pattern = r'(?:src|href|data-src|data-original|data-lazy-src|data-pin-media|content|srcset)=["\']([^"\']*\.(?:jpg|jpeg|png|webp|gif)[^"\']*)["\']'
         raw_urls = re.findall(img_pattern, html, re.IGNORECASE)
+
+        og_pattern = r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']'
+        og_urls = re.findall(og_pattern, html, re.IGNORECASE)
+        raw_urls.extend(og_urls)
 
         full_urls = []
         for u in raw_urls:
+            if " " in u:
+                u = u.split(" ")[0]
             if u.startswith("//"):
                 u = "https:" + u
             elif u.startswith("/"):
@@ -188,9 +221,11 @@ def _scrape_images_from_page(page_url: str, query: str, max_imgs: int = 5) -> li
                 u = f"{parsed.scheme}://{parsed.netloc}{u}"
             elif not u.startswith("http"):
                 continue
-            if "logo" in u.lower() or "icon" in u.lower() or "favicon" in u.lower():
+            low = u.lower()
+            if any(skip in low for skip in ("logo", "icon", "favicon", "1x1", "pixel", "tracking",
+                                             "spacer", "blank", "avatar", "badge", "emoji", "sprite")):
                 continue
-            if "1x1" in u or "pixel" in u.lower() or "tracking" in u.lower():
+            if len(u) < 30:
                 continue
             full_urls.append(u)
 
@@ -199,60 +234,372 @@ def _scrape_images_from_page(page_url: str, query: str, max_imgs: int = 5) -> li
         return []
 
 
+def _google_images_scrape(query: str, max_imgs: int = 40) -> list[str]:
+    """Scrape Google Images search results pages for image URLs."""
+    img_urls: list[str] = []
+    seen: set[str] = set()
+    headers = {
+        "User-Agent": _HEADERS["User-Agent"],
+        "Accept": "text/html,application/xhtml+xml,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    encoded_q = urllib.parse.quote_plus(query)
+    pages_to_try = max(1, (max_imgs + 19) // 20)
+
+    for page_idx in range(min(pages_to_try, 4)):
+        try:
+            url = f"https://www.google.com/search?q={encoded_q}&tbm=isch&ijn={page_idx}&start={page_idx * 20}"
+            resp = requests.get(url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                continue
+            html = resp.text
+
+            patterns = [
+                r'\["(https?://[^"]+\.(?:jpg|jpeg|png|webp)(?:[^"]*)?)",\s*\d+,\s*\d+\]',
+                r'"ou":"(https?://[^"]+)"',
+                r'"(https?://[^"]*\.(?:jpg|jpeg|png|webp)[^"]*)"',
+            ]
+            for pat in patterns:
+                found = re.findall(pat, html, re.IGNORECASE)
+                for u in found:
+                    low = u.lower()
+                    if any(skip in low for skip in ("google.com", "gstatic.com", "youtube.com",
+                                                     "googleapis.com", "schema.org")):
+                        continue
+                    if len(u) > 30 and u not in seen:
+                        seen.add(u)
+                        img_urls.append(u)
+
+            if len(img_urls) >= max_imgs:
+                break
+        except Exception:
+            continue
+
+    return img_urls[:max_imgs]
+
+
+def _pexels_search(api_key: str, query: str, max_imgs: int = 30) -> list[dict]:
+    """Search Pexels API. Returns list of {url, description, source, width, height}."""
+    results: list[dict] = []
+    per_page = min(max_imgs, 80)
+    pages = max(1, (max_imgs + per_page - 1) // per_page)
+
+    for page in range(1, pages + 1):
+        try:
+            resp = requests.get(
+                "https://api.pexels.com/v1/search",
+                params={"query": query, "per_page": per_page, "page": page},
+                headers={"Authorization": api_key},
+                timeout=12,
+            )
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            for photo in data.get("photos", []):
+                src = photo.get("src", {})
+                img_url = src.get("large2x") or src.get("large") or src.get("original", "")
+                if not img_url:
+                    continue
+                results.append({
+                    "url": img_url,
+                    "description": f"Photo by {photo.get('photographer', 'Unknown')} on Pexels",
+                    "source": "pexels",
+                    "width": photo.get("width", 0),
+                    "height": photo.get("height", 0),
+                })
+            if not data.get("next_page"):
+                break
+        except Exception:
+            break
+        if len(results) >= max_imgs:
+            break
+
+    return results[:max_imgs]
+
+
+def _pixabay_search(api_key: str, query: str, max_imgs: int = 30) -> list[dict]:
+    """Search Pixabay API (https://pixabay.com/api/docs/).
+
+    Uses largeImageURL (1280px) with fallback to fullHDURL (1920px) when
+    available.  Searches both photos and illustrations for broader concept
+    art coverage, with a minimum width of 640px to filter tiny thumbnails.
+    """
+    results: list[dict] = []
+    seen_ids: set[int] = set()
+    per_page = min(max_imgs, 200)
+    pages = max(1, (max_imgs + per_page - 1) // per_page)
+
+    for image_type in ("photo", "illustration"):
+        for page in range(1, pages + 1):
+            try:
+                resp = requests.get(
+                    "https://pixabay.com/api/",
+                    params={
+                        "key": api_key,
+                        "q": query,
+                        "per_page": per_page,
+                        "page": page,
+                        "image_type": image_type,
+                        "min_width": 640,
+                        "safesearch": "true",
+                        "order": "popular",
+                    },
+                    timeout=12,
+                )
+                if resp.status_code == 429:
+                    break
+                if resp.status_code != 200:
+                    break
+                data = resp.json()
+                for hit in data.get("hits", []):
+                    hit_id = hit.get("id", 0)
+                    if hit_id in seen_ids:
+                        continue
+                    seen_ids.add(hit_id)
+                    img_url = (hit.get("fullHDURL")
+                               or hit.get("largeImageURL")
+                               or hit.get("webformatURL", ""))
+                    if not img_url:
+                        continue
+                    results.append({
+                        "url": img_url,
+                        "description": hit.get("tags", "Pixabay image"),
+                        "source": "pixabay",
+                        "width": hit.get("imageWidth", 0),
+                        "height": hit.get("imageHeight", 0),
+                    })
+                if len(data.get("hits", [])) < per_page:
+                    break
+            except Exception:
+                break
+            if len(results) >= max_imgs:
+                break
+        if len(results) >= max_imgs:
+            break
+
+    return results[:max_imgs]
+
+
+def _parse_json_descriptions(text: str) -> list[dict]:
+    """Extract JSON array of {url, description, relevance} from Gemini response."""
+    try:
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[-1]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            cleaned = cleaned.strip()
+        result = json.loads(cleaned)
+        return result if isinstance(result, list) else []
+    except Exception:
+        return []
+
+
+def _run_search_round(api_key: str, model: str, query: str, image_b64: str | None,
+                      num_images: int, depth: str, search_angle: str = "") -> tuple[list[str], list[str], list[dict]]:
+    """Single search round. Returns (image_urls, source_page_urls, parsed_descriptions)."""
+    result = _grounded_search(api_key, model, query, image_b64, num_images, depth, search_angle)
+
+    image_urls = _extract_image_urls_from_text(result["text"])
+
+    source_pages = [s["url"] for s in result.get("sources", []) if s.get("url")]
+    text_pages = _extract_page_urls_from_text(result["text"])
+    source_pages = list(dict.fromkeys(source_pages + text_pages))
+
+    descriptions = _parse_json_descriptions(result["text"])
+
+    return image_urls, source_pages, descriptions
+
+
 def _stream_search(api_key: str, query: str, image_b64: str | None,
                    num_images: int, depth: str):
     """Generator that yields SSE events as the search progresses."""
     model = "gemini-2.0-flash"
 
-    yield f"data: {json.dumps({'status': 'Searching the web for references...'})}\n\n"
+    search_rounds = {"quick": 1, "medium": 2, "deep": 3}.get(depth, 2)
+    scrape_per_page = {"quick": 5, "medium": 10, "deep": 15}.get(depth, 10)
+    max_source_pages = {"quick": 8, "medium": 16, "deep": 24}.get(depth, 16)
 
-    try:
-        result = _grounded_search(api_key, model, query, image_b64, num_images, depth)
-    except Exception as exc:
-        yield f"data: {json.dumps({'error': str(exc)[:500]})}\n\n"
-        yield f"data: {json.dumps({'done': True})}\n\n"
-        return
+    search_angles = [
+        "",
+        f"Search specifically for: {query} - look for different styles, variations, materials, and design approaches",
+        f"Find more images related to: {query} - try alternative keywords, similar concepts, related categories, specific brands or eras",
+    ]
 
-    yield f"data: {json.dumps({'status': 'Analyzing search results...'})}\n\n"
+    all_candidate_urls: list[str] = []
+    all_source_pages: list[str] = []
+    all_descriptions: list[dict] = []
+    seen_urls: set[str] = set()
+    valid_images: list[dict] = []
 
-    image_urls_from_text = _extract_image_urls_from_text(result["text"])
+    # --- Phase 0: Fire off Pexels + Pixabay in parallel (instant results) ---
+    pexels_key = core.get_extra_key("pexels_api_key")
+    pixabay_key = core.get_extra_key("pixabay_api_key")
+    stock_futures = {}
+    stock_request_count = max(num_images, 20)
 
-    all_candidate_urls: list[str] = list(image_urls_from_text)
+    if pexels_key:
+        stock_futures["pexels"] = _EXECUTOR.submit(_pexels_search, pexels_key, query, stock_request_count)
+    if pixabay_key:
+        stock_futures["pixabay"] = _EXECUTOR.submit(_pixabay_search, pixabay_key, query, stock_request_count)
 
-    source_pages = result.get("sources", [])
-    if len(all_candidate_urls) < num_images * 2 and source_pages:
-        yield f"data: {json.dumps({'status': f'Scanning {len(source_pages)} source pages for images...'})}\n\n"
-        futures = {}
-        for src in source_pages[:12]:
-            fut = _EXECUTOR.submit(_scrape_images_from_page, src["url"], query, 8)
-            futures[fut] = src["url"]
+    if stock_futures:
+        sources_label = " + ".join(k.title() for k in stock_futures)
+        yield f"data: {json.dumps({'status': f'Searching {sources_label}...'})}\n\n"
 
-        for fut in as_completed(futures, timeout=30):
+    # Collect stock API results as they complete (non-blocking, short timeout)
+    stock_image_items: list[dict] = []
+    for fut in as_completed(stock_futures.values(), timeout=15):
+        try:
+            items = fut.result()
+            stock_image_items.extend(items)
+        except Exception:
+            pass
+
+    # Download and stream stock results immediately
+    if stock_image_items:
+        yield f"data: {json.dumps({'status': f'Found {len(stock_image_items)} results from stock libraries. Downloading...'})}\n\n"
+        download_futs = {}
+        for item in stock_image_items:
+            if item["url"] not in seen_urls:
+                seen_urls.add(item["url"])
+                download_futs[_EXECUTOR.submit(_download_image, item["url"])] = item
+
+        for fut in as_completed(download_futs, timeout=25):
             try:
-                page_imgs = fut.result()
-                all_candidate_urls.extend(page_imgs)
+                img_data = fut.result()
+                if img_data:
+                    meta = download_futs[fut]
+                    img_data["description"] = meta.get("description", "")
+                    img_data["relevance"] = f"From {meta.get('source', 'stock library').title()}"
+                    valid_images.append(img_data)
+                    yield f"data: {json.dumps({'image': img_data, 'count': len(valid_images)})}\n\n"
+                    yield f"data: {json.dumps({'status': f'Downloaded {len(valid_images)} of {num_images} requested...'})}\n\n"
+                    if len(valid_images) >= num_images:
+                        break
             except Exception:
                 pass
 
-    all_candidate_urls = list(dict.fromkeys(all_candidate_urls))
+    if len(valid_images) >= num_images:
+        yield f"data: {json.dumps({'status': f'Search complete. Found {len(valid_images)} reference images.', 'total': len(valid_images)})}\n\n"
+        yield f"data: {json.dumps({'done': True, 'total': len(valid_images)})}\n\n"
+        return
+
+    remaining = num_images - len(valid_images)
+    yield f"data: {json.dumps({'status': f'Have {len(valid_images)} images. Searching deeper for {remaining} more...'})}\n\n"
+
+    # --- Phase 1: Gemini grounded search rounds ---
+    first_round_error = None
+    for round_num in range(search_rounds):
+        angle = search_angles[round_num] if round_num < len(search_angles) else ""
+        label = f"Round {round_num + 1}/{search_rounds}" if search_rounds > 1 else "Searching"
+        yield f"data: {json.dumps({'status': f'{label}: Searching the web for references...'})}\n\n"
+
+        try:
+            image_urls, source_pages, descriptions = _run_search_round(
+                api_key, model, query, image_b64, num_images, depth, angle,
+            )
+        except Exception as exc:
+            if round_num == 0:
+                first_round_error = str(exc)[:500]
+            continue
+
+        new_urls = [u for u in image_urls if u not in seen_urls]
+        seen_urls.update(new_urls)
+        all_candidate_urls.extend(new_urls)
+        all_descriptions.extend(descriptions)
+
+        new_pages = [p for p in source_pages if p not in seen_urls]
+        seen_urls.update(new_pages)
+        all_source_pages.extend(new_pages)
+
+        yield f"data: {json.dumps({'status': f'{label}: Found {len(all_candidate_urls)} direct URLs + {len(all_source_pages)} source pages...'})}\n\n"
+
+    # --- Phase 2: Always scrape source pages for images ---
+    if all_source_pages:
+        pages_to_scrape = all_source_pages[:max_source_pages]
+        yield f"data: {json.dumps({'status': f'Scraping {len(pages_to_scrape)} source pages for images...'})}\n\n"
+        futures = {}
+        for page_url in pages_to_scrape:
+            fut = _EXECUTOR.submit(_scrape_images_from_page, page_url, query, scrape_per_page)
+            futures[fut] = page_url
+
+        for fut in as_completed(futures, timeout=45):
+            try:
+                page_imgs = fut.result()
+                new_imgs = [u for u in page_imgs if u not in seen_urls]
+                seen_urls.update(new_imgs)
+                all_candidate_urls.extend(new_imgs)
+            except Exception:
+                pass
+
+    # --- Phase 3: Google Images direct scrape (always run for supplementation) ---
+    need_more = max(num_images * 3, 50) - len(all_candidate_urls)
+    if need_more > 0:
+        yield f"data: {json.dumps({'status': 'Searching Google Images directly...'})}\n\n"
+        try:
+            gi_urls = _google_images_scrape(query, max_imgs=max(num_images * 3, 60))
+            new_gi = [u for u in gi_urls if u not in seen_urls]
+            seen_urls.update(new_gi)
+            all_candidate_urls.extend(new_gi)
+            if new_gi:
+                yield f"data: {json.dumps({'status': f'Google Images found {len(new_gi)} additional candidates...'})}\n\n"
+        except Exception:
+            pass
+
+    # --- Phase 4: Related search terms if still short ---
+    if len(all_candidate_urls) < num_images * 3:
+        yield f"data: {json.dumps({'status': 'Trying related search terms...'})}\n\n"
+        variants = [
+            f"{query} reference photo",
+            f"{query} high quality",
+            f"{query} design inspiration",
+            f"{query} aesthetic",
+        ]
+        for variant in variants:
+            if len(all_candidate_urls) >= num_images * 4:
+                break
+            try:
+                gi_urls = _google_images_scrape(variant, max_imgs=max(num_images, 20))
+                new_gi = [u for u in gi_urls if u not in seen_urls]
+                seen_urls.update(new_gi)
+                all_candidate_urls.extend(new_gi)
+            except Exception:
+                pass
+
+    if not all_candidate_urls and not valid_images and first_round_error:
+        yield f"data: {json.dumps({'error': first_round_error})}\n\n"
+        yield f"data: {json.dumps({'done': True})}\n\n"
+        return
+
+    if len(valid_images) >= num_images:
+        pass  # skip Phase 5 — already have enough from stock APIs
+    else:
+        all_candidate_urls = list(dict.fromkeys(all_candidate_urls))
 
     yield f"data: {json.dumps({'status': f'Found {len(all_candidate_urls)} candidate images. Downloading and validating...'})}\n\n"
 
-    download_limit = min(len(all_candidate_urls), num_images * 3)
+    # --- Phase 5: Download and validate ---
+    download_limit = min(len(all_candidate_urls), max(num_images * 5, 100))
     urls_to_try = all_candidate_urls[:download_limit]
 
-    valid_images: list[dict] = []
-    batch_size = 8
+    batch_size = 12
     for i in range(0, len(urls_to_try), batch_size):
         batch = urls_to_try[i:i + batch_size]
         futures = {_EXECUTOR.submit(_download_image, url): url for url in batch}
 
-        for fut in as_completed(futures, timeout=20):
+        for fut in as_completed(futures, timeout=30):
             try:
                 img_data = fut.result()
                 if img_data:
+                    for desc_item in all_descriptions:
+                        if isinstance(desc_item, dict) and desc_item.get("url") == img_data.get("url"):
+                            img_data["description"] = desc_item.get("description", "")
+                            img_data["relevance"] = desc_item.get("relevance", "")
+                            break
                     valid_images.append(img_data)
                     yield f"data: {json.dumps({'image': img_data, 'count': len(valid_images)})}\n\n"
+                    yield f"data: {json.dumps({'status': f'Validated {len(valid_images)} of {num_images} requested...'})}\n\n"
                     if len(valid_images) >= num_images:
                         break
             except Exception:
@@ -260,46 +607,6 @@ def _stream_search(api_key: str, query: str, image_b64: str | None,
 
         if len(valid_images) >= num_images:
             break
-
-    if not valid_images and len(all_candidate_urls) == 0:
-        yield f"data: {json.dumps({'status': 'Trying alternative search approach...'})}\n\n"
-        alt_prompt = (
-            f"Find direct image URLs for: {query}\n"
-            "Search for high resolution reference photos. Return a JSON array of "
-            '{"url": "...", "description": "..."} objects. Only include direct image file URLs.'
-        )
-        try:
-            alt_text = core.rest_generate_text(api_key, model, alt_prompt, timeout=30)
-            if alt_text:
-                alt_urls = _extract_image_urls_from_text(alt_text)
-                for url in alt_urls[:num_images]:
-                    img_data = _download_image(url)
-                    if img_data:
-                        valid_images.append(img_data)
-                        yield f"data: {json.dumps({'image': img_data, 'count': len(valid_images)})}\n\n"
-        except Exception:
-            pass
-
-    parsed_descriptions = []
-    try:
-        cleaned = result["text"].strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[-1]
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-            cleaned = cleaned.strip()
-        parsed_descriptions = json.loads(cleaned)
-        if not isinstance(parsed_descriptions, list):
-            parsed_descriptions = []
-    except Exception:
-        parsed_descriptions = []
-
-    for img in valid_images:
-        for desc_item in parsed_descriptions:
-            if isinstance(desc_item, dict) and desc_item.get("url") == img.get("url"):
-                img["description"] = desc_item.get("description", "")
-                img["relevance"] = desc_item.get("relevance", "")
-                break
 
     summary_text = ""
     if valid_images:
@@ -310,7 +617,7 @@ def _stream_search(api_key: str, query: str, image_b64: str | None,
                 f"Found {len(valid_images)} images. Be informative and specific about "
                 f"the visual qualities, materials, or styles represented."
             )
-            summary_text = core.rest_generate_text(api_key, model, sum_prompt, timeout=15) or ""
+            summary_text = core.rest_generate_text(api_key, model, sum_prompt, timeout=15, cost_category="deep_search") or ""
         except Exception:
             pass
 

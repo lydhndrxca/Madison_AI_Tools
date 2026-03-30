@@ -98,13 +98,11 @@ export function GeminiPage() {
   const appendToGallery = useCallback((tab: string, src: string) => {
     setGallery((prev) => {
       const arr = prev[tab] || [];
-      return { ...prev, [tab]: [...arr, src] };
+      const next = [...arr, src];
+      setImageIdx((ip) => ({ ...ip, [tab]: next.length - 1 }));
+      return { ...prev, [tab]: next };
     });
-    setImageIdx((prev) => {
-      const arr = gallery[tab] || [];
-      return { ...prev, [tab]: arr.length };
-    });
-  }, [gallery]);
+  }, []);
 
   const handleAddRef = useCallback(() => {
     refCounter.current++;

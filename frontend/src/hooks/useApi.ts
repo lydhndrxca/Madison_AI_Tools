@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 function getBackendBase(): string {
   if (window.location.protocol === "file:") {
@@ -85,34 +85,6 @@ export async function apiFetchSSE(
   return {};
 }
 
-export function useApiPost<TReq, TRes>(path: string) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const execute = useCallback(
-    async (body: TReq): Promise<TRes | null> => {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await apiFetch<TRes>(path, {
-          method: "POST",
-          body: JSON.stringify(body),
-        });
-        return res;
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setError(msg);
-        return null;
-      } finally {
-        setLoading(false);
-      }
-    },
-    [path],
-  );
-
-  return { execute, loading, error };
-}
-
 interface ProgressMessage {
   type: "progress" | "status" | "error" | "image" | "console";
   data: Record<string, unknown>;
@@ -122,28 +94,45 @@ export function useWebSocket(onMessage: (msg: ProgressMessage) => void) {
   const wsRef = useRef<WebSocket | null>(null);
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
+  const unmountedRef = useRef(false);
 
   useEffect(() => {
-    const wsBase = BACKEND
-      ? BACKEND.replace(/^http/, "ws")
-      : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
-    const ws = new WebSocket(`${wsBase}/ws/progress`);
-    wsRef.current = ws;
+    unmountedRef.current = false;
+    let retryDelay = 2000;
 
-    ws.onmessage = (ev) => {
-      try {
-        const msg: ProgressMessage = JSON.parse(ev.data);
-        onMessageRef.current(msg);
-      } catch { /* ignore */ }
+    function connect() {
+      if (unmountedRef.current) return;
+      const wsBase = BACKEND
+        ? BACKEND.replace(/^http/, "ws")
+        : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
+      const ws = new WebSocket(`${wsBase}/ws/progress`);
+      wsRef.current = ws;
+
+      ws.onopen = () => { retryDelay = 2000; };
+
+      ws.onmessage = (ev) => {
+        try {
+          const msg: ProgressMessage = JSON.parse(ev.data);
+          onMessageRef.current(msg);
+        } catch { /* ignore */ }
+      };
+
+      ws.onclose = () => {
+        if (unmountedRef.current) return;
+        wsRef.current = null;
+        setTimeout(connect, retryDelay);
+        retryDelay = Math.min(retryDelay * 1.5, 15000);
+      };
+
+      ws.onerror = () => { ws.close(); };
+    }
+
+    connect();
+
+    return () => {
+      unmountedRef.current = true;
+      wsRef.current?.close();
     };
-
-    ws.onclose = () => {
-      setTimeout(() => {
-        if (wsRef.current === ws) wsRef.current = null;
-      }, 1000);
-    };
-
-    return () => ws.close();
   }, []);
 
   return wsRef;

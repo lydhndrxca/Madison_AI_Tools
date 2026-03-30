@@ -98,11 +98,19 @@ function ShortcutRow({
 
 /* ── Main panel ──────────────────────────────────────────────── */
 
+interface ExtraKeyInfo { has_key: boolean; key_masked: string }
+
 export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [apiKey, setApiKey] = useState("");
   const [hasKey, setHasKey] = useState(false);
   const [keyMasked, setKeyMasked] = useState("");
   const [saving, setSaving] = useState(false);
+
+  const [pexelsKey, setPexelsKey] = useState("");
+  const [pexelsInfo, setPexelsInfo] = useState<ExtraKeyInfo>({ has_key: false, key_masked: "" });
+  const [pixabayKey, setPixabayKey] = useState("");
+  const [pixabayInfo, setPixabayInfo] = useState<ExtraKeyInfo>({ has_key: false, key_masked: "" });
+  const [savingExtra, setSavingExtra] = useState<string | null>(null);
 
   const { settings: voiceSettings, updateSettings: updateVoiceSettings } = useVoiceToText();
   const { shortcuts, updateShortcut, resetShortcut, resetAll, findConflict } = useShortcuts();
@@ -115,7 +123,25 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     apiFetch<{ has_key: boolean; key_masked: string }>("/system/api-key")
       .then((d) => { setHasKey(d.has_key); setKeyMasked(d.key_masked); })
       .catch(() => {});
+    apiFetch<Record<string, ExtraKeyInfo>>("/system/extra-keys")
+      .then((d) => {
+        if (d.pexels_api_key) setPexelsInfo(d.pexels_api_key);
+        if (d.pixabay_api_key) setPixabayInfo(d.pixabay_api_key);
+      })
+      .catch(() => {});
   }, [open]);
+
+  const saveExtraKey = async (name: string, value: string) => {
+    if (!value.trim()) return;
+    setSavingExtra(name);
+    try {
+      await apiFetch("/system/extra-key", { method: "POST", body: JSON.stringify({ name, key: value }) });
+      const masked = value.slice(0, 4) + "..." + value.slice(-4);
+      if (name === "pexels_api_key") { setPexelsInfo({ has_key: true, key_masked: masked }); setPexelsKey(""); }
+      if (name === "pixabay_api_key") { setPixabayInfo({ has_key: true, key_masked: masked }); setPixabayKey(""); }
+    } catch { /* ignore */ }
+    setSavingExtra(null);
+  };
 
   // Listen for keydown while rebinding
   useEffect(() => {
@@ -220,6 +246,56 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               <Button onClick={saveKey} loading={saving}>
                 Save
               </Button>
+            </div>
+          </div>
+
+          {/* Deep Search API Keys (optional) */}
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
+              Deep Search API Keys
+              <span className="text-[10px] font-normal ml-2" style={{ color: "var(--color-text-muted)" }}>optional</span>
+            </h3>
+            <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+              Add free API keys for Pexels and Pixabay to boost Deep Reference Search results.
+              These are free to register and dramatically improve image variety and count.
+            </p>
+
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-medium" style={{ color: "var(--color-text-secondary)" }}>
+                Pexels
+                {pexelsInfo.has_key && <span className="ml-2 text-[10px]" style={{ color: "var(--color-text-muted)" }}>({pexelsInfo.key_masked})</span>}
+              </label>
+              <div className="flex gap-2">
+                <Input
+                  type="password"
+                  placeholder="Pexels API key — get free at pexels.com/api"
+                  value={pexelsKey}
+                  onChange={(e) => setPexelsKey(e.target.value)}
+                  className="flex-1"
+                />
+                <Button onClick={() => saveExtraKey("pexels_api_key", pexelsKey)} loading={savingExtra === "pexels_api_key"}>
+                  Save
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-medium" style={{ color: "var(--color-text-secondary)" }}>
+                Pixabay
+                {pixabayInfo.has_key && <span className="ml-2 text-[10px]" style={{ color: "var(--color-text-muted)" }}>({pixabayInfo.key_masked})</span>}
+              </label>
+              <div className="flex gap-2">
+                <Input
+                  type="password"
+                  placeholder="Pixabay API key — get free at pixabay.com/api/docs"
+                  value={pixabayKey}
+                  onChange={(e) => setPixabayKey(e.target.value)}
+                  className="flex-1"
+                />
+                <Button onClick={() => saveExtraKey("pixabay_api_key", pixabayKey)} loading={savingExtra === "pixabay_api_key"}>
+                  Save
+                </Button>
+              </div>
             </div>
           </div>
 

@@ -178,9 +178,9 @@ def _do_text_ai(prompt: str, image_b64: str | None) -> WeaponTextResponse:
     try:
         if image_b64:
             img = core.b64_to_image(image_b64)
-            result = core.rest_generate_text_multimodal(api_key, "gemini-2.0-flash", [img, prompt])
+            result = core.rest_generate_text_multimodal(api_key, "gemini-2.0-flash", [img, prompt], cost_category="extraction")
         else:
-            result = core.rest_generate_text(api_key, "gemini-2.0-flash", prompt)
+            result = core.rest_generate_text(api_key, "gemini-2.0-flash", prompt, cost_category="extraction")
         return WeaponTextResponse(text=result or "")
     except Exception as e:
         return WeaponTextResponse(error=str(e))

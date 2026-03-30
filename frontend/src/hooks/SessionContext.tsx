@@ -155,7 +155,7 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
     }
     try {
       const json = JSON.stringify(session);
-      const saved = await window.electronAPI!.saveSession(json);
+      const saved = await window.electronAPI?.saveSession(json);
       if (saved) onToast?.("Session saved", "success");
     } catch (err) {
       console.error("[Session] Save failed:", err);

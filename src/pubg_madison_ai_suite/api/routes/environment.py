@@ -317,6 +317,16 @@ class EnvResponse(BaseModel):
     error: Optional[str] = None
 
 
+class EnvGridResponse(BaseModel):
+    cells: Optional[list[str]] = None
+    full_grid_b64: Optional[str] = None
+    width: int = 0
+    height: int = 0
+    cell_width: int = 0
+    cell_height: int = 0
+    error: Optional[str] = None
+
+
 class EnvAttributeRequest(BaseModel):
     description: str = ""
     image_b64: Optional[str] = None
@@ -473,6 +483,110 @@ def _do_generate(req: EnvGenerateRequest) -> EnvResponse:
     return EnvResponse(image_b64=core.image_to_b64(result), width=result.width, height=result.height)
 
 
+def _do_generate_grid(req: EnvGenerateRequest) -> EnvGridResponse:
+    """Generate a 4×4 sprite sheet of environment variations, then crop into 16 cells."""
+    from PIL import Image
+
+    api_key = core.get_api_key()
+    if not api_key:
+        return EnvGridResponse(error="No API key configured")
+
+    from pubg_madison_ai_suite.api.cancel import reset_cancel_event, release_cancel_event
+    cancel = reset_cancel_event()
+
+    identity = {
+        "biome": req.biome, "gameContext": req.game_context,
+        "timeOfDay": req.time_of_day, "seasonWeather": req.season_weather,
+        "scale": req.env_scale,
+    }
+    attrs = req.attributes or {}
+    desc_text = req.description
+    if req.name:
+        desc_text = f"Environment name: {req.name}\n{desc_text}"
+    env_description = _build_env_description(identity, attrs, desc_text)
+
+    style_override = ""
+    if req.fusion_context:
+        style_override = req.fusion_context
+    if req.style_guidance:
+        style_override = f"{style_override}\n{req.style_guidance}" if style_override else req.style_guidance
+
+    base_prompt = _build_env_view_prompt(req.view_type, env_description, style_override)
+    if req.custom_sections_context:
+        base_prompt += f"\n\n--- Custom Directions ---\n{req.custom_sections_context}"
+
+    grid_header = (
+        "4×4 environment variation sheet: Generate a single image containing a 4×4 grid "
+        "(4 columns, 4 rows = 16 cells) of environment/scene variations.\n"
+        "Each cell shows ONE environment scene based on the description below, but each "
+        "of the 16 MUST be a DIFFERENT creative variation — vary the camera angle, "
+        "time of day, weather, lighting mood, season, composition, and atmospheric effects. "
+        "No two cells should look the same.\n"
+        "Keep all 16 scenes evenly spaced in a clean grid with no overlap or grid lines.\n"
+        "Realistic 3D-rendered game environment style. NOT illustrated, NOT cartoon, NOT painted.\n"
+        "No text, labels, or annotations anywhere."
+    )
+
+    prompt = f"{grid_header}\n\n--- Environment Description ---\n{base_prompt}"
+
+    contents: list = []
+    if req.reference_image_b64:
+        contents.append(core.b64_to_image(req.reference_image_b64))
+    if req.ref_images:
+        for b64 in req.ref_images:
+            if b64:
+                contents.append(core.b64_to_image(b64))
+    for b64 in [req.fusion_image_1_b64, req.fusion_image_2_b64]:
+        if b64:
+            contents.append(core.b64_to_image(b64))
+    for b64 in (req.custom_section_images or []):
+        if b64:
+            contents.append(core.b64_to_image(b64))
+    contents.append(prompt)
+
+    try:
+        result = core.gemini_generate_image(
+            api_key, contents, aspect_ratio="16:9", image_size="4K",
+            cancel_event=cancel, model_id=req.model_id,
+        )
+    except RuntimeError as e:
+        return EnvGridResponse(error=str(e))
+    finally:
+        release_cancel_event(cancel)
+
+    if result is None:
+        return EnvGridResponse(error="Generation failed")
+
+    canvas_w, canvas_h = result.size
+    cell_w = canvas_w // 4
+    cell_h = canvas_h // 4
+
+    if result.size != (cell_w * 4, cell_h * 4):
+        result = result.resize((cell_w * 4, cell_h * 4), Image.Resampling.LANCZOS)
+
+    cells_b64: list[str] = []
+    for row in range(4):
+        for col in range(4):
+            x1, y1 = col * cell_w, row * cell_h
+            cell = result.crop((x1, y1, x1 + cell_w, y1 + cell_h)).copy()
+            cells_b64.append(core.image_to_b64(cell))
+            core.save_generated_image(
+                cell, "AI Environment Lab",
+                view_name=f"grid_{row}_{col}",
+                generation_type="grid",
+                metadata={"description": req.description[:200], "name": req.name},
+            )
+
+    return EnvGridResponse(
+        cells=cells_b64,
+        full_grid_b64=core.image_to_b64(result),
+        width=canvas_w,
+        height=canvas_h,
+        cell_width=cell_w,
+        cell_height=cell_h,
+    )
+
+
 def _do_extract_attributes(description: str, image_b64: str | None = None) -> EnvAttributeResponse:
     api_key = core.get_api_key()
     if not api_key:
@@ -494,7 +608,7 @@ def _do_extract_attributes(description: str, image_b64: str | None = None) -> En
             prompt += f"\n{description}"
 
         contents.append(prompt)
-        data = core.rest_generate_json(api_key, "gemini-2.0-flash", contents)
+        data = core.rest_generate_json(api_key, "gemini-2.0-flash", contents, cost_category="extraction")
         if data is None:
             return EnvAttributeResponse(error="No response from Gemini")
 
@@ -785,7 +899,7 @@ def _do_restore(req: RestoreRequest) -> EnvResponse:
             [source, "Describe this environment with obsessive precision for exact recreation. "
              "Cover architecture, materials, vegetation, lighting, atmosphere, color palette, "
              "props, and composition. Write as one continuous dense prompt. No preamble."],
-            cancel_event=cancel,
+            cancel_event=cancel, cost_category="editing",
         )
         if not description:
             return EnvResponse(error="Restore failed — could not analyze image")
@@ -819,6 +933,16 @@ async def generate(body: EnvGenerateRequest):
     await manager.broadcast("status", {"message": "Generating environment concept..."})
     result = await loop.run_in_executor(_pool, _do_generate, body)
     await manager.broadcast("status", {"message": result.error or "Environment generated"})
+    return result
+
+
+@router.post("/generate-grid", response_model=EnvGridResponse)
+async def generate_grid(body: EnvGenerateRequest):
+    """Generate a 4×4 sprite sheet of environment variations."""
+    loop = asyncio.get_event_loop()
+    await manager.broadcast("status", {"message": "Generating 4×4 environment sheet..."})
+    result = await loop.run_in_executor(_pool, _do_generate_grid, body)
+    await manager.broadcast("status", {"message": result.error or "Grid generated"})
     return result
 
 

@@ -1,7 +1,7 @@
 import {
   useState, useCallback, useRef, useEffect, useMemo,
   type CSSProperties,
-  type MouseEvent as RME, type WheelEvent as RWE,
+  type MouseEvent as RME,
 } from "react";
 import { useArtboard, type ArtboardItem } from "@/hooks/ArtboardContext";
 import { useArtboardSync } from "@/hooks/useArtboardSync";
@@ -104,12 +104,17 @@ export function ArtboardCanvas() {
   const [cropMode, setCropMode] = useState(false);
   const [cropTarget, setCropTarget] = useState<string | null>(null);
   const [cropRect, setCropRect] = useState<{ sx: number; sy: number; cx: number; cy: number } | null>(null);
+  const [cropDrawing, setCropDrawing] = useState(false);
   const [styleLibModal, setStyleLibModal] = useState<{ imageIds: string[] } | null>(null);
   const [slFolders, setSlFolders] = useState<{ name: string; category: string }[]>([]);
   const [slNewName, setSlNewName] = useState("");
   const [slCategory, setSlCategory] = useState<"general" | "ui">("general");
   const [isMiddlePanning, setIsMiddlePanning] = useState(false);
   const middlePanRef = useRef({ lastX: 0, lastY: 0 });
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  const spaceHeldRef = useRef(false);
+  const [spacePanning, setSpacePanning] = useState(false);
+  const spacePanRef = useRef({ lastX: 0, lastY: 0 });
 
   // Board switcher state
   const [boardDropdownOpen, setBoardDropdownOpen] = useState(false);
@@ -145,18 +150,39 @@ export function ArtboardCanvas() {
   // ---------------------------------------------------------------------------
   // Zoom with zoom-to-cursor
   // ---------------------------------------------------------------------------
-  const handleWheel = useCallback((e: RWE<HTMLDivElement>) => {
-    e.preventDefault();
+  // Must use native event listener with { passive: false } so preventDefault() works.
+  // React's onWheel is passive by default in modern browsers, silently ignoring preventDefault.
+  useEffect(() => {
     const el = containerRef.current; if (!el) return;
-    const r = el.getBoundingClientRect();
-    const cx = r.width / 2, cy = r.height / 2;
-    const mx = e.clientX - r.left, my = e.clientY - r.top;
-    const v = viewportRef.current;
-    const wx = (mx - cx - v.panX) / v.zoom, wy = (my - cy - v.panY) / v.zoom;
-    const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-    const nz = Math.min(20, Math.max(0.05, v.zoom * f));
-    setViewport({ zoom: nz, panX: mx - cx - wx * nz, panY: my - cy - wy * nz });
-    markViewportTouched();
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      const v = viewportRef.current;
+
+      if (e.ctrlKey) {
+        // Pinch-to-zoom (trackpad)
+        const cx = r.width / 2, cy = r.height / 2;
+        const mx = e.clientX - r.left, my = e.clientY - r.top;
+        const wx = (mx - cx - v.panX) / v.zoom, wy = (my - cy - v.panY) / v.zoom;
+        const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+        const nz = Math.min(20, Math.max(0.05, v.zoom * f));
+        setViewport({ zoom: nz, panX: mx - cx - wx * nz, panY: my - cy - wy * nz });
+      } else if (Math.abs(e.deltaX) > Math.abs(e.deltaY) || (e.deltaX !== 0 && !e.shiftKey)) {
+        // Trackpad two-finger swipe → pan
+        setViewport({ zoom: v.zoom, panX: v.panX - e.deltaX, panY: v.panY - e.deltaY });
+      } else {
+        // Mouse scroll wheel → zoom-to-cursor
+        const cx = r.width / 2, cy = r.height / 2;
+        const mx = e.clientX - r.left, my = e.clientY - r.top;
+        const wx = (mx - cx - v.panX) / v.zoom, wy = (my - cy - v.panY) / v.zoom;
+        const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+        const nz = Math.min(20, Math.max(0.05, v.zoom * f));
+        setViewport({ zoom: nz, panX: mx - cx - wx * nz, panY: my - cy - wy * nz });
+      }
+      markViewportTouched();
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
   }, [setViewport, markViewportTouched]);
 
   // ---------------------------------------------------------------------------
@@ -185,6 +211,44 @@ export function ArtboardCanvas() {
     el.addEventListener("pointerup", onUp); el.addEventListener("pointercancel", onUp);
     return () => { el.removeEventListener("pointerdown", onDown); el.removeEventListener("pointermove", onMove); el.removeEventListener("pointerup", onUp); el.removeEventListener("pointercancel", onUp); };
   }, [setViewport, markViewportTouched]);
+
+  // ---------------------------------------------------------------------------
+  // Space + drag pan (hold Space, then left-click drag to pan)
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Space" && !e.repeat && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLTextAreaElement) && !(e.target instanceof HTMLSelectElement) && !(e.target as HTMLElement)?.isContentEditable) {
+        e.preventDefault();
+        spaceHeldRef.current = true;
+        setSpaceHeld(true);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "Space") {
+        spaceHeldRef.current = false;
+        setSpaceHeld(false);
+        setSpacePanning(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => { window.removeEventListener("keydown", onKeyDown); window.removeEventListener("keyup", onKeyUp); };
+  }, []);
+
+  useEffect(() => {
+    if (!spacePanning) return;
+    const onMove = (e: MouseEvent) => {
+      const last = spacePanRef.current;
+      const v = viewportRef.current;
+      setViewport({ zoom: v.zoom, panX: v.panX + e.clientX - last.lastX, panY: v.panY + e.clientY - last.lastY });
+      spacePanRef.current = { lastX: e.clientX, lastY: e.clientY };
+      markViewportTouched();
+    };
+    const onUp = () => setSpacePanning(false);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, [spacePanning, setViewport, markViewportTouched]);
 
   // ---------------------------------------------------------------------------
   // Fit viewport to show all items
@@ -247,11 +311,11 @@ export function ArtboardCanvas() {
   const applyCrop = useCallback(() => {
     if (!cropTarget || !cropRect) return;
     const item = items.find((i) => i.id === cropTarget);
-    if (!item || item.type !== "image") { setCropMode(false); setCropTarget(null); setCropRect(null); return; }
+    if (!item || item.type !== "image") { setCropMode(false); setCropTarget(null); setCropRect(null); setCropDrawing(false); return; }
     const x1 = Math.min(cropRect.sx, cropRect.cx), y1 = Math.min(cropRect.sy, cropRect.cy);
     const x2 = Math.max(cropRect.sx, cropRect.cx), y2 = Math.max(cropRect.sy, cropRect.cy);
     const cw = x2 - x1, ch = y2 - y1;
-    if (cw < 5 || ch < 5) { setCropMode(false); setCropTarget(null); setCropRect(null); return; }
+    if (cw < 5 || ch < 5) { setCropMode(false); setCropTarget(null); setCropRect(null); setCropDrawing(false); return; }
     const img = new Image();
     img.onload = () => {
       const scaleX = img.naturalWidth / item.w, scaleY = img.naturalHeight / item.h;
@@ -264,25 +328,36 @@ export function ArtboardCanvas() {
       ctx.drawImage(img, Math.round(sx), Math.round(sy), Math.round(sw), Math.round(sh), 0, 0, canvas.width, canvas.height);
       const cropped = canvas.toDataURL("image/png");
       updateItem(cropTarget, { content: cropped, x: x1, y: y1, w: cw, h: ch });
-      setCropMode(false); setCropTarget(null); setCropRect(null);
+      setCropMode(false); setCropTarget(null); setCropRect(null); setCropDrawing(false);
     };
     img.src = item.content;
   }, [cropTarget, cropRect, items, updateItem]);
 
-  const cancelCrop = useCallback(() => { setCropMode(false); setCropTarget(null); setCropRect(null); }, []);
+  const cancelCrop = useCallback(() => { setCropMode(false); setCropTarget(null); setCropRect(null); setCropDrawing(false); }, []);
 
   const handleMouseDown = useCallback((e: RME, directItem?: ArtboardItem) => {
     if (e.button !== 0 || editingText) return;
     if (annotationTool && annotationVisible) return;
     setCtxMenu(null);
 
+    // Space+drag pan: left-click while space held → pan
+    if (spaceHeldRef.current) {
+      e.preventDefault();
+      spacePanRef.current = { lastX: e.clientX, lastY: e.clientY };
+      setSpacePanning(true);
+      return;
+    }
+
     // Crop mode: clicking on an image starts the crop rectangle
+    // If a crop rect is already drawn (waiting for confirm/cancel), ignore new clicks
     if (cropMode) {
+      if (cropRect && !cropDrawing) return;
       const w = screenToWorld(e.clientX, e.clientY);
       const hit = directItem ?? hitTest(w.wx, w.wy);
       if (hit && hit.type === "image") {
         setCropTarget(hit.id);
         setCropRect({ sx: w.wx, sy: w.wy, cx: w.wx, cy: w.wy });
+        setCropDrawing(true);
       }
       return;
     }
@@ -299,10 +374,10 @@ export function ArtboardCanvas() {
       if (!e.shiftKey) clearSelection();
       setMarquee({ sx: e.clientX, sy: e.clientY, cx: e.clientX, cy: e.clientY });
     }
-  }, [screenToWorld, hitTest, selection, setSelection, clearSelection, editingText, annotationTool, annotationVisible, cropMode]);
+  }, [screenToWorld, hitTest, selection, setSelection, clearSelection, editingText, annotationTool, annotationVisible, cropMode, cropRect, cropDrawing]);
 
   const handleMouseMove = useCallback((e: RME | MouseEvent) => {
-    if (cropMode && cropRect) {
+    if (cropMode && cropDrawing && cropRect) {
       const w = screenToWorld(e.clientX, e.clientY);
       setCropRect((prev) => prev ? { ...prev, cx: w.wx, cy: w.wy } : null);
       return;
@@ -315,10 +390,11 @@ export function ArtboardCanvas() {
       dragLastRef.current = { x: e.clientX, y: e.clientY };
     } else if (marquee) { setMarquee((m) => m ? { ...m, cx: e.clientX, cy: e.clientY } : null); }
     else if (resizing) { resizeItem(resizing.id, Math.max(20, resizing.origW + (e.clientX - resizing.startX) / zoom), Math.max(20, resizing.origH + (e.clientY - resizing.startY) / zoom)); }
-  }, [dragging, marquee, resizing, cropMode, cropRect, moveItems, resizeItem, zoom, screenToWorld]);
+  }, [dragging, marquee, resizing, cropMode, cropDrawing, cropRect, moveItems, resizeItem, zoom, screenToWorld]);
 
   const handleMouseUp = useCallback((e: RME | MouseEvent) => {
     if (e.button !== 0) return;
+    if (cropDrawing) { setCropDrawing(false); return; }
     if (dragging && !dragging.moved && dragging.ids.length === 1) setSelection(new Set([dragging.ids[0]]));
     if (marquee) {
       const w1 = screenToWorld(Math.min(marquee.sx, marquee.cx), Math.min(marquee.sy, marquee.cy));
@@ -331,15 +407,15 @@ export function ArtboardCanvas() {
       setMarquee(null);
     }
     setDragging(null); dragLastRef.current = null; setResizing(null);
-  }, [dragging, marquee, items, selection, screenToWorld, setSelection]);
+  }, [cropDrawing, dragging, marquee, items, selection, screenToWorld, setSelection]);
 
   useEffect(() => {
-    if (!dragging && !marquee && !resizing && !(cropMode && cropRect)) return;
+    if (!dragging && !marquee && !resizing && !cropDrawing) return;
     const mv = (e: MouseEvent) => handleMouseMove(e);
     const up = (e: MouseEvent) => handleMouseUp(e);
     window.addEventListener("mousemove", mv); window.addEventListener("mouseup", up);
     return () => { window.removeEventListener("mousemove", mv); window.removeEventListener("mouseup", up); };
-  }, [dragging, marquee, resizing, cropMode, cropRect, handleMouseMove, handleMouseUp]);
+  }, [dragging, marquee, resizing, cropDrawing, handleMouseMove, handleMouseUp]);
 
   const handleResizeStart = useCallback((e: RME, item: ArtboardItem) => {
     e.stopPropagation(); e.preventDefault();
@@ -615,7 +691,7 @@ export function ArtboardCanvas() {
   const ds = DOT_SPACING * zoom;
   const marqueeRect = marquee ? { left: Math.min(marquee.sx, marquee.cx), top: Math.min(marquee.sy, marquee.cy), width: Math.abs(marquee.cx - marquee.sx), height: Math.abs(marquee.cy - marquee.sy) } : null;
   const sortedItems = useMemo(() => [...items].sort((a, b) => a.zIndex - b.zIndex), [items]);
-  const grabbing = Boolean(dragging?.moved || isMiddlePanning);
+  const grabbing = Boolean(dragging?.moved || isMiddlePanning || spacePanning);
 
   // Remote cursors -- smooth interpolation via requestAnimationFrame
   const smoothCursorsRef = useRef<Map<string, { x: number; y: number; tx: number; ty: number; color: string; name: string; lastUpdate: number }>>(new Map());
@@ -776,7 +852,7 @@ export function ArtboardCanvas() {
       )}
 
       {/* Canvas */}
-      <div ref={containerRef} className="flex-1 relative overflow-hidden select-none outline-none" style={{ backgroundImage: "radial-gradient(circle, rgba(255,255,255,0.1) 1px, transparent 1px)", backgroundSize: `${ds}px ${ds}px`, backgroundPosition: `${panX}px ${panY}px`, cursor: grabbing ? "grabbing" : cropMode ? "crosshair" : annotationTool && annotationVisible ? "crosshair" : "default" }} onWheel={handleWheel} onMouseDown={(e) => handleMouseDown(e)} onContextMenu={handleContextMenu} tabIndex={0} onMouseMove={mode === "shared" ? (e) => { const w = screenToWorld(e.clientX, e.clientY); sendCursor(w.wx, w.wy); } : undefined}>
+      <div ref={containerRef} className="flex-1 relative overflow-hidden select-none outline-none" style={{ backgroundImage: "radial-gradient(circle, rgba(255,255,255,0.1) 1px, transparent 1px)", backgroundSize: `${ds}px ${ds}px`, backgroundPosition: `${panX}px ${panY}px`, cursor: spacePanning || isMiddlePanning ? "grabbing" : spaceHeld ? "grab" : grabbing ? "grabbing" : cropMode ? "crosshair" : annotationTool && annotationVisible ? "crosshair" : "default" }} onMouseDown={(e) => handleMouseDown(e)} onContextMenu={handleContextMenu} tabIndex={0} onMouseMove={mode === "shared" ? (e) => { const w = screenToWorld(e.clientX, e.clientY); sendCursor(w.wx, w.wy); } : undefined}>
         {/* World-space container */}
         <div style={{ position: "absolute", left: "50%", top: "50%", transform: `translate(-50%, -50%) translate(${panX}px, ${panY}px) scale(${zoom})`, pointerEvents: "none" }}>
           {sortedItems.map((item) => {

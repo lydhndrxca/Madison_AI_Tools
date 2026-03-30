@@ -222,13 +222,13 @@ export function ProjectTabsWrapper({
         ];
         persist(next);
         setActiveIdx(next.length - 1);
-      }
 
-      // Re-fire the callback event after a tick so the new instance renders
-      if (callbackEvent) {
-        setTimeout(() => {
-          window.dispatchEvent(new CustomEvent(callbackEvent, { detail: callbackDetail }));
-        }, 100);
+        // Re-fire the callback event after a tick so the new instance renders
+        if (callbackEvent) {
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent(callbackEvent, { detail: callbackDetail }));
+          }, 100);
+        }
       }
     };
     window.addEventListener("request-new-project", handler);
@@ -376,7 +376,7 @@ export function ProjectTabsWrapper({
           <div className="mx-2 my-1" style={{ height: 1, background: "var(--color-border)" }} />
           <CtxMenuItem
             label="Remove"
-            onClick={() => removeProject(ctxMenu.idx)}
+            onClick={() => { if (window.confirm(`Remove "${projects[ctxMenu.idx]?.name}"? This cannot be undone.`)) removeProject(ctxMenu.idx); }}
             danger
             disabled={projects.length <= 1}
           />

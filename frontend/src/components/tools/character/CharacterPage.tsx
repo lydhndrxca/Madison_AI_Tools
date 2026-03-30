@@ -36,6 +36,7 @@ import { CustomSectionRenderer } from "@/components/shared/CustomSectionRenderer
 
 const BUILTIN_TABS: TabDef[] = [
   { id: "main", label: "Main Stage", group: "stage", prompt: "Three-quarter hero shot showing the character's full design, head to toe, from a dramatic 3/4 angle." },
+  { id: "grid", label: "4×4 Grid", group: "stage" },
   {
     id: "3/4",
     label: "3/4",
@@ -80,25 +81,6 @@ const ATTRIBUTE_FIELDS = [
   "Headwear", "Outerwear", "Top", "Legwear", "Footwear",
   "Gloves", "FaceGear", "UtilityRig", "BackCarry", "HandProp",
   "Accessories", "ColorAccents", "Detailing", "Pose",
-];
-
-const GRID_VARIATIONS = [
-  "Show the character in a dynamic action pose with dramatic lighting",
-  "Render a calm, neutral standing pose with soft ambient lighting",
-  "Depict a three-quarter view with moody, cinematic lighting",
-  "Show a close-up portrait focusing on facial detail and expression",
-  "Render in a painterly, concept art style with loose brushwork",
-  "Show the character in a crouched or low stance, ready for action",
-  "Depict with strong rim lighting and a dark, atmospheric background",
-  "Render a profile view with elegant, studio-quality lighting",
-  "Show the character mid-motion with flowing elements and energy",
-  "Depict in a stylized, graphic art style with bold shadows",
-  "Show a full-body shot from a slightly low camera angle, heroic pose",
-  "Render with warm golden-hour lighting and natural environment",
-  "Depict in a high-contrast noir style with sharp shadows",
-  "Show the character in a relaxed, casual pose showing personality",
-  "Render from a high camera angle looking down, bird's eye perspective",
-  "Depict with cool blue/teal lighting in a futuristic or tech setting",
 ];
 
 // ---------------------------------------------------------------------------
@@ -1258,6 +1240,58 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     }
   }, [description, age, race, gender, build, genCount, modelId, bible, costume, preservation, attributes, extractMode, isSectionEnabled, getExtraContext, buildAttrBrief, buildPromptPreview, getMainImageB64, setTabImage, appendToGallery, addToast, busy, styleFusion]);
 
+  const handleGenerateEnvironment = useCallback(async () => {
+    const mainB64 = getMainImageB64();
+    if (!mainB64) { addToast("Load or generate a character image on the Main Stage first", "info"); return; }
+    const envCtx = buildEnvBrief(envPlacement);
+    if (!envCtx.trim()) { addToast("Set at least a location or lighting in Environment Placement", "info"); return; }
+    const identityOn = isSectionEnabled("identity");
+    const baseDesc = identityOn ? description : "";
+    const attrText = resolveSection("attributes");
+    const attrBrief = attrText ? `\n\n${attrText}` : "";
+    const desc = (baseDesc + attrBrief).trim() || "character";
+    busy.start("envGen");
+    setGeneratingTab("main");
+    try {
+      const bibleCtx = resolveSection("bible");
+      const costumeCtx = resolveSection("costume");
+      const lockCtx = resolveSection("preservation");
+      const extra = getExtraContext();
+      setGenText((p) => ({ ...p, envGen: "Generating environment..." }));
+      const res = await apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
+        "/character/generate", {
+          method: "POST",
+          body: JSON.stringify({
+            description: desc,
+            age: identityOn ? age : "", race: identityOn ? race : "",
+            gender: identityOn ? gender : "", build: identityOn ? build : "",
+            view_type: "main", mode: "quality",
+            model_id: modelId || undefined,
+            bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+            fusion_context: extra.fusionCtx || undefined,
+            fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+            style_guidance: extra.styleGuide || undefined,
+            env_context: envCtx,
+            lock_constraints: lockCtx || undefined,
+            reference_image_b64: mainB64,
+            custom_sections_context: customSections.getPromptContributions() || undefined,
+            custom_section_images: customSections.getImageAttachments().map((img) => img.replace(/^data:image\/\w+;base64,/, "")).filter(Boolean) || undefined,
+          }),
+        },
+      );
+      if (res.error) { addToast(res.error, "error"); }
+      else if (res.image_b64) {
+        setTabImage("main", `data:image/png;base64,${res.image_b64}`, "Environment placement");
+        addToast("Environment generated", "success");
+      }
+    } catch (e) { addToast(e instanceof Error ? e.message : "Generation failed", "error"); }
+    finally {
+      busy.end("envGen");
+      setGeneratingTab(null);
+    }
+  }, [description, age, race, gender, build, modelId, envPlacement, isSectionEnabled, resolveSection, getExtraContext, getMainImageB64, setTabImage, addToast, busy, styleFusion, customSections]);
+
   const handleApplyEdit = useCallback(async () => {
     if (!editPrompt.trim()) return;
     const mainB64 = getMainImageB64();
@@ -1665,58 +1699,64 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     if (!desc) return;
     busy.start("generate");
     setGeneratingTab("main");
+    setActiveTab("grid");
     try {
       const bibleCtx = resolveSection("bible");
       const costumeCtx = resolveSection("costume");
       const lockCtx = resolveSection("preservation");
       const mainRef = extractMode === "recreate" ? getMainImageB64() : null;
-      setGenText((p) => ({ ...p, generate: "Generating 16 images..." }));
-      const promises = Array.from({ length: 16 }, (_, i) =>
-        apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>(
-          "/character/generate", {
-            method: "POST",
-            body: JSON.stringify({
-              description: desc,
-              age: identityOn ? age : "", race: identityOn ? race : "",
-              gender: identityOn ? gender : "", build: identityOn ? build : "",
-              view_type: "main", mode: "quality",
-              model_id: modelId || undefined,
-              bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
-              fusion_context: extra.fusionCtx || undefined,
-              fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
-              fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
-              style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
-              lock_constraints: lockCtx || undefined,
-              reference_image_b64: mainRef || undefined,
-              recreate_mode: extractMode === "recreate",
-              custom_sections_context: customSections.getPromptContributions() || undefined,
-              custom_section_images: customSections.getImageAttachments(),
-              variation_hint: GRID_VARIATIONS[i],
-            }),
-          },
-        ).then((resp) => ({ ok: true as const, resp, idx: i }))
-         .catch((e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e), idx: i })),
-      );
-      const results = await Promise.all(promises);
-      const newResults: GridGalleryResult[] = [];
-      for (const r of results.sort((a, b) => a.idx - b.idx)) {
-        if (r.ok && r.resp.image_b64) {
+      setGenText((p) => ({ ...p, generate: "Generating 4×4 sheet..." }));
+      const res = await apiFetch<{
+        cells?: string[]; full_grid_b64?: string; error?: string;
+        cell_width?: number; cell_height?: number;
+      }>("/character/generate-grid", {
+        method: "POST",
+        body: JSON.stringify({
+          description: desc,
+          age: identityOn ? age : "", race: identityOn ? race : "",
+          gender: identityOn ? gender : "", build: identityOn ? build : "",
+          view_type: "main", mode: "quality",
+          model_id: modelId || undefined,
+          bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+          fusion_context: extra.fusionCtx || undefined,
+          fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+          fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+          style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+          lock_constraints: lockCtx || undefined,
+          reference_image_b64: mainRef || undefined,
+          recreate_mode: extractMode === "recreate",
+          custom_sections_context: customSections.getPromptContributions() || undefined,
+          custom_section_images: customSections.getImageAttachments(),
+        }),
+      });
+      if (res.error) {
+        addToast(res.error, "error");
+      } else if (res.cells) {
+        const cw = res.cell_width || 256;
+        const ch = res.cell_height || 384;
+        const newResults: GridGalleryResult[] = res.cells.map((b64, i) => ({
+          id: `grid_${Date.now()}_${i}`,
+          image_b64: b64,
+          width: cw,
+          height: ch,
+          label: `${String.fromCharCode(65 + Math.floor(i / 4))}${(i % 4) + 1}`,
+        }));
+        if (res.full_grid_b64) {
           newResults.push({
-            id: `grid_${Date.now()}_${r.idx}`,
-            image_b64: r.resp.image_b64,
-            width: r.resp.width || 1024,
-            height: r.resp.height || 1024,
-            label: `${String.fromCharCode(65 + Math.floor(r.idx / 4))}${(r.idx % 4) + 1}`,
+            id: `grid_full_${Date.now()}`,
+            image_b64: res.full_grid_b64,
+            width: cw * 4,
+            height: ch * 4,
+            label: "Full",
           });
-        } else if (r.ok && r.resp.error) { addToast(r.resp.error, "error"); }
-        else if (!r.ok) { addToast(r.error, "error"); }
-      }
-      setGridResults((prev) => [...prev, ...newResults]);
-      if (newResults.length > 0) {
-        addToast(`Generated ${newResults.length} images`, "success");
+        }
+        setGridResults((prev) => [...prev, ...newResults]);
+        addToast(`Generated 16 variations on one sheet`, "success");
       } else {
-        addToast("All grid generation attempts failed", "error");
+        addToast("Grid generation failed", "error");
       }
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "Generation failed", "error");
     } finally {
       busy.end("generate");
       setGeneratingTab(null);
@@ -1774,6 +1814,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
       const src = `data:image/png;base64,${result.image_b64}`;
       const histLabel = result.label ? `Grid ${result.label}` : "From grid";
       setTabImage("main", src, histLabel);
+      setActiveTab("main");
       addToast("Sent to main stage", "success");
     },
     [gridResults, setTabImage, addToast],
@@ -2152,7 +2193,79 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
   useEffect(() => {
     if (active) {
       setOnApplyFeedback(() => (suggestion: string) => {
+        // Always append to edit prompt for generation
         setEditPrompt((prev) => prev ? `${prev}\n${suggestion}` : suggestion);
+
+        // Also route to specific attribute fields by parsing the label
+        const colonIdx = suggestion.indexOf(":");
+        if (colonIdx < 0) return;
+        const label = suggestion.slice(0, colonIdx).trim().toLowerCase();
+        const body = suggestion.slice(colonIdx + 1).trim();
+        if (!body) return;
+
+        // Map label to attribute fields
+        const attrMap: Record<string, string> = {
+          headwear: "Headwear", hat: "Headwear", helmet: "Headwear", head: "Headwear",
+          outerwear: "Outerwear", jacket: "Outerwear", coat: "Outerwear", cloak: "Outerwear",
+          top: "Top", shirt: "Top", upper: "Top", torso: "Top",
+          legwear: "Legwear", pants: "Legwear", legs: "Legwear", trousers: "Legwear",
+          footwear: "Footwear", boots: "Footwear", shoes: "Footwear",
+          gloves: "Gloves", gauntlets: "Gloves", hands: "Gloves",
+          facegear: "FaceGear", "face gear": "FaceGear", mask: "FaceGear", goggles: "FaceGear",
+          "utility rig": "UtilityRig", utilityrig: "UtilityRig", belt: "UtilityRig", harness: "UtilityRig", holster: "UtilityRig",
+          "back carry": "BackCarry", backcarry: "BackCarry", backpack: "BackCarry",
+          "hand prop": "HandProp", handprop: "HandProp", weapon: "HandProp",
+          accessories: "Accessories", accessory: "Accessories", jewelry: "Accessories",
+          "color accents": "ColorAccents", coloraccents: "ColorAccents",
+          detailing: "Detailing", details: "Detailing", detail: "Detailing",
+          pose: "Pose", stance: "Pose",
+        };
+
+        // Check attribute fields first
+        const matchedAttr = attrMap[label] || Object.entries(attrMap).find(([k]) => label.includes(k))?.[1];
+        if (matchedAttr) {
+          setAttributes((prev) => ({
+            ...prev,
+            [matchedAttr]: { ...prev[matchedAttr], custom: body },
+          }));
+          return;
+        }
+
+        // Map label to costume fields
+        if (label.includes("color") || label.includes("palette")) {
+          setCostume((prev) => ({ ...prev, costumeNotes: prev.costumeNotes ? `${prev.costumeNotes}\n${body}` : body }));
+          return;
+        }
+        if (label.includes("material") || label.includes("texture") || label.includes("fabric")) {
+          setCostume((prev) => ({ ...prev, costumeNotes: prev.costumeNotes ? `${prev.costumeNotes}\n${body}` : body }));
+          return;
+        }
+        if (label.includes("armor") || label.includes("armour")) {
+          setAttributes((prev) => ({
+            ...prev,
+            Outerwear: { ...prev.Outerwear, custom: body },
+          }));
+          return;
+        }
+        if (label.includes("hair") || label.includes("hairstyle")) {
+          setBible((prev) => ({ ...prev, designIntent: prev.designIntent ? `${prev.designIntent}\n${body}` : body }));
+          return;
+        }
+        if (label.includes("silhouette") || label.includes("shape") || label.includes("proportion")) {
+          setBible((prev) => ({ ...prev, designIntent: prev.designIntent ? `${prev.designIntent}\n${body}` : body }));
+          return;
+        }
+        if (label.includes("backstory") || label.includes("lore") || label.includes("narrative")) {
+          setBible((prev) => ({ ...prev, backstory: prev.backstory ? `${prev.backstory}\n${body}` : body }));
+          return;
+        }
+        if (label.includes("style") || label.includes("aesthetic") || label.includes("theme")) {
+          setCostume((prev) => ({ ...prev, costumeNotes: prev.costumeNotes ? `${prev.costumeNotes}\n${body}` : body }));
+          return;
+        }
+
+        // Fallback: put in design intent
+        setBible((prev) => ({ ...prev, designIntent: prev.designIntent ? `${prev.designIntent}\n${body}` : body }));
       });
       return () => setOnApplyFeedback(null);
     }
@@ -2415,7 +2528,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                   disabled={busy.any}
                 >
                   <option value="single">Single Image</option>
-                  <option value="grid">4×4 Grid (16 images)</option>
+                  <option value="grid">4×4 Grid (16 Variations)</option>
                 </select>
               </div>
             </>
@@ -2751,6 +2864,18 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                   value={envPlacement.outputFormat && !ENV_FORMAT_OPTIONS.includes(envPlacement.outputFormat) ? envPlacement.outputFormat : ""}
                   onChange={(e) => { if (e.target.value.trim()) setEnvPlacement((p) => ({ ...p, outputFormat: e.target.value })); }} />
               </div>
+
+              {/* Generate Environment button */}
+              <Button
+                variant="primary"
+                className="w-full"
+                size="sm"
+                generating={busy.is("envGen")}
+                generatingText={genText.envGen || "Generating environment..."}
+                onClick={handleGenerateEnvironment}
+                disabled={busy.any}
+                title="Take the current Main Stage image and place the character into the environment defined above"
+              >Generate Environment</Button>
             </div>
           );
 
@@ -3248,68 +3373,57 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
           <ArtboardCanvas />
         ) : activeTab === "deepSearch" ? (
           <DeepSearchPanel onSendToArtboard={handleSendSearchToArtboard} />
-        ) : (() => {
-              const mainStageViewer = (
-                <div className="relative flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
-                  <ImageViewer
-                    src={currentSrc}
-                    placeholder={`No ${activeTabDef?.label.toLowerCase() || "image"} loaded`}
-                    locked={busy.any}
-                    onSaveImage={handleSaveImage}
-                    onCopyImage={handleCopyImage}
-                    onPasteImage={handlePasteImage}
-                    onOpenImage={handleOpenImage}
-                    onClearImage={handleClearImage}
-                    onClearAllImages={handleClearAllImages}
-                    onImageEdited={handleImageEdited}
-                    imageCount={currentImages.length}
-                    imageIndex={currentIdx}
-                    onPrevImage={handlePrevImage}
-                    onNextImage={handleNextImage}
-                    refImages={editorRefImages}
-                    styleContext={editorStyleContext}
-                    isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
-                    onToggleFavorite={currentSrc ? () => {
-                      const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, "");
-                      if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); }
-                      else addFavorite({ image_b64: b64, tool: "character", label: activeTab || "main", source: "viewer" });
-                    } : undefined}
-                  />
-                  <ArtDirectorWidget onOpenConfig={() => setArtDirectorConfigOpen(true)} />
-                </div>
-              );
-              if (generationMode === "grid" && activeTab === "main" && gridResults.length > 0) {
-                return (
-                  <div className="flex flex-1 min-h-0 overflow-hidden">
-                    <div className="flex-1 min-w-0 min-h-0 flex flex-col">{mainStageViewer}</div>
-                    <div className="flex-1 min-w-0 min-h-0 flex flex-col" style={{ borderLeft: "1px solid var(--color-border)" }}>
-                      <GridGallery
-                        results={gridResults}
-                        title="Character Variations"
-                        toolLabel="character"
-                        generating={busy.is("generate")}
-                        emptyMessage="No grid results yet. Switch to grid mode and generate."
-                        onDelete={handleGridDelete}
-                        onCopy={handleGridCopy}
-                        onEditSubmit={handleGridEdit}
-                        onSendToMainstage={handleGridSendToMainstage}
-                        editBusy={gridEditBusy}
-                        isFavorited={(b64) => isFavorited(b64)}
-                        onToggleFavorite={(id, b64, w, h) => {
-                          if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); }
-                          else {
-                            const cell = gridResults.find((r) => r.id === id);
-                            const favLabel = cell?.label ? `Grid ${cell.label}` : `grid-${id}`;
-                            addFavorite({ image_b64: b64, tool: "character", label: favLabel, prompt: "", source: "grid", width: w, height: h });
-                          }
-                        }}
-                      />
-                    </div>
-                  </div>
-                );
+        ) : activeTab === "grid" ? (
+          <GridGallery
+            results={gridResults}
+            title="Character Variations"
+            toolLabel="character"
+            generating={busy.is("generate")}
+            emptyMessage="No grid results yet. Select 4×4 Grid mode and generate."
+            onDelete={handleGridDelete}
+            onCopy={handleGridCopy}
+            onEditSubmit={handleGridEdit}
+            onSendToMainstage={handleGridSendToMainstage}
+            editBusy={gridEditBusy}
+            isFavorited={(b64) => isFavorited(b64)}
+            onToggleFavorite={(id, b64, w, h) => {
+              if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); }
+              else {
+                const cell = gridResults.find((r) => r.id === id);
+                const favLabel = cell?.label ? `Grid ${cell.label}` : `grid-${id}`;
+                addFavorite({ image_b64: b64, tool: "character", label: favLabel, prompt: "", source: "grid", width: w, height: h });
               }
-              return mainStageViewer;
-            })()}
+            }}
+          />
+        ) : (
+          <div className="relative flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
+            <ImageViewer
+              src={currentSrc}
+              placeholder={`No ${activeTabDef?.label.toLowerCase() || "image"} loaded`}
+              locked={busy.any}
+              onSaveImage={handleSaveImage}
+              onCopyImage={handleCopyImage}
+              onPasteImage={handlePasteImage}
+              onOpenImage={handleOpenImage}
+              onClearImage={handleClearImage}
+              onClearAllImages={handleClearAllImages}
+              onImageEdited={handleImageEdited}
+              imageCount={currentImages.length}
+              imageIndex={currentIdx}
+              onPrevImage={handlePrevImage}
+              onNextImage={handleNextImage}
+              refImages={editorRefImages}
+              styleContext={editorStyleContext}
+              isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
+              onToggleFavorite={currentSrc ? () => {
+                const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, "");
+                if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); }
+                else addFavorite({ image_b64: b64, tool: "character", label: activeTab || "main", source: "viewer" });
+              } : undefined}
+            />
+            <ArtDirectorWidget onOpenConfig={() => setArtDirectorConfigOpen(true)} />
+          </div>
+        )}
         </div>
       </div>
       {showXml && <XmlModal xml={buildCharacterXml()} title="Character XML" onClose={() => setShowXml(false)} />}

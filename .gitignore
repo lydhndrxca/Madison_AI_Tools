@@ -25,8 +25,7 @@ Thumbs.db
 # Project runtime artifacts
 output/
 saves/
-config/keys.json
-config/user_settings_backup.json
+config/
 ALL GENERATED IMAGES/
 ARTBOARD_LIBRARY/
 last_character_prompt.txt

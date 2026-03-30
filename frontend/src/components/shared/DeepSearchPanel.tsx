@@ -1,5 +1,4 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { Button, Select } from "@/components/ui";
 import {
   Search, Download, Send, Copy, Check, Loader2, X,
   ChevronLeft, ChevronRight, Plus, ImagePlus, Trash2,
@@ -82,6 +81,7 @@ export function DeepSearchPanel({ onSendToArtboard }: DeepSearchPanelProps) {
     for (let i = 0; i < items.length; i++) {
       if (items[i].type.startsWith("image/")) {
         e.preventDefault();
+        e.stopPropagation();
         const file = items[i].getAsFile();
         if (!file) continue;
         const reader = new FileReader();
@@ -233,6 +233,7 @@ export function DeepSearchPanel({ onSendToArtboard }: DeepSearchPanelProps) {
       const blob = await fetch(`data:image/png;base64,${img.b64}`).then((r) => r.blob());
       await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
       setCopiedIdx(idx);
+      addToast("Image copied to clipboard", "success");
       setTimeout(() => setCopiedIdx(null), 1500);
     } catch {
       addToast("Failed to copy image", "error");
@@ -316,6 +317,46 @@ export function DeepSearchPanel({ onSendToArtboard }: DeepSearchPanelProps) {
     return () => window.removeEventListener("keydown", handler);
   }, [expandedIdx, handleExpandNav]);
 
+  const [dragging, setDragging] = useState(false);
+
+  const handlePanelPaste = useCallback((e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith("image/")) {
+        e.preventDefault();
+        const file = items[i].getAsFile();
+        if (!file) continue;
+        const reader = new FileReader();
+        reader.onload = () => addRefImage(reader.result as string);
+        reader.readAsDataURL(file);
+      }
+    }
+  }, [addRefImage]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    const files = e.dataTransfer?.files;
+    if (!files) return;
+    Array.from(files).forEach((file) => {
+      if (!file.type.startsWith("image/")) return;
+      const reader = new FileReader();
+      reader.onload = () => addRefImage(reader.result as string);
+      reader.readAsDataURL(file);
+    });
+  }, [addRefImage]);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setDragging(false);
+  }, []);
+
   const inputStyle: React.CSSProperties = {
     background: "var(--color-input-bg)",
     border: "1px solid var(--color-border)",
@@ -324,13 +365,20 @@ export function DeepSearchPanel({ onSendToArtboard }: DeepSearchPanelProps) {
   };
 
   return (
-    <div className="flex h-full overflow-hidden" style={{ background: "var(--color-background)" }}>
+    <div
+      className="flex h-full overflow-hidden"
+      style={{ background: "var(--color-background)" }}
+      onPaste={handlePanelPaste}
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+    >
 
       {/* ── Left Panel: Inputs ── */}
       <div
         className="shrink-0 flex flex-col overflow-hidden"
         style={{
-          width: 240,
+          width: 300,
           borderRight: "1px solid var(--color-border)",
           background: "var(--color-card)",
         }}
@@ -339,18 +387,18 @@ export function DeepSearchPanel({ onSendToArtboard }: DeepSearchPanelProps) {
           <span className="text-[11px] font-semibold" style={{ color: "var(--color-foreground)" }}>Search Input</span>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-3 py-2 space-y-3">
+        <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
           {/* Query */}
           <div>
-            <label className="text-[10px] font-medium mb-1 block" style={{ color: "var(--color-text-muted)" }}>What are you looking for?</label>
+            <label className="text-[10px] font-semibold uppercase tracking-wider mb-1 block" style={{ color: "var(--color-text-secondary)" }}>What are you looking for?</label>
             <textarea
               ref={queryRef}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder={"e.g. 'Weathered leather textures for a medieval pouch'\nor 'Chunky sole boots with a techwear aesthetic'"}
-              rows={3}
-              className="w-full px-2 py-1.5 text-[11px] rounded resize-y"
-              style={{ ...inputStyle, minHeight: 60 }}
+              placeholder={"e.g. 'Weathered leather textures for a medieval pouch'\nor 'Chunky sole boots with a techwear aesthetic'\nor 'Leather shoes with charm details'"}
+              rows={5}
+              className="w-full px-2 py-2 text-xs rounded resize-y"
+              style={{ ...inputStyle, minHeight: 100 }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSearch(); }
               }}
@@ -361,15 +409,22 @@ export function DeepSearchPanel({ onSendToArtboard }: DeepSearchPanelProps) {
           {/* Controls */}
           <div className="flex gap-2">
             <div className="flex-1">
-              <label className="text-[10px] mb-0.5 block" style={{ color: "var(--color-text-muted)" }}>Depth</label>
-              <Select value={depth} onChange={(e) => setDepth(e.target.value)} options={DEPTH_OPTIONS} style={{ fontSize: 11, padding: "3px 6px", width: "100%" }} />
+              <label className="text-[10px] font-semibold uppercase tracking-wider mb-0.5 block" style={{ color: "var(--color-text-secondary)" }}>Depth</label>
+              <select
+                className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
+                style={inputStyle}
+                value={depth}
+                onChange={(e) => setDepth(e.target.value)}
+              >
+                {DEPTH_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
             </div>
-            <div style={{ width: 60 }}>
-              <label className="text-[10px] mb-0.5 block" style={{ color: "var(--color-text-muted)" }}>Count</label>
+            <div style={{ width: 70 }}>
+              <label className="text-[10px] font-semibold uppercase tracking-wider mb-0.5 block" style={{ color: "var(--color-text-secondary)" }}>Count</label>
               <input
                 type="number" min={1} max={40} value={numImages}
                 onChange={(e) => setNumImages(Math.max(1, Math.min(40, parseInt(e.target.value) || 12)))}
-                className="w-full text-[11px] px-1.5 py-1 rounded"
+                className="w-full text-xs px-2 py-1 rounded-[var(--radius-sm)]"
                 style={inputStyle}
               />
             </div>
@@ -400,11 +455,15 @@ export function DeepSearchPanel({ onSendToArtboard }: DeepSearchPanelProps) {
 
             {refInputs.length === 0 && (
               <div
-                className="rounded text-center py-4 cursor-pointer text-[10px]"
-                style={{ border: "1px dashed var(--color-border)", color: "var(--color-text-muted)" }}
+                className="rounded text-center py-4 cursor-pointer text-[10px] transition-colors"
+                style={{
+                  border: dragging ? "2px dashed rgba(255,255,255,0.4)" : "1px dashed var(--color-border)",
+                  color: dragging ? "var(--color-text-primary)" : "var(--color-text-muted)",
+                  background: dragging ? "rgba(255,255,255,0.04)" : "transparent",
+                }}
                 onClick={() => fileInputRef.current?.click()}
               >
-                Drop or paste images here
+                {dragging ? "Drop image here" : "Drop, paste (Ctrl+V), or click to add images"}
               </div>
             )}
 
@@ -472,10 +531,10 @@ export function DeepSearchPanel({ onSendToArtboard }: DeepSearchPanelProps) {
         {(searching || status || summary) && (
           <div className="shrink-0 px-3 py-2" style={{ borderBottom: "1px solid var(--color-border)", background: "var(--color-card)" }}>
             <div className="flex items-center gap-2">
-              {searching && <Loader2 size={12} className="animate-spin shrink-0" style={{ color: "var(--color-text-muted)" }} />}
-              <span className="text-[10px] flex-1" style={{ color: "var(--color-text-muted)" }}>{status}</span>
+              {searching && <Loader2 size={14} className="animate-spin shrink-0" style={{ color: "var(--color-text-secondary)" }} />}
+              <span className="text-[11px] flex-1 font-medium" style={{ color: searching ? "var(--color-text-primary)" : "var(--color-text-muted)" }}>{status}</span>
               {results.length > 0 && (
-                <span className="text-[10px] shrink-0" style={{ color: "var(--color-text-secondary)" }}>{results.length} found</span>
+                <span className="text-[11px] shrink-0 font-medium" style={{ color: "var(--color-text-secondary)" }}>{results.length} found</span>
               )}
             </div>
             {summary && (
@@ -556,6 +615,7 @@ export function DeepSearchPanel({ onSendToArtboard }: DeepSearchPanelProps) {
                 }}
                 onClick={() => toggleSelect(idx)}
                 onDoubleClick={() => setExpandedIdx(idx)}
+                onContextMenu={(e) => { e.preventDefault(); handleCopyImage(idx); }}
               >
                 <img
                   src={`data:image/png;base64,${img.b64}`}
@@ -625,101 +685,137 @@ export function DeepSearchPanel({ onSendToArtboard }: DeepSearchPanelProps) {
       </div>
 
       {/* ── Expanded image overlay ── */}
-      {expandedIdx !== null && results[expandedIdx] && (
-        <div
-          className="absolute inset-0 z-50 flex items-center justify-center"
-          style={{ background: "rgba(0,0,0,0.9)" }}
-          onClick={() => setExpandedIdx(null)}
-        >
-          <button className="absolute top-3 right-3 text-white/70 hover:text-white cursor-pointer z-10" onClick={() => setExpandedIdx(null)}>
-            <X size={24} />
-          </button>
-
-          {expandedIdx > 0 && (
-            <button
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-white/60 hover:text-white cursor-pointer z-10"
-              onClick={(e) => { e.stopPropagation(); handleExpandNav(-1); }}
-            >
-              <ChevronLeft size={36} />
+      {expandedIdx !== null && results[expandedIdx] && (() => {
+        const expImg = results[expandedIdx];
+        return (
+          <div
+            className="absolute inset-0 z-50 flex items-center justify-center"
+            style={{ background: "rgba(0,0,0,0.92)" }}
+            onClick={() => setExpandedIdx(null)}
+          >
+            <button className="absolute top-3 right-3 text-white/70 hover:text-white cursor-pointer z-10" onClick={() => setExpandedIdx(null)}>
+              <X size={24} />
             </button>
-          )}
-          {expandedIdx < results.length - 1 && (
-            <button
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-white/60 hover:text-white cursor-pointer z-10"
-              onClick={(e) => { e.stopPropagation(); handleExpandNav(1); }}
-            >
-              <ChevronRight size={36} />
-            </button>
-          )}
 
-          <div className="flex flex-col items-center gap-3 max-h-[90vh] max-w-[90vw]" onClick={(e) => e.stopPropagation()}>
-            <img
-              src={`data:image/png;base64,${results[expandedIdx].b64}`}
-              alt={results[expandedIdx].description || "Reference"}
-              className="max-h-[70vh] max-w-[85vw] object-contain rounded"
-            />
-            <div className="flex items-center gap-2 flex-wrap justify-center">
-              <span className="text-[11px] text-white/50">
-                {expandedIdx + 1} / {results.length} · {results[expandedIdx].width}×{results[expandedIdx].height}
-              </span>
+            {expandedIdx > 0 && (
               <button
-                onClick={() => handleCopyImage(expandedIdx)}
-                className="text-[10px] px-2 py-1 rounded cursor-pointer flex items-center gap-1"
-                style={{ background: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.8)", border: "1px solid rgba(255,255,255,0.2)" }}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-white/60 hover:text-white cursor-pointer z-10"
+                onClick={(e) => { e.stopPropagation(); handleExpandNav(-1); }}
               >
-                <Copy size={10} /> Copy
+                <ChevronLeft size={36} />
               </button>
-              <button
-                onClick={() => {
-                  const img = results[expandedIdx];
-                  const link = document.createElement("a");
-                  link.href = `data:image/png;base64,${img.b64}`;
-                  link.download = `ref_${Date.now()}.png`;
-                  link.click();
-                }}
-                className="text-[10px] px-2 py-1 rounded cursor-pointer flex items-center gap-1"
-                style={{ background: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.8)", border: "1px solid rgba(255,255,255,0.2)" }}
-              >
-                <Download size={10} /> Save
-              </button>
-              {onSendToArtboard && (
-                <button
-                  onClick={() => {
-                    onSendToArtboard([results[expandedIdx]]);
-                    addToast("Sent to Art Table", "success");
-                  }}
-                  className="text-[10px] px-2 py-1 rounded cursor-pointer flex items-center gap-1"
-                  style={{ background: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.8)", border: "1px solid rgba(255,255,255,0.2)" }}
-                >
-                  <Send size={10} /> Art Table
-                </button>
-              )}
-              <button
-                onClick={() => handleAddToLibrary(expandedIdx)}
-                className="text-[10px] px-2 py-1 rounded cursor-pointer flex items-center gap-1"
-                style={{
-                  background: libraryAdded.has(expandedIdx) ? "rgba(250,204,21,0.15)" : "rgba(255,255,255,0.1)",
-                  color: libraryAdded.has(expandedIdx) ? "#facc15" : "rgba(255,255,255,0.8)",
-                  border: `1px solid ${libraryAdded.has(expandedIdx) ? "rgba(250,204,21,0.3)" : "rgba(255,255,255,0.2)"}`,
-                }}
-              >
-                {libraryAdded.has(expandedIdx) ? <Star size={10} fill="#facc15" /> : <Plus size={10} />}
-                {libraryAdded.has(expandedIdx) ? "Added" : "Add to Library"}
-              </button>
-              <button
-                onClick={() => { removeResult(expandedIdx); setExpandedIdx(null); }}
-                className="text-[10px] px-2 py-1 rounded cursor-pointer flex items-center gap-1"
-                style={{ background: "rgba(239,68,68,0.1)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.3)" }}
-              >
-                <Trash2 size={10} /> Remove
-              </button>
-            </div>
-            {results[expandedIdx].description && (
-              <p className="text-[11px] text-white/60 max-w-lg text-center leading-relaxed">{results[expandedIdx].description}</p>
             )}
+            {expandedIdx < results.length - 1 && (
+              <button
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-white/60 hover:text-white cursor-pointer z-10"
+                onClick={(e) => { e.stopPropagation(); handleExpandNav(1); }}
+              >
+                <ChevronRight size={36} />
+              </button>
+            )}
+
+            <div className="flex items-start gap-6 max-h-[90vh] max-w-[90vw] px-12" onClick={(e) => e.stopPropagation()}>
+              {/* Image */}
+              <div className="shrink-0 flex flex-col items-center">
+                <img
+                  src={`data:image/png;base64,${expImg.b64}`}
+                  alt={expImg.description || "Reference"}
+                  className="max-h-[75vh] max-w-[55vw] object-contain rounded"
+                  onContextMenu={(e) => { e.preventDefault(); handleCopyImage(expandedIdx); }}
+                />
+              </div>
+
+              {/* Details panel to the right */}
+              <div className="flex flex-col gap-4 min-w-[220px] max-w-[300px] py-2">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider font-semibold mb-1" style={{ color: "rgba(255,255,255,0.4)" }}>Image Details</p>
+                  <p className="text-[12px] font-medium" style={{ color: "rgba(255,255,255,0.9)" }}>
+                    {expandedIdx + 1} of {results.length}
+                  </p>
+                  <p className="text-[11px] mt-1" style={{ color: "rgba(255,255,255,0.5)" }}>
+                    {expImg.width} × {expImg.height}
+                  </p>
+                </div>
+
+                {expImg.description && (
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider font-semibold mb-1" style={{ color: "rgba(255,255,255,0.4)" }}>Description</p>
+                    <p className="text-[11px] leading-relaxed" style={{ color: "rgba(255,255,255,0.7)" }}>{expImg.description}</p>
+                  </div>
+                )}
+
+                {expImg.relevance && (
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider font-semibold mb-1" style={{ color: "rgba(255,255,255,0.4)" }}>Relevance</p>
+                    <p className="text-[11px] leading-relaxed" style={{ color: "rgba(255,255,255,0.7)" }}>{expImg.relevance}</p>
+                  </div>
+                )}
+
+                {expImg.url && (
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider font-semibold mb-1" style={{ color: "rgba(255,255,255,0.4)" }}>Source</p>
+                    <p className="text-[10px] break-all leading-relaxed" style={{ color: "rgba(255,255,255,0.4)" }}>{expImg.url}</p>
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div className="flex flex-wrap gap-1.5 pt-2" style={{ borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+                  <button
+                    onClick={() => handleCopyImage(expandedIdx)}
+                    className="text-[10px] px-2 py-1 rounded cursor-pointer flex items-center gap-1"
+                    style={{ background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.8)", border: "1px solid rgba(255,255,255,0.15)" }}
+                  >
+                    <Copy size={10} /> Copy
+                  </button>
+                  <button
+                    onClick={() => {
+                      const link = document.createElement("a");
+                      link.href = `data:image/png;base64,${expImg.b64}`;
+                      link.download = `ref_${Date.now()}.png`;
+                      link.click();
+                    }}
+                    className="text-[10px] px-2 py-1 rounded cursor-pointer flex items-center gap-1"
+                    style={{ background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.8)", border: "1px solid rgba(255,255,255,0.15)" }}
+                  >
+                    <Download size={10} /> Save
+                  </button>
+                  {onSendToArtboard && (
+                    <button
+                      onClick={() => {
+                        onSendToArtboard([expImg]);
+                        addToast("Sent to Art Table", "success");
+                      }}
+                      className="text-[10px] px-2 py-1 rounded cursor-pointer flex items-center gap-1"
+                      style={{ background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.8)", border: "1px solid rgba(255,255,255,0.15)" }}
+                    >
+                      <Send size={10} /> Art Table
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleAddToLibrary(expandedIdx)}
+                    className="text-[10px] px-2 py-1 rounded cursor-pointer flex items-center gap-1"
+                    style={{
+                      background: libraryAdded.has(expandedIdx) ? "rgba(250,204,21,0.12)" : "rgba(255,255,255,0.08)",
+                      color: libraryAdded.has(expandedIdx) ? "#facc15" : "rgba(255,255,255,0.8)",
+                      border: `1px solid ${libraryAdded.has(expandedIdx) ? "rgba(250,204,21,0.25)" : "rgba(255,255,255,0.15)"}`,
+                    }}
+                  >
+                    {libraryAdded.has(expandedIdx) ? <Star size={10} fill="#facc15" /> : <Plus size={10} />}
+                    {libraryAdded.has(expandedIdx) ? "Added" : "Library"}
+                  </button>
+                  <button
+                    onClick={() => { removeResult(expandedIdx); setExpandedIdx(null); }}
+                    className="text-[10px] px-2 py-1 rounded cursor-pointer flex items-center gap-1"
+                    style={{ background: "rgba(239,68,68,0.08)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.2)" }}
+                  >
+                    <Trash2 size={10} /> Remove
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── Create Library Dialog ── */}
       {showLibraryDialog && (

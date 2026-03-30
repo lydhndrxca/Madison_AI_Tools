@@ -889,7 +889,7 @@ export function ImageViewer({
               }} />
             )}
             {naturalSize.w > 0 && (
-              <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded text-[10px] font-mono z-10 pointer-events-none"
+              <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded text-[10px] font-mono z-10 pointer-events-none"
                 style={{ background: "rgba(0,0,0,0.7)", color: "var(--color-text-muted)" }}>
                 {naturalSize.w} x {naturalSize.h}{" · "}{naturalSize.w > naturalSize.h ? "Landscape" : naturalSize.w < naturalSize.h ? "Portrait" : "Square"}
               </div>

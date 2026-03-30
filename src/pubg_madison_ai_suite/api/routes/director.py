@@ -149,6 +149,8 @@ def _stream_chat(api_key: str, model: str, system_prompt: str, contents: list[di
                     payload = line[6:]
                     try:
                         chunk = json.loads(payload)
+                        if "usageMetadata" in chunk:
+                            core._extract_usage_and_track(chunk, model, "art_director")
                         for cand in chunk.get("candidates", []):
                             for part in cand.get("content", {}).get("parts", []):
                                 if "text" in part:
@@ -217,7 +219,7 @@ async def generate_persona(req: PersonaGenRequest):
         f'"dislikes": "Things they avoid or react against in design (bullet points)"}}'
     )
 
-    result = core.rest_generate_text(api_key, "gemini-2.0-flash", prompt, timeout=30)
+    result = core.rest_generate_text(api_key, "gemini-2.0-flash", prompt, timeout=30, cost_category="art_director")
     if not result:
         raise HTTPException(500, "Failed to generate persona")
 

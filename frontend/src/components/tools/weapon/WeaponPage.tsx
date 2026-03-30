@@ -51,10 +51,11 @@ function useBusySet() {
 }
 
 interface WeaponPageProps {
+  instanceId?: number;
   active?: boolean;
 }
 
-export function WeaponPage({ active = true }: WeaponPageProps) {
+export function WeaponPage({ instanceId: _instanceId, active = true }: WeaponPageProps) {
   const [activeTab, setActiveTab] = useState("Main Stage");
   const busy = useBusySet();
   const [genText, setGenText] = useState<Record<string, string>>({});
