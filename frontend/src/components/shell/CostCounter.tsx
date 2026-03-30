@@ -43,7 +43,7 @@ export function CostCounter() {
           border: "1px solid transparent",
           color: "var(--color-text-secondary)",
         }}
-        title="Estimated API costs this session — click for breakdown, right-click to reset"
+        title="API costs this session — click for details, right-click to reset"
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <line x1="12" y1="1" x2="12" y2="23" />

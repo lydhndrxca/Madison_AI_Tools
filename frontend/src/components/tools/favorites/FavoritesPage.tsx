@@ -215,7 +215,7 @@ export function FavoritesPage() {
               onClick={handleExportAll}
               className="flex items-center gap-1 px-2.5 py-1 text-[11px] rounded cursor-pointer font-medium"
               style={{ background: "rgba(42,90,42,0.3)", color: "#4ec9a0", border: "1px solid rgba(74,138,74,0.5)" }}
-              title="Export all visible favorites as PNG files"
+              title="Export all as PNG"
             >
               <Download className="h-3 w-3" /> Export All
             </button>

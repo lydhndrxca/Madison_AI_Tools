@@ -8,12 +8,15 @@ import { ArtboardCanvas } from "@/components/shared/ArtboardCanvas";
 import type { TabDef } from "@/components/shared/TabBar";
 import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
+import { useModels, type ModelInfo } from "@/hooks/ModelsContext";
 import { useFavorites } from "@/hooks/FavoritesContext";
 import { useSessionRegister } from "@/hooks/SessionContext";
 import { useClipboardPaste } from "@/hooks/useClipboardPaste";
 import { XmlModal } from "@/components/shared/XmlModal";
 import { ArtDirectorWidget } from "@/components/shared/ArtDirectorWidget";
 import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
+import { ThreeDGenSidebar } from "@/components/shared/ThreeDGenSidebar";
+import type { ViewImage } from "@/components/shared/ThreeDGenSidebar";
 import { useArtDirector } from "@/hooks/ArtDirectorContext";
 import { DeepSearchPanel } from "@/components/shared/DeepSearchPanel";
 import type { SearchResult } from "@/components/shared/DeepSearchPanel";
@@ -38,10 +41,10 @@ const BUILTIN_TABS: TabDef[] = [
   { id: "styleLib", label: "Style Library", group: "library" },
   { id: "userLib", label: "User Library", group: "library" },
   { id: "artboard", label: "Art Table", group: "artboard" },
-  { id: "deepSearch", label: "Deep Search", group: "search" },
   { id: "refA", label: "Ref A", group: "refs" },
   { id: "refB", label: "Ref B", group: "refs" },
   { id: "refC", label: "Ref C", group: "refs" },
+  { id: "deepSearch", label: "Deep Search", group: "search" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -96,10 +99,10 @@ const TAKE_OPTIONS = [
 // Layout system
 // ---------------------------------------------------------------------------
 
-type SectionId = "generate" | "refImage" | "buttonLayout" | "scrollbarParts" | "charGen" | "styleFusion" | "saveOptions";
+type SectionId = "generate" | "refImage" | "buttonLayout" | "scrollbarParts" | "charGen" | "styleFusion" | "saveOptions" | "threeDGen";
 
 const DEFAULT_SECTION_ORDER: SectionId[] = [
-  "generate", "refImage", "buttonLayout", "scrollbarParts", "charGen", "styleFusion", "saveOptions",
+  "generate", "refImage", "buttonLayout", "scrollbarParts", "charGen", "styleFusion", "threeDGen", "saveOptions",
 ];
 
 const SECTION_LABELS: Record<SectionId, string> = {
@@ -109,6 +112,7 @@ const SECTION_LABELS: Record<SectionId, string> = {
   scrollbarParts: "Scrollbar Components",
   charGen: "Character Generation",
   styleFusion: "Style Fusion",
+  threeDGen: "3D Gen AI",
   saveOptions: "Save Options",
 };
 
@@ -119,15 +123,15 @@ const SECTION_TIPS: Record<SectionId, string> = {
   scrollbarParts: "Select which scrollbar pieces to generate.",
   charGen: "Choose characters/digits to generate as styled glyphs.",
   styleFusion: "Blend two style references for a unique look.",
+  threeDGen: "Generate 3D models from your views using Meshy and Hitem3D.",
   saveOptions: "Export, clear, and manage generated elements.",
 };
 
 const NON_COLLAPSIBLE: Set<SectionId> = new Set(["generate"]);
-const TOGGLEABLE_SECTIONS: Set<SectionId> = new Set(["buttonLayout", "scrollbarParts", "charGen", "styleFusion"]);
+const TOGGLEABLE_SECTIONS: Set<SectionId> = new Set(["buttonLayout", "scrollbarParts", "charGen", "styleFusion", "threeDGen"]);
 
-interface ModelInfo { id: string; label: string; resolution: string; time_estimate: string; multimodal: boolean }
 
-interface LayoutState { order: SectionId[]; collapsed: Partial<Record<SectionId, boolean>> }
+interface LayoutState { order: SectionId[]; collapsed: Partial<Record<SectionId, boolean>>; hidden?: SectionId[] }
 
 function layoutStorageKeyFor(instanceId: number) {
   return `madison-uilab-layout${instanceId ? `-${instanceId}` : ""}`;
@@ -141,10 +145,10 @@ function loadDefaultLayout(key?: string): LayoutState {
       const allIds = new Set<SectionId>(DEFAULT_SECTION_ORDER);
       const order = parsed.order.filter((id) => allIds.has(id));
       for (const id of DEFAULT_SECTION_ORDER) { if (!order.includes(id)) order.push(id); }
-      return { order, collapsed: parsed.collapsed ?? {} };
+      return { order, collapsed: parsed.collapsed ?? {}, hidden: parsed.hidden };
     }
   } catch { /* */ }
-  return { order: [...DEFAULT_SECTION_ORDER], collapsed: { refImage: true, styleFusion: true, saveOptions: true } };
+  return { order: [...DEFAULT_SECTION_ORDER], collapsed: { refImage: true, styleFusion: true, threeDGen: true, saveOptions: true } };
 }
 
 function useBusySet() {
@@ -195,8 +199,8 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
   const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
   const { setCurrentImage, setAttributesContext, setOnApplyFeedback } = useArtDirector();
   const [genCount, setGenCount] = useState(1);
+  const { models, defaultModelId } = useModels();
   const [modelId, setModelId] = useState("");
-  const [models, setModels] = useState<ModelInfo[]>([]);
 
   // Element configuration
   const [outputSize, setOutputSize] = useState("");
@@ -236,7 +240,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
 
   // Section ON/OFF
   const [sectionEnabled, setSectionEnabled] = useState<Partial<Record<SectionId, boolean>>>({
-    buttonLayout: true, scrollbarParts: true, charGen: true,
+    buttonLayout: true, scrollbarParts: true, charGen: true, threeDGen: true,
   });
   const isSectionEnabled = useCallback((id: SectionId) => {
     if (!TOGGLEABLE_SECTIONS.has(id)) return true;
@@ -292,18 +296,15 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
   const handleSetDefaultLayout = useCallback(() => {
     const collapsed: Partial<Record<SectionId, boolean>> = {};
     for (const id of layout.order) { if (NON_COLLAPSIBLE.has(id)) continue; collapsed[id] = isSectionCollapsed(id); }
-    localStorage.setItem(layoutStorageKey, JSON.stringify({ order: layout.order, collapsed }));
+    localStorage.setItem(layoutStorageKey, JSON.stringify({ order: layout.order, collapsed, hidden: layout.hidden }));
     addToast("Layout saved as default", "success");
-  }, [layout.order, isSectionCollapsed, addToast, layoutStorageKey]);
+  }, [layout.order, layout.hidden, isSectionCollapsed, addToast, layoutStorageKey]);
 
   const refCounter = useRef(0);
 
   useEffect(() => {
-    apiFetch<{ models: ModelInfo[]; current: string }>("/system/models").then((r) => {
-      setModels(r.models.filter((m) => m.multimodal));
-      if (!modelId) setModelId(r.current);
-    }).catch(() => {});
-  }, []);
+    if (defaultModelId && !modelId) setModelId(defaultModelId);
+  }, [defaultModelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Is a section relevant to current element type?
   const isSectionRelevant = useCallback((id: SectionId): boolean => {
@@ -344,6 +345,32 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
   }, []);
 
   const isRefTab = activeTab.startsWith("ref");
+
+  const getViewImagesForThreeD = useCallback((): ViewImage[] => {
+    const parseDataUrl = (dataUrl: string): { base64: string; mimeType: string } | null => {
+      const comma = dataUrl.indexOf(",");
+      if (comma < 0) return null;
+      const header = dataUrl.slice(0, comma);
+      const base64 = dataUrl.slice(comma + 1);
+      const mimeType = header.match(/^data:([^;]+)/)?.[1] ?? "image/png";
+      return { base64, mimeType };
+    };
+    const push = (viewKey: string, label: string, src: string | null | undefined, acc: ViewImage[]) => {
+      if (!src) return;
+      const p = parseDataUrl(src);
+      if (!p) return;
+      acc.push({ viewKey, label, base64: p.base64, mimeType: p.mimeType });
+    };
+    const out: ViewImage[] = [];
+    push("front", "Mainstage", mainstageSrc, out);
+    push("back", "Ref A", refImages.refA, out);
+    push("side", "Ref B", refImages.refB, out);
+    for (const tab of tabs) {
+      if (tab.group !== "refs" || tab.id === "refA" || tab.id === "refB") continue;
+      push(tab.id, tab.label, refImages[tab.id], out);
+    }
+    return out;
+  }, [mainstageSrc, refImages, tabs]);
 
   // Clipboard paste for ref tabs
   const clipboardPasteCb = useCallback((dataUrl: string) => {
@@ -542,6 +569,21 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
     if (!isSectionEnabled(sectionId)) return "";
     return getDefaultSectionPrompt(sectionId);
   }, [isSectionEnabled, getDefaultSectionPrompt]);
+
+  // --- Enhance handler ---
+  const handleEnhancePrompt = useCallback(async () => {
+    if (!prompt.trim()) { addToast("Enter a description to enhance first", "info"); return; }
+    busy.start("enhance");
+    try {
+      const resp = await apiFetch<{ prompt?: string; error?: string }>("/uilab/enhance", {
+        method: "POST",
+        body: JSON.stringify({ prompt, element_type: elementType, button_shape: buttonShape, border_style: borderStyle, text_size: textSize }),
+      });
+      if (resp.error) { addToast(resp.error, "error"); }
+      else if (resp.prompt) { setPrompt(resp.prompt); addToast("Description enhanced", "success"); }
+    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
+    busy.end("enhance");
+  }, [prompt, elementType, buttonShape, borderStyle, textSize, addToast, busy]);
 
   // --- Generation handlers ---
   const handleGenerate = useCallback(async () => {
@@ -1014,6 +1056,18 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
     return () => window.removeEventListener("voice-command", handler);
   }, [active]);
 
+  useEffect(() => {
+    if (!active) return;
+    const handler = (e: Event) => {
+      const tabId = (e as CustomEvent).detail?.tabId;
+      if (typeof tabId === "string" && tabs.some((t) => t.id === tabId)) {
+        setActiveTab(tabId);
+      }
+    };
+    window.addEventListener("switch-tab", handler);
+    return () => window.removeEventListener("switch-tab", handler);
+  }, [active, tabs]);
+
   // --- Gallery restore listener ---
   useEffect(() => {
     if (!active) return;
@@ -1082,6 +1136,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
           disabled={busy.any}
           data-voice-target="uiPrompt"
         />
+        <Button size="sm" className="w-full" generating={busy.is("enhance")} generatingText="Enhancing..." onClick={handleEnhancePrompt} title="Use AI to enrich and expand your element description">Enhance Description</Button>
 
         {/* Row 3: Output size + Color */}
         <div className="flex items-end gap-2">
@@ -1094,7 +1149,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
               value={outputSize}
               onChange={(e) => setOutputSize(e.target.value)}
               disabled={busy.any}
-              title="Custom output size in WxH format. Leave blank for 1024x1024."
+              title="Output size (WxH), blank for 1024x1024"
             />
           </div>
           <div className="flex items-center gap-3 shrink-0 pb-0.5">
@@ -1118,7 +1173,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
               style={{ ...inputStyle, maxWidth: "100%" }}
               value={styleLibraryFolder}
               onChange={(e) => setStyleLibraryFolder(e.target.value)}
-              title="Pick a style folder to guide the visual style of generated elements."
+              title="Style folder for visual guidance"
             >
               <option value="">Default (Gemini)</option>
               {styleLibraryFolders.map((f) => (
@@ -1150,7 +1205,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
             style={{ ...inputStyle, maxWidth: "100%" }}
             value={modelId}
             onChange={(e) => setModelId(e.target.value)}
-            title="Select the AI model for image generation"
+            title="AI model for generation"
           >
             {models.map((m) => (
               <option key={m.id} value={m.id}>{m.label} — {m.resolution}</option>
@@ -1169,7 +1224,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
               value={cellSize}
               onChange={(e) => setCellSize(e.target.value)}
               disabled={busy.any}
-              title="Per-cell dimensions in grid mode. Leave blank for 256x256."
+              title="Grid cell size (WxH), blank for 256x256"
             />
           </div>
         )}
@@ -1184,7 +1239,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
             generatingText="Generating..."
             onClick={() => handleGenerate()}
             disabled={busy.is("gen")}
-            title="Generate UI elements based on all settings"
+            title="Generate from current settings"
           >
             Generate Elements
           </Button>
@@ -1332,7 +1387,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
           value={fontChars}
           onChange={(e) => setFontChars(e.target.value)}
           disabled={busy.any}
-          title="Type specific characters to generate, or leave blank for the full set"
+          title="Specific characters, or blank for full set"
         />
       </div>
       <p className="text-[9px]" style={{ color: "var(--color-text-muted)" }}>Each character generates as a separate square image.</p>
@@ -1351,9 +1406,9 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
   const renderSaveSection = () => (
     <div className="space-y-1.5">
       <div className="grid grid-cols-3 gap-1.5">
-        <Button size="sm" className="w-full" onClick={() => setXmlOpen(true)} title="Show XML representation">Show XML</Button>
-        <Button size="sm" className="w-full" onClick={handleClearGallery} title="Clear all generated results from the gallery">Clear Gallery</Button>
-        <Button size="sm" className="w-full" onClick={handleReset} title="Reset all settings and clear session">Clear All</Button>
+        <Button size="sm" className="w-full" onClick={() => setXmlOpen(true)} title="View UI Lab data as XML">Show XML</Button>
+        <Button size="sm" className="w-full" onClick={handleClearGallery} title="Clear gallery">Clear Gallery</Button>
+        <Button size="sm" className="w-full" onClick={handleReset} title="Clear all fields and images">Clear All</Button>
       </div>
     </div>
   );
@@ -2016,6 +2071,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
         style={{ borderRight: "1px solid var(--color-border)" }}
       >
         {layout.order.map((sectionId) => {
+          if (layout.hidden?.includes(sectionId)) return null;
           if (!isSectionRelevant(sectionId)) return null;
 
           const collapsed = isSectionCollapsed(sectionId);
@@ -2164,11 +2220,13 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
           onClick={handleSetDefaultLayout}
           className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded text-[10px] font-medium cursor-pointer transition-colors"
           style={{ background: "transparent", color: "var(--color-text-muted)", border: "1px dashed var(--color-border)" }}
-          title="Save current panel order as default"
+          title="Save panel layout as default"
         >
           <Save className="h-3 w-3" />
           Set Active Layout as Default
         </button>
+
+        <ThreeDGenSidebar getViewImages={getViewImagesForThreeD} toolLabel="UI" />
       </div>
 
       {/* RIGHT PANEL */}
@@ -2180,6 +2238,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
               tabs={tabs}
               active={activeTab}
               onSelect={setActiveTab}
+              onReorder={setTabs}
               onAddRef={handleAddRef}
               onRemoveTab={handleRemoveRef}
               noBorder
@@ -2258,7 +2317,7 @@ export function UILabPage({ instanceId = 0, active = true }: UILabPageProps) {
             />
           )}
           {activeTab === "artboard" && <ArtboardCanvas />}
-          {activeTab === "deepSearch" && <DeepSearchPanel onSendToArtboard={handleSendSearchToArtboard} />}
+          {activeTab === "deepSearch" && <DeepSearchPanel onSendToArtboard={handleSendSearchToArtboard} isActivePage={active} />}
           {activeTab === "styleLib" && renderStyleLibraryTab()}
           {activeTab === "userLib" && renderUserLibraryTab()}
           {isRefTab && (

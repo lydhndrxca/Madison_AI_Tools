@@ -151,7 +151,7 @@ export function TagPicker({
             disabled={disabled}
             className="px-1.5 py-0.5 text-[10px] rounded-[var(--radius-sm)] cursor-pointer transition-colors border disabled:opacity-40 disabled:pointer-events-none"
             style={{ background: "transparent", color: "var(--color-text-muted)", borderColor: "var(--color-border)" }}
-            title="Create your own custom tag with a prompt that describes the look you want"
+            title="Create custom tag"
           >
             +
           </button>

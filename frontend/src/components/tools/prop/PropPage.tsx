@@ -7,6 +7,7 @@ import { ArtboardCanvas } from "@/components/shared/ArtboardCanvas";
 import type { TabDef } from "@/components/shared/TabBar";
 import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
+import { useModels, type ModelInfo } from "@/hooks/ModelsContext";
 import { useFavorites } from "@/hooks/FavoritesContext";
 import { useSessionRegister } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
@@ -15,6 +16,8 @@ import type { HistoryEntry, ImageRecord, HistorySettings } from "@/lib/imageHist
 import { XmlModal } from "@/components/shared/XmlModal";
 import { ArtDirectorWidget } from "@/components/shared/ArtDirectorWidget";
 import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
+import { ThreeDGenSidebar } from "@/components/shared/ThreeDGenSidebar";
+import type { ViewImage } from "@/components/shared/ThreeDGenSidebar";
 import { useArtDirector } from "@/hooks/ArtDirectorContext";
 import { DeepSearchPanel } from "@/components/shared/DeepSearchPanel";
 import type { SearchResult } from "@/components/shared/DeepSearchPanel";
@@ -42,15 +45,18 @@ const BUILTIN_TABS: TabDef[] = [
   { id: "side", label: "Side", group: "views", prompt: "Side elevation view" },
   { id: "top", label: "Top", group: "views", prompt: "Top-down plan view" },
   { id: "artboard", label: "Art Table", group: "artboard" },
-  { id: "deepSearch", label: "Deep Search", group: "search" },
   { id: "refA", label: "Ref A", group: "refs" },
   { id: "refB", label: "Ref B", group: "refs" },
   { id: "refC", label: "Ref C", group: "refs" },
+  { id: "deepSearch", label: "Deep Search", group: "search" },
 ];
 
 const VIEW_TYPE_MAP: Record<string, string> = {
   main: "main", "3/4": "three_quarter", front: "front", back: "back", side: "side", top: "top",
 };
+
+/** Tab ids that hold multiview / hero images for 3D generation (gallery keys). */
+const THREE_D_VIEW_TAB_IDS = ["main", "3/4", "front", "back", "side", "top"] as const;
 
 // ---------------------------------------------------------------------------
 // Prop domain data (mirrors backend)
@@ -143,10 +149,10 @@ function preservationToConstraints(pres: PreservationLockState): string {
 // Layout system
 // ---------------------------------------------------------------------------
 
-type SectionId = "generate" | "identity" | "propDescription" | "attributes" | "styleFusion" | "preservation" | "upscaleRestore" | "multiview" | "saveOptions";
+type SectionId = "generate" | "identity" | "propDescription" | "attributes" | "styleFusion" | "preservation" | "upscaleRestore" | "multiview" | "saveOptions" | "threeDGen";
 
 const DEFAULT_SECTION_ORDER: SectionId[] = [
-  "generate", "identity", "propDescription", "attributes", "styleFusion", "preservation", "upscaleRestore", "multiview", "saveOptions",
+  "generate", "identity", "propDescription", "attributes", "styleFusion", "preservation", "upscaleRestore", "multiview", "threeDGen", "saveOptions",
 ];
 
 const SECTION_LABELS: Record<SectionId, string> = {
@@ -158,6 +164,7 @@ const SECTION_LABELS: Record<SectionId, string> = {
   preservation: "Preservation Lock",
   upscaleRestore: "AI Upscale & Restore",
   multiview: "Multi-View Generation",
+  threeDGen: "3D Gen AI",
   saveOptions: "Save Options",
 };
 
@@ -170,15 +177,15 @@ const SECTION_TIPS: Record<SectionId, string> = {
   preservation: "Lock specific traits so the AI keeps them when regenerating.",
   upscaleRestore: "Make images bigger and sharper (Upscale) or fix AI artifacts (Restore).",
   multiview: "Generate consistent front, back, side, and top views of your prop.",
+  threeDGen: "Generate 3D models from your views using Meshy and Hitem3D.",
   saveOptions: "Save images, send to Photoshop, export XML, or clear your session.",
 };
 
 const NON_COLLAPSIBLE: Set<SectionId> = new Set(["generate"]);
-const TOGGLEABLE_SECTIONS: Set<SectionId> = new Set(["identity", "propDescription", "attributes", "styleFusion", "preservation"]);
+const TOGGLEABLE_SECTIONS: Set<SectionId> = new Set(["identity", "propDescription", "attributes", "styleFusion", "preservation", "threeDGen"]);
 
-interface ModelInfo { id: string; label: string; resolution: string; time_estimate: string; multimodal: boolean }
 
-interface LayoutState { order: SectionId[]; collapsed: Partial<Record<SectionId, boolean>> }
+interface LayoutState { order: SectionId[]; collapsed: Partial<Record<SectionId, boolean>>; hidden?: SectionId[] }
 
 function layoutStorageKeyFor(instanceId: number) {
   return `madison-prop-layout${instanceId ? `-${instanceId}` : ""}`;
@@ -192,10 +199,10 @@ function loadDefaultLayout(key?: string): LayoutState {
       const allIds = new Set<SectionId>(DEFAULT_SECTION_ORDER);
       const order = parsed.order.filter((id) => allIds.has(id));
       for (const id of DEFAULT_SECTION_ORDER) { if (!order.includes(id)) order.push(id); }
-      return { order, collapsed: parsed.collapsed ?? {} };
+      return { order, collapsed: parsed.collapsed ?? {}, hidden: parsed.hidden };
     }
   } catch { /* */ }
-  return { order: [...DEFAULT_SECTION_ORDER], collapsed: { styleFusion: true, preservation: true, upscaleRestore: true, multiview: true, saveOptions: true } };
+  return { order: [...DEFAULT_SECTION_ORDER], collapsed: { styleFusion: true, preservation: true, upscaleRestore: true, multiview: true, threeDGen: true, saveOptions: true } };
 }
 
 function useBusySet() {
@@ -274,7 +281,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
   const [modelId, setModelId] = useState("");
   const [editModel, setEditModel] = useState("");
   const [multiviewModel, setMultiviewModel] = useState("");
-  const [models, setModels] = useState<ModelInfo[]>([]);
+  const { models, defaultModelId } = useModels();
   const { addToast } = useToastContext();
   const { addFavorite, removeFavorite, isFavorited, getFavoriteId } = useFavorites();
   const artboard = useArtboard();
@@ -300,7 +307,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
   const urFileRef = useRef<HTMLInputElement>(null);
 
   // Section ON/OFF
-  const [sectionEnabled, setSectionEnabled] = useState<Partial<Record<SectionId, boolean>>>({ identity: true, propDescription: true, attributes: true });
+  const [sectionEnabled, setSectionEnabled] = useState<Partial<Record<SectionId, boolean>>>({ identity: true, propDescription: true, attributes: true, threeDGen: true });
   const isSectionEnabled = useCallback((id: SectionId) => {
     if (!TOGGLEABLE_SECTIONS.has(id)) return true;
     return sectionEnabled[id] === true;
@@ -343,19 +350,19 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
   const handleSetDefaultLayout = useCallback(() => {
     const collapsed: Partial<Record<SectionId, boolean>> = {};
     for (const id of layout.order) { if (NON_COLLAPSIBLE.has(id)) continue; collapsed[id] = isSectionCollapsed(id); }
-    localStorage.setItem(layoutStorageKey, JSON.stringify({ order: layout.order, collapsed }));
+    localStorage.setItem(layoutStorageKey, JSON.stringify({ order: layout.order, collapsed, hidden: layout.hidden }));
     addToast("Layout saved as default", "success");
-  }, [layout.order, isSectionCollapsed, addToast, layoutStorageKey]);
+  }, [layout.order, layout.hidden, isSectionCollapsed, addToast, layoutStorageKey]);
 
   const [xmlOpen, setXmlOpen] = useState(false);
 
   const refCounter = useRef(0);
 
   useEffect(() => {
-    apiFetch<{ models: ModelInfo[]; current: string }>("/system/models").then((r) => {
-      setModels(r.models.filter((m) => m.multimodal));
-      if (!modelId) setModelId(r.current);
-    }).catch(() => {});
+    if (defaultModelId && !modelId) setModelId(defaultModelId);
+  }, [defaultModelId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
     apiFetch<{ name: string; guidance_text: string }[]>("/styles/folders?category=general").then((folders) => {
       setStyleLibraryFolders(folders);
     }).catch(() => {});
@@ -420,6 +427,21 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
   }, [gallery, imageIdx]);
 
   const getMainImageB64 = useCallback(() => getImageB64("main"), [getImageB64]);
+
+  const getViewImagesForThreeD = useCallback((): ViewImage[] => {
+    const out: ViewImage[] = [];
+    for (const tabId of THREE_D_VIEW_TAB_IDS) {
+      const imgs = gallery[tabId] || [];
+      const src = imgs[imageIdx[tabId] ?? 0];
+      if (!src) continue;
+      const m = /^data:([^;]+);base64,(.+)$/.exec(src);
+      if (!m) continue;
+      const viewKey = VIEW_TYPE_MAP[tabId] ?? tabId;
+      const label = BUILTIN_TABS.find((t) => t.id === tabId)?.label ?? tabId;
+      out.push({ viewKey, label, base64: m[2], mimeType: m[1] });
+    }
+    return out;
+  }, [gallery, imageIdx]);
 
   const handleSendSearchToArtboard = useCallback((images: SearchResult[]) => {
     const existing = artboard.items;
@@ -602,9 +624,6 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
     } catch (e) { addToast(String(e), "error"); }
     busy.end("gen");
   }, [activeTab, genCount, buildRequestBody, addToast, setTabImage, appendToGallery, busy]);
-
-  // Quick generate (main stage)
-  const handleQuickGenerate = useCallback(() => handleGenerate("main"), [handleGenerate]);
 
   // Generate all views
   const handleGenerateAllViews = useCallback(async () => {
@@ -1098,6 +1117,18 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
     return () => window.removeEventListener("voice-command", handler);
   }, [active]);
 
+  useEffect(() => {
+    if (!active) return;
+    const handler = (e: Event) => {
+      const tabId = (e as CustomEvent).detail?.tabId;
+      if (typeof tabId === "string" && tabs.some((t) => t.id === tabId)) {
+        setActiveTab(tabId);
+      }
+    };
+    window.addEventListener("switch-tab", handler);
+    return () => window.removeEventListener("switch-tab", handler);
+  }, [active, tabs]);
+
   // --- Gallery restore listener ---
   useEffect(() => {
     if (!active) return;
@@ -1189,7 +1220,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
         generatingText="Extracting..."
         onClick={handleExtractAttributes}
         disabled={textBusy}
-        title="Analyze the current image and description to populate identity/attributes"
+        title="Auto-fill fields from current image"
       >
         Extract Attributes
       </Button>
@@ -1199,7 +1230,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
           style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
           value={extractMode}
           onChange={(e) => setExtractMode(e.target.value as "inspiration" | "recreate")}
-          title="Controls how the source image is used when generating."
+          title="How strictly AI follows source image"
         >
           <option value="inspiration">Generate from description only</option>
           <option value="recreate">Match source image exactly</option>
@@ -1233,7 +1264,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
           style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)", maxWidth: "100%" }}
           value={styleLibraryFolder}
           onChange={(e) => setStyleLibraryFolder(e.target.value)}
-          title="Pick a style folder to guide the look of your generated images."
+          title="Style folder for visual guidance"
         >
           <option value="">Default (Gemini)</option>
           {styleLibraryFolders.map((f) => (
@@ -1249,7 +1280,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
           generatingText="Enhancing..."
           onClick={handleEnhanceDescription}
           disabled={textBusy}
-          title="Enhance existing fields with richer detail"
+          title="Add detail to existing fields"
         >
           Enhance
         </Button>
@@ -1260,7 +1291,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
           generatingText="Randomizing..."
           onClick={handleRandomizeFull}
           disabled={textBusy}
-          title="Generate a random prop with all attributes filled in"
+          title="Fill all fields with random attributes"
         >
           Randomize
         </Button>
@@ -1274,7 +1305,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
           generatingText="Generating..."
           onClick={generationMode === "grid" ? handleGridGenerate : () => handleGenerate()}
           disabled={busy.is("gen")}
-          title="Generate a new prop image based on all enabled panels"
+          title="Generate image from current settings"
         >
           Generate Prop Image
         </Button>
@@ -1287,7 +1318,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
             style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)", maxWidth: "100%" }}
             value={modelId}
             onChange={(e) => setModelId(e.target.value)}
-            title="Select the AI model for image generation"
+            title="AI model for generation"
           >
             {models.map((m) => (
               <option key={m.id} value={m.id}>{m.label} — {m.resolution}</option>
@@ -1339,7 +1370,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
 
   // --- Description section ---
   const renderDescriptionSection = () => (
-    <div>
+    <div className="space-y-1.5">
       <Textarea
         value={description}
         onChange={(e) => setDescription(e.target.value)}
@@ -1348,6 +1379,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
         disabled={textBusy}
         data-voice-target="propDescription"
       />
+      <Button size="sm" className="w-full" generating={busy.is("enhance")} generatingText="Enhancing..." onClick={handleEnhanceDescription} title="Use AI to enrich and expand your prop description and all attributes">Enhance Description</Button>
     </div>
   );
 
@@ -1409,14 +1441,14 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
           onClick={() => setPreservation({ ...EMPTY_PRESERVATION, preserves: DEFAULT_PRESERVES.map((p) => ({ ...p })), negatives: DEFAULT_NEGATIVES.map((n) => ({ ...n })) })}
           className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
           style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-          title="Reset all preservation rules back to their defaults"
+          title="Reset to defaults"
         >Reset</button>
         <span className="text-[10px]" style={{ color: preservation.enabled ? "var(--color-text-primary)" : "var(--color-text-muted)" }}>
           {preservation.enabled ? "Active — the AI will try to keep these traits and avoid the negatives" : "Off — no constraints, the AI has full creative freedom"}
         </span>
       </div>
       <div>
-        <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "var(--color-text-secondary)" }} title="Check the things you want the AI to keep the same when regenerating">Preserve</p>
+        <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "var(--color-text-secondary)" }} title="Elements to preserve across generations">Preserve</p>
         <div className="space-y-1">
           {preservation.preserves.map((p, i) => (
             <div key={p.key} className="flex items-center gap-2 group">
@@ -1438,7 +1470,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
                 onClick={() => setPreservation((prev) => ({ ...prev, preserves: prev.preserves.filter((_, j) => j !== i) }))}
                 className="text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-pointer"
                 style={{ color: "var(--color-text-muted)", background: "transparent", border: "none" }}
-                title="Remove this preserve rule"
+                title="Remove rule"
               >✕</button>
             </div>
           ))}
@@ -1455,11 +1487,11 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
           }}
           className="mt-1.5 px-2 py-0.5 text-[10px] rounded cursor-pointer"
           style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-          title="Add a new rule telling the AI what to keep unchanged — e.g. Keep face, Keep hairstyle"
+          title="Add preserve rule"
         >+ Add Preserve</button>
       </div>
       <div>
-        <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "var(--color-text-secondary)" }} title="List things the AI should never include in the generated image">Negative Constraints (must avoid)</p>
+        <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "var(--color-text-secondary)" }} title="Elements AI must avoid">Negative Constraints (must avoid)</p>
         <div className="space-y-1">
           {preservation.negatives.map((n, i) => (
             <div key={n.id} className="flex items-center gap-2 group">
@@ -1489,7 +1521,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
                 onClick={() => setPreservation((prev) => ({ ...prev, negatives: prev.negatives.filter((_, j) => j !== i) }))}
                 className="text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-pointer"
                 style={{ color: "var(--color-text-muted)", background: "transparent", border: "none" }}
-                title="Remove this negative constraint"
+                title="Remove constraint"
               >✕</button>
             </div>
           ))}
@@ -1501,7 +1533,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
           }))}
           className="mt-1.5 px-2 py-0.5 text-[10px] rounded cursor-pointer"
           style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-          title="Add something the AI must avoid — e.g. No crown, No fantasy elements"
+          title="Add negative constraint"
         >+ Add Negative</button>
       </div>
     </div>
@@ -1554,7 +1586,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
         placeholder="Optional context — e.g. pixel art icons, game UI screenshots"
         value={urContext}
         onChange={(e) => setUrContext(e.target.value)}
-        title="Give the AI a hint about what kind of images these are for better results"
+        title="Describe what these reference images show"
       />
       {models.length > 0 && (
         <select
@@ -1562,7 +1594,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
           style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)", maxWidth: "100%" }}
           value={urModelId}
           onChange={(e) => setUrModelId(e.target.value)}
-          title="Choose which AI model to use for upscaling or restoring"
+          title="AI model for upscale/restore"
         >
           <option value="">Auto (best available)</option>
           {models.map((m) => (
@@ -1599,7 +1631,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
                   onClick={() => setUrImages((prev) => prev.filter((_, j) => j !== i))}
                   className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[10px] flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100"
                   style={{ background: "var(--color-error)", color: "#fff" }}
-                  title="Remove this image"
+                  title="Remove"
                 >×</button>
               </div>
             ))}
@@ -1626,7 +1658,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
             onClick={() => urFileRef.current?.click()}
             className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
             style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-            title="Add images from your computer"
+            title="Add images from disk"
           >+ Add Images</button>
           <button
             type="button"
@@ -1646,7 +1678,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
             }}
             className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
             style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-            title="Paste images from your clipboard"
+            title="Paste from clipboard"
           >Paste</button>
           {urImages.length > 0 && (
             <button
@@ -1654,7 +1686,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
               onClick={() => setUrImages([])}
               className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
               style={{ background: "var(--color-input-bg)", color: "var(--color-text-muted)", border: "1px solid var(--color-border)" }}
-              title="Remove all images"
+              title="Remove all"
             >Clear All</button>
           )}
         </div>
@@ -1680,7 +1712,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
         generating={busy.is("allViews")}
         generatingText="Generating views..."
         onClick={handleGenerateAllViews}
-        title="Generate 3/4, front, back, side, and top views from the main stage image"
+        title="Generate all character views"
       >Generate All Views</Button>
       <Button
         className="w-full"
@@ -1688,7 +1720,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
         generating={busy.is("gen")}
         generatingText="Generating..."
         onClick={handleGenerateSelectedView}
-        title="Generate only the currently selected view"
+        title="Generate current view only"
       >Generate Selected View</Button>
       {modelOptions.length > 0 && (
         <div>
@@ -1699,7 +1731,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
             value={multiviewModel || modelId}
             onChange={(e) => setMultiviewModel(e.target.value)}
             disabled={busy.is("allViews") || busy.is("gen")}
-            title="Model used for Generate All Views and Generate Selected View."
+            title="AI model for view generation"
           >
             {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
@@ -1713,15 +1745,15 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
   const renderSaveSection = () => (
     <div className="space-y-1.5">
       <div className="grid grid-cols-3 gap-1.5">
-        <Button size="sm" className="w-full" onClick={handleSendToPS} title="Send the current image to Photoshop">Send to PS</Button>
-        <Button size="sm" className="w-full" onClick={() => setXmlOpen(true)} title="Show the XML representation of this prop">Show XML</Button>
-        <Button size="sm" className="w-full" onClick={handleReset} title="Clear all prop data and images">Clear All</Button>
-        <Button size="sm" className="w-full col-span-3" onClick={handleSetDefaultLayout} title="Save current panel order and collapsed states as default">
+        <Button size="sm" className="w-full" onClick={handleSendToPS} title="Send to Photoshop">Send to PS</Button>
+        <Button size="sm" className="w-full" onClick={() => setXmlOpen(true)} title="View prop data as XML">Show XML</Button>
+        <Button size="sm" className="w-full" onClick={handleReset} title="Clear all fields and images">Clear All</Button>
+        <Button size="sm" className="w-full col-span-3" onClick={handleSetDefaultLayout} title="Save panel layout as default">
           <Save className="h-3 w-3 shrink-0 inline" /> Set Default Layout
         </Button>
       </div>
       <div className="grid grid-cols-2 gap-1.5 pt-1" style={{ borderTop: "1px solid var(--color-border)" }}>
-        <Button size="sm" className="w-full" title="Composite all views into a single reference sheet" onClick={async () => {
+        <Button size="sm" className="w-full" title="Create reference sheet from all views" onClick={async () => {
           const imgs: {label: string; image_b64: string}[] = [];
           for (const tab of ["main","3/4","front","back","side","top"] as const) {
             const b64 = getImageB64(tab);
@@ -1735,7 +1767,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
             const a = document.createElement("a"); a.href = `data:image/png;base64,${res.image_b64}`; a.download = `prop_ref_sheet_${Date.now()}.png`; a.click();
           } catch (e) { addToast("Failed to generate ref sheet", "error"); }
         }}>Ref Sheet</Button>
-        <Button size="sm" className="w-full" title="Export a complete handoff package as ZIP" onClick={async () => {
+        <Button size="sm" className="w-full" title="Export handoff ZIP" onClick={async () => {
           const imgs: {label: string; image_b64: string}[] = [];
           for (const tab of ["main","3/4","front","back","side","top"] as const) {
             const b64 = getImageB64(tab);
@@ -1770,6 +1802,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
         style={{ borderRight: "1px solid var(--color-border)" }}
       >
         {layout.order.map((sectionId) => {
+          if (layout.hidden?.includes(sectionId)) return null;
           const collapsed = isSectionCollapsed(sectionId);
           const canCollapse = !NON_COLLAPSIBLE.has(sectionId);
           const canToggle = TOGGLEABLE_SECTIONS.has(sectionId);
@@ -1870,6 +1903,9 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
           if (sectionId === "preservation") return wrapSection(renderPreservationSection());
           if (sectionId === "upscaleRestore") return wrapSection(renderUpscaleRestoreSection());
           if (sectionId === "multiview") return wrapSection(renderMultiviewSection());
+          if (sectionId === "threeDGen") return wrapSection(
+            <ThreeDGenSidebar embedded getViewImages={getViewImagesForThreeD} toolLabel="Prop" />
+          );
           if (sectionId === "saveOptions") return wrapSection(renderSaveSection());
           return null;
         })}
@@ -1936,7 +1972,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
           onClick={handleSetDefaultLayout}
           className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded text-[10px] font-medium cursor-pointer transition-colors"
           style={{ background: "transparent", color: "var(--color-text-muted)", border: "1px dashed var(--color-border)" }}
-          title="Remember how you've arranged these panels — next time you open the app, they'll be in the same order and open/closed state"
+          title="Save panel layout as default"
         >
           <Save className="h-3 w-3" />
           Set Active Layout as Default
@@ -1950,7 +1986,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
             <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Edit Prop</p>
             <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>Describe changes to apply:</p>
             <Textarea value={editPrompt} onChange={(e) => setEditPrompt(e.target.value)} rows={14} placeholder="Tell the AI what to change — e.g. Add rust to the surface, change the handle to wood, make it more weathered..." disabled={busy.is("apply")} />
-            <Button variant="primary" className="w-full" generating={busy.is("apply")} generatingText="Applying..." onClick={handleApplyEdit} title="Send your edit instructions to the AI — it will modify the current image based on what you wrote above">Apply Changes</Button>
+            <Button variant="primary" className="w-full" generating={busy.is("apply")} generatingText="Applying..." onClick={handleApplyEdit} title="Apply edit to current image">Apply Changes</Button>
             {modelOptions.length > 0 && (
               <div>
                 <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Gemini model (edit)</label>
@@ -1960,7 +1996,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
                   value={editModel || modelId}
                   onChange={(e) => setEditModel(e.target.value)}
                   disabled={busy.is("apply")}
-                  title="Model used for Apply Changes edits."
+                  title="AI model for edits"
                 >
                   {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
@@ -1995,7 +2031,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
                   <Button
                     size="sm" className="w-full"
                     onClick={() => { setPromptPreview(buildPromptPreview()); }}
-                    title="Build the exact prompt that will be sent to the AI"
+                    title="Preview full prompt"
                   >Preview Instructions</Button>
                   <pre
                     className="text-[10px] leading-relaxed whitespace-pre-wrap break-words max-h-[400px] overflow-y-auto p-2 rounded select-text"
@@ -2008,7 +2044,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
                         navigator.clipboard.writeText(promptPreview || lastSentPrompt);
                         addToast("Prompt copied to clipboard", "success");
                       }}
-                      title="Copy the prompt text to your clipboard"
+                      title="Copy prompt to clipboard"
                     >Copy Prompt</Button>
                   )}
                 </div>
@@ -2027,13 +2063,13 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
               tabs={tabs}
               active={activeTab}
               onSelect={setActiveTab}
+              onReorder={setTabs}
               onAddRef={handleAddRef}
               onRemoveTab={handleRemoveRef}
               noBorder
             />
           </div>
           <div className="flex items-center gap-1.5 px-2 pb-1 shrink-0">
-            <Button className="text-[11px] py-1" onClick={handleQuickGenerate} disabled={busy.is("gen")}>Quick Generate</Button>
             {busy.any && (
               <Button className="text-[11px] py-1" onClick={handleCancel} style={{ background: "rgba(220,80,80,0.15)", color: "#e05050", border: "1px solid rgba(220,80,80,0.3)" }}>Cancel</Button>
             )}
@@ -2045,7 +2081,7 @@ export function PropPage({ instanceId = 0, active = true }: PropPageProps) {
           {activeTab === "artboard" ? (
             <ArtboardCanvas />
           ) : activeTab === "deepSearch" ? (
-            <DeepSearchPanel onSendToArtboard={handleSendSearchToArtboard} />
+            <DeepSearchPanel onSendToArtboard={handleSendSearchToArtboard} isActivePage={active} />
           ) : activeTab === "grid" ? (
             <GridGallery
               results={gridResults}

@@ -106,7 +106,14 @@ def _keys_path() -> Path:
     return local  # default to project-local for writes
 
 
+# All reads and writes to keys.json are serialised through this lock so that
+# concurrent set_api_key / set_extra_key / set_image_model calls can never
+# race and silently overwrite each other's data.
+_keys_lock = threading.Lock()
+
+
 def _read_keys_data() -> dict:
+    """Read keys.json (caller must hold _keys_lock when used in a read-modify-write)."""
     import json
     kp = _keys_path()
     if kp.exists():
@@ -117,66 +124,75 @@ def _read_keys_data() -> dict:
     return {}
 
 
+def _write_keys_data(data: dict) -> None:
+    """Atomically write keys.json (caller must hold _keys_lock)."""
+    kp = CONFIG_ROOT / "keys.json"
+    kp.parent.mkdir(parents=True, exist_ok=True)
+    kp.write_text(_json_mod.dumps(data, indent=2), encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Key / model helpers
 # ---------------------------------------------------------------------------
 
 def get_api_key() -> str:
+    # keys.json is the single source of truth for the user-saved key.
+    with _keys_lock:
+        data = _read_keys_data()
+    saved = data.get("gemini_api_key", "")
+    if isinstance(saved, str) and saved.strip():
+        return saved.strip()
+    # Fall back to environment variables only when nothing is saved.
     for env_var in ["GEMINI_API_KEY", "GOOGLE_API_KEY", "PUBG_API_KEY"]:
         key = os.environ.get(env_var, "").strip()
         if key:
             return key
-    data = _read_keys_data()
-    for field in ["gemini_api_key", "google_api_key", "api_key", "default"]:
-        val = data.get(field, "")
-        if isinstance(val, str) and val.strip():
-            return val.strip()
     return ""
 
 
 def set_api_key(key: str) -> None:
     os.environ["GEMINI_API_KEY"] = key
     os.environ["GOOGLE_API_KEY"] = key
-    import json
-    kp = CONFIG_ROOT / "keys.json"
-    kp.parent.mkdir(parents=True, exist_ok=True)
-    data = _read_keys_data()
-    data["gemini_api_key"] = key
-    kp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    with _keys_lock:
+        data = _read_keys_data()
+        data["gemini_api_key"] = key
+        # Remove legacy field names so stale values can never resurface.
+        for stale in ["google_api_key", "api_key", "default"]:
+            data.pop(stale, None)
+        _write_keys_data(data)
 
 
 def get_extra_key(name: str) -> str:
     """Read an auxiliary API key (pexels_api_key, pixabay_api_key, etc.) from keys.json."""
-    data = _read_keys_data()
+    with _keys_lock:
+        data = _read_keys_data()
     val = data.get(name, "")
     return val.strip() if isinstance(val, str) else ""
 
 
 def set_extra_key(name: str, value: str) -> None:
     """Write an auxiliary API key to keys.json."""
-    kp = CONFIG_ROOT / "keys.json"
-    kp.parent.mkdir(parents=True, exist_ok=True)
-    data = _read_keys_data()
-    data[name] = value.strip()
-    kp.write_text(_json_mod.dumps(data, indent=2), encoding="utf-8")
+    with _keys_lock:
+        data = _read_keys_data()
+        data[name] = value.strip()
+        _write_keys_data(data)
 
 
 def get_image_model() -> str:
     val = os.environ.get("PUBG_IMAGE_MODEL", "").strip()
     if val:
         return val
-    data = _read_keys_data()
+    with _keys_lock:
+        data = _read_keys_data()
     return data.get("image_model", DEFAULT_IMAGE_MODEL)
 
 
 def set_image_model(model_id: str) -> None:
     os.environ["PUBG_IMAGE_MODEL"] = model_id
-    import json
-    kp = CONFIG_ROOT / "keys.json"
-    kp.parent.mkdir(parents=True, exist_ok=True)
-    data = _read_keys_data()
-    data["image_model"] = model_id
-    kp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    with _keys_lock:
+        data = _read_keys_data()
+        data["image_model"] = model_id
+        _write_keys_data(data)
 
 
 def get_model_info(model_id: str | None = None) -> dict:
@@ -412,6 +428,7 @@ def rest_generate_text(
     timeout: int = 120,
     cancel_event: Event | None = None,
     cost_category: str = "text_generation",
+    temperature: float | None = None,
 ) -> str | None:
     """REST call to Gemini that returns plain text (no SDK)."""
     if cancel_event and cancel_event.is_set():
@@ -422,6 +439,8 @@ def rest_generate_text(
     body: dict[str, Any] = {
         "contents": [{"parts": [{"text": prompt}]}],
     }
+    if temperature is not None:
+        body["generationConfig"] = {"temperature": temperature}
 
     resp = requests.post(url, json=body, headers=headers, timeout=timeout)
     if cancel_event and cancel_event.is_set():

@@ -8,6 +8,7 @@ import { useToastContext } from "@/hooks/ToastContext";
 import { useFavorites } from "@/hooks/FavoritesContext";
 import { useSessionRegister } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
+import { useModels, type ModelInfo } from "@/hooks/ModelsContext";
 
 const VIEW_TABS = ["Main Stage", "3/4", "Front", "Back", "Side", "Top", "Bottom"];
 const DIMENSIONS = [
@@ -27,7 +28,6 @@ const VIEW_KEY_MAP: Record<string, string> = {
 };
 
 interface EditEntry { timestamp: string; prompt: string; isOriginal?: boolean; }
-interface ModelInfo { id: string; label: string; resolution: string; time_estimate: string; multimodal: boolean; }
 
 function useBusySet() {
   const [set, setSet] = useState<Set<string>>(new Set());
@@ -50,18 +50,15 @@ export function MultiviewPage() {
   const [editHistory, setEditHistory] = useState<EditEntry[]>([]);
 
   const [genCount, setGenCount] = useState(1);
+  const { models, defaultModelId } = useModels();
   const [modelId, setModelId] = useState("");
-  const [models, setModels] = useState<ModelInfo[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { addToast } = useToastContext();
   const { addFavorite, removeFavorite, isFavorited, getFavoriteId } = useFavorites();
 
   useEffect(() => {
-    apiFetch<{ models: ModelInfo[]; current: string }>("/system/models").then((r) => {
-      setModels(r.models.filter((m) => m.multimodal));
-      if (!modelId) setModelId(r.current);
-    }).catch(() => {});
-  }, []);
+    if (defaultModelId && !modelId) setModelId(defaultModelId);
+  }, [defaultModelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const currentImages = gallery[activeTab] || [];
   const currentIdx = imageIdx[activeTab] ?? 0;
@@ -262,14 +259,14 @@ export function MultiviewPage() {
             <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>Describe image:</p>
             <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={12} className="flex-1" placeholder="Describe what you want to see — e.g. A medieval sword with ornate handle..." disabled={busy.any} />
             <Button variant="primary" className="w-full" generating={busy.is("generate")} generatingText="Generating Image..." onClick={handleGenerate} title="Generate a new image from your prompt">Generate Image</Button>
-            <Button className="w-full" generating={busy.is("selected")} generatingText={genText.selected || "Generating view..."} onClick={handleGenerateSelected} title="Generate only the view you have selected">Generate Selected View</Button>
-            <Button variant="primary" className="w-full" generating={busy.is("allviews")} generatingText={genText.allviews || "Generating views..."} onClick={handleGenerateAll} title="Generate all views (front, back, side) at once">Generate All Views</Button>
+            <Button className="w-full" generating={busy.is("selected")} generatingText={genText.selected || "Generating view..."} onClick={handleGenerateSelected} title="Generate current view only">Generate Selected View</Button>
+            <Button variant="primary" className="w-full" generating={busy.is("allviews")} generatingText={genText.allviews || "Generating views..."} onClick={handleGenerateAll} title="Generate all views at once">Generate All Views</Button>
             {busy.any && <Button variant="danger" size="sm" className="w-full" onClick={handleCancel} title="Stop the current generation">Cancel</Button>}
             <div className="flex items-center gap-3">
               <NumberStepper value={genCount} onChange={setGenCount} min={1} max={5} label="Count:" />
             </div>
             {modelOptions.length > 0 && (
-              <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} value={modelId} onChange={(e) => setModelId(e.target.value)} title="Choose which AI model generates your images. Higher-quality models take longer but produce better results.">
+              <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} value={modelId} onChange={(e) => setModelId(e.target.value)} title="AI model for generation">
                 {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
             )}

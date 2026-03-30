@@ -103,7 +103,7 @@ export function VoiceDirectorProvider({ activePage, children }: ProviderProps) {
 
       if (resp.error) {
         console.warn("[VoiceDirector] Error:", resp.error);
-        addToast(`Voice Director: ${resp.error}`, "error");
+        addToast(`Voice Commands: ${resp.error}`, "error");
         return;
       }
 
@@ -118,7 +118,7 @@ export function VoiceDirectorProvider({ activePage, children }: ProviderProps) {
 
       if (action === "none") {
         if (spokenText) {
-          addToast(`Voice Director heard: "${spokenText.slice(0, 80)}"`, "info");
+          addToast(`Voice Commands heard: "${spokenText.slice(0, 80)}"`, "info");
         }
         return;
       }
@@ -149,7 +149,7 @@ export function VoiceDirectorProvider({ activePage, children }: ProviderProps) {
       };
 
       const label = labelMap[action] || action;
-      addToast(`Voice Director: ${label}`, "info");
+      addToast(`Voice Commands: ${label}`, "info");
 
       window.dispatchEvent(new CustomEvent("voice-command", { detail: { action, params } }));
     } catch (err) {
@@ -211,7 +211,7 @@ export function VoiceDirectorProvider({ activePage, children }: ProviderProps) {
       beginSegment();
     } catch (err) {
       console.error("[VoiceDirector] Mic access failed:", err);
-      addToast("Voice Director: Could not access microphone", "error");
+      addToast("Voice Commands: Could not access microphone", "error");
     }
   }, [beginSegment, addToast]);
 

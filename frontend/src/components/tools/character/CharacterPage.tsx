@@ -12,6 +12,7 @@ import type { StyleFusionState } from "@/components/shared/StyleFusionPanel";
 import type { TabDef } from "@/components/shared/TabBar";
 import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
+import { useModels, type ModelInfo } from "@/hooks/ModelsContext";
 import { useSessionRegister, useSessionContext } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
 import { useFavorites } from "@/hooks/FavoritesContext";
@@ -19,6 +20,8 @@ import { createHistoryEntry, pushHistory, clearHistory as clearHist, createImage
 import type { HistoryEntry, ImageRecord, HistorySettings } from "@/lib/imageHistory";
 import { XmlModal } from "@/components/shared/XmlModal";
 import { ArtDirectorWidget } from "@/components/shared/ArtDirectorWidget";
+import { ThreeDGenSidebar } from "@/components/shared/ThreeDGenSidebar";
+import type { ViewImage } from "@/components/shared/ThreeDGenSidebar";
 import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
 import { useArtDirector } from "@/hooks/ArtDirectorContext";
 import { DeepSearchPanel } from "@/components/shared/DeepSearchPanel";
@@ -48,10 +51,10 @@ const BUILTIN_TABS: TabDef[] = [
   { id: "back", label: "Back", group: "views", prompt: "Back view" },
   { id: "side", label: "Side", group: "views", prompt: "Side view" },
   { id: "artboard", label: "Art Table", group: "artboard" },
-  { id: "deepSearch", label: "Deep Search", group: "search" },
   { id: "refA", label: "Ref A", group: "refs" },
   { id: "refB", label: "Ref B", group: "refs" },
   { id: "refC", label: "Ref C", group: "refs" },
+  { id: "deepSearch", label: "Deep Search", group: "search" },
 ];
 
 const VIEW_TYPE_MAP: Record<string, string> = {
@@ -210,7 +213,6 @@ function matchOption(options: { value: string }[], raw: string): string {
   return raw;
 }
 
-interface ModelInfo { id: string; label: string; resolution: string; time_estimate: string; multimodal: boolean; }
 
 interface BibleState {
   characterName: string;
@@ -468,10 +470,10 @@ function buildEnvBrief(env: EnvironmentPlacementState): string {
 // Layout system — section ordering + collapse state persistence
 // ---------------------------------------------------------------------------
 
-type SectionId = "identity" | "generate" | "attributes" | "bible" | "costume" | "styleFusion" | "envPlacement" | "preservation" | "upscaleRestore" | "multiview" | "saveOptions";
+type SectionId = "identity" | "generate" | "attributes" | "bible" | "costume" | "styleFusion" | "envPlacement" | "preservation" | "upscaleRestore" | "multiview" | "saveOptions" | "threeDGen";
 
 const DEFAULT_SECTION_ORDER: SectionId[] = [
-  "generate", "identity", "attributes", "bible", "costume", "styleFusion", "envPlacement", "preservation", "upscaleRestore", "multiview", "saveOptions",
+  "generate", "identity", "attributes", "bible", "costume", "styleFusion", "envPlacement", "preservation", "upscaleRestore", "multiview", "threeDGen", "saveOptions",
 ];
 
 const SECTION_LABELS: Record<SectionId, string> = {
@@ -485,6 +487,7 @@ const SECTION_LABELS: Record<SectionId, string> = {
   preservation: "Preservation Lock",
   upscaleRestore: "AI Upscale & Restore",
   multiview: "Multi-View Generation",
+  threeDGen: "3D Gen AI",
   saveOptions: "Save Options",
 };
 
@@ -499,10 +502,11 @@ const SECTION_TIPS: Record<SectionId, string> = {
   preservation: "Lock specific traits so the AI keeps them when regenerating. Set things it must never include.",
   upscaleRestore: "Make images bigger and sharper (Upscale) or fix AI artifacts and blur (Restore). Only affects images when you hit Generate here.",
   multiview: "Generate consistent front, back, and side views of your character.",
+  threeDGen: "Generate 3D models from your views using Meshy and Hitem3D.",
   saveOptions: "Save images, send to Photoshop, export XML, or clear your session.",
 };
 const NON_COLLAPSIBLE: Set<SectionId> = new Set(["generate"]);
-const TOGGLEABLE_SECTIONS: Set<SectionId> = new Set(["identity", "attributes", "bible", "costume", "styleFusion", "envPlacement", "preservation"]);
+const TOGGLEABLE_SECTIONS: Set<SectionId> = new Set(["identity", "attributes", "bible", "costume", "styleFusion", "envPlacement", "preservation", "threeDGen"]);
 
 const TAKE_OPTIONS = [
   "overall vibe", "silhouette", "material & texture", "color palette",
@@ -516,6 +520,7 @@ const STYLE_FUSION_EDIT_PROMPT =
 interface LayoutState {
   order: SectionId[];
   collapsed: Partial<Record<SectionId, boolean>>;
+  hidden?: SectionId[];
 }
 
 function loadDefaultLayout(storageKey: string): LayoutState {
@@ -528,10 +533,10 @@ function loadDefaultLayout(storageKey: string): LayoutState {
       for (const id of DEFAULT_SECTION_ORDER) {
         if (!order.includes(id)) order.push(id);
       }
-      return { order, collapsed: parsed.collapsed ?? {} };
+      return { order, collapsed: parsed.collapsed ?? {}, hidden: parsed.hidden };
     }
   } catch {}
-  return { order: [...DEFAULT_SECTION_ORDER], collapsed: { styleFusion: true, envPlacement: true, preservation: true, upscaleRestore: true, multiview: true, saveOptions: true } };
+  return { order: [...DEFAULT_SECTION_ORDER], collapsed: { styleFusion: true, envPlacement: true, preservation: true, upscaleRestore: true, multiview: true, threeDGen: true, saveOptions: true } };
 }
 
 interface CharacterPageProps {
@@ -605,7 +610,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
   const [editModel, setEditModel] = useState("");
   /** Model used only for Generate All Views / Generate Selected View. */
   const [multiviewModel, setMultiviewModel] = useState("");
-  const [models, setModels] = useState<ModelInfo[]>([]);
+  const { models, defaultModelId } = useModels();
   /** Which tab button shows the generation pulse (Main Stage, 3/4, Front, etc.). */
   const [generatingTab, setGeneratingTab] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -636,7 +641,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
   const urFileRef = useRef<HTMLInputElement>(null);
 
   // Section ON/OFF — controls whether section data is included in prompts
-  const [sectionEnabled, setSectionEnabled] = useState<Partial<Record<SectionId, boolean>>>({ identity: true, attributes: true });
+  const [sectionEnabled, setSectionEnabled] = useState<Partial<Record<SectionId, boolean>>>({ identity: true, attributes: true, threeDGen: true });
   const isSectionEnabled = useCallback((id: SectionId) => {
     if (!TOGGLEABLE_SECTIONS.has(id)) return true;
     return sectionEnabled[id] === true;
@@ -713,10 +718,10 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
       if (NON_COLLAPSIBLE.has(id)) continue;
       collapsed[id] = isSectionCollapsed(id);
     }
-    const state: LayoutState = { order: layout.order, collapsed };
+    const state: LayoutState = { order: layout.order, collapsed, hidden: layout.hidden };
     localStorage.setItem(layoutStorageKey, JSON.stringify(state));
     addToast("Layout saved as default", "success");
-  }, [layout.order, isSectionCollapsed, addToast, layoutStorageKey]);
+  }, [layout.order, layout.hidden, isSectionCollapsed, addToast, layoutStorageKey]);
 
   const refCounter = useRef(0);
 
@@ -836,10 +841,10 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
   }, [instanceId, clearAllState, tabs, activeTab, description, editPrompt, age, race, gender, build, attributes, bible, costume, prodStylePresets, tonePresets, costumeStylePresets, materialPresets, hwDetailPresets, originPresets, sectionsOpen, lockedSections, sectionEnabled, extractTargets, extractMode, styleFusion, envPlacement, styleLibraryFolder, genCount, viewGenCount, modelId, editModel, multiviewModel, addToast]);
 
   useEffect(() => {
-    apiFetch<{ models: ModelInfo[]; current: string }>("/system/models").then((r) => {
-      setModels(r.models.filter((m) => m.multimodal));
-      if (!modelId) setModelId(r.current);
-    }).catch(() => {});
+    if (defaultModelId && !modelId) setModelId(defaultModelId);
+  }, [defaultModelId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
     apiFetch<{ name: string; guidance_text: string }[]>("/styles/folders?category=general").then((folders) => {
       setStyleLibraryFolders(folders);
     }).catch(() => {});
@@ -915,6 +920,26 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     const src = imgs[imageIdx[tab] ?? 0];
     return src ? src.replace(/^data:image\/\w+;base64,/, "") : null;
   }, [gallery, imageIdx]);
+
+  const getViewImagesForThreeD = useCallback((): ViewImage[] => {
+    const tabIds = ["main", "3/4", "front", "back", "side"] as const;
+    const out: ViewImage[] = [];
+    for (const tabId of tabIds) {
+      const imgs = gallery[tabId] || [];
+      const src = imgs[imageIdx[tabId] ?? 0];
+      if (!src) continue;
+      const m = src.match(/^data:(image\/[^;]+);base64,(.+)$/);
+      if (!m) continue;
+      const tabDef = tabs.find((t) => t.id === tabId);
+      out.push({
+        viewKey: VIEW_TYPE_MAP[tabId] ?? tabId,
+        label: tabDef?.label ?? tabId,
+        mimeType: m[1],
+        base64: m[2],
+      });
+    }
+    return out;
+  }, [gallery, imageIdx, tabs]);
 
   const getMainImageB64 = useCallback(() => getImageB64("main"), [getImageB64]);
 
@@ -1532,36 +1557,36 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     const mvModel = multiviewModel || modelId;
     setGenText((p) => ({ ...p, allviews: "Generating all views..." }));
     try {
-      for (const view of views) {
-        setGeneratingTab(view);
-        try {
-          const viewTab = BUILTIN_TABS.find((t) => t.id === view);
-          const viewPromptExtra =
-            viewTab?.prompt && viewTab.group === "views" ? ` Specifically: ${viewTab.prompt}` : "";
-          const resp = await apiFetch<{ image_b64: string | null; width: number; height: number; error?: string | null }>(
-            "/character/generate", {
-              method: "POST",
-              body: JSON.stringify({
-                description: (desc + viewPromptExtra).trim(), age: identityOn ? age : "", race: identityOn ? race : "",
-                gender: identityOn ? gender : "", build: identityOn ? build : "",
-                view_type: VIEW_TYPE_MAP[view] || view, reference_image_b64: mainB64,
-                mode: "quality", model_id: mvModel || undefined,
-                bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
-                fusion_context: extra.fusionCtx || undefined,
-                fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
-                fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
-                style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
-                lock_constraints: lockCtx || undefined,
-                custom_sections_context: customSections.getPromptContributions() || undefined,
-                custom_section_images: customSections.getImageAttachments(),
-              }),
-            },
-          );
-          if (resp.image_b64) setTabImage(view, `data:image/png;base64,${resp.image_b64}`, `${view} view`);
-          else if (resp.error) addToast(resp.error, "error");
-        } catch (e) {
-          addToast(e instanceof Error ? e.message : String(e), "error");
-        }
+      const promises = views.map((view) => {
+        const viewTab = BUILTIN_TABS.find((t) => t.id === view);
+        const viewPromptExtra =
+          viewTab?.prompt && viewTab.group === "views" ? ` Specifically: ${viewTab.prompt}` : "";
+        return apiFetch<{ image_b64: string | null; width: number; height: number; error?: string | null }>(
+          "/character/generate", {
+            method: "POST",
+            body: JSON.stringify({
+              description: (desc + viewPromptExtra).trim(), age: identityOn ? age : "", race: identityOn ? race : "",
+              gender: identityOn ? gender : "", build: identityOn ? build : "",
+              view_type: VIEW_TYPE_MAP[view] || view, reference_image_b64: mainB64,
+              mode: "quality", model_id: mvModel || undefined,
+              bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
+              fusion_context: extra.fusionCtx || undefined,
+              fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+              fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+              style_guidance: extra.styleGuide || undefined, env_context: extra.envCtx || undefined,
+              lock_constraints: lockCtx || undefined,
+              custom_sections_context: customSections.getPromptContributions() || undefined,
+              custom_section_images: customSections.getImageAttachments(),
+            }),
+          },
+        ).then((resp) => ({ ok: true as const, resp, view }))
+         .catch((e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e), view }));
+      });
+      const results = await Promise.all(promises);
+      for (const r of results) {
+        if (r.ok && r.resp.image_b64) setTabImage(r.view, `data:image/png;base64,${r.resp.image_b64}`, `${r.view} view`);
+        else if (r.ok && r.resp.error) addToast(r.resp.error, "error");
+        else if (!r.ok) addToast(r.error, "error");
       }
     } finally {
       setGeneratingTab(null);
@@ -2124,6 +2149,19 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
     return () => window.removeEventListener("voice-command", handler);
   }, [active]);
 
+  // --- Switch-tab listener (Deep Search button, etc.) ---
+  useEffect(() => {
+    if (!active) return;
+    const handler = (e: Event) => {
+      const tabId = (e as CustomEvent).detail?.tabId;
+      if (typeof tabId === "string" && tabs.some((t) => t.id === tabId)) {
+        setActiveTab(tabId);
+      }
+    };
+    window.addEventListener("switch-tab", handler);
+    return () => window.removeEventListener("switch-tab", handler);
+  }, [active, tabs]);
+
   // --- Gallery restore listener ---
   useEffect(() => {
     if (!active) return;
@@ -2345,6 +2383,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
       {/* Left Column */}
       <div className="w-[400px] h-full shrink-0 overflow-y-auto p-3 space-y-2" style={{ borderRight: "1px solid var(--color-border)" }}>
         {layout.order.map((sectionId) => {
+          if (layout.hidden?.includes(sectionId)) return null;
           const collapsed = isSectionCollapsed(sectionId);
           const canCollapse = !NON_COLLAPSIBLE.has(sectionId);
           const canToggle = TOGGLEABLE_SECTIONS.has(sectionId);
@@ -2446,19 +2485,20 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                 <Select label="Build" options={BUILD_OPTIONS} value={build} onChange={(e) => setBuild(e.target.value)} disabled={textBusy} />
               </div>
               <Textarea label="Character Description" value={description} onChange={(e) => setDescription(e.target.value)} rows={4} placeholder="Describe your character here — who are they, what do they look like, what are they wearing? e.g. A battle-worn knight in dark plate armor with a crimson cloak..." disabled={textBusy} />
+              <Button size="sm" className="w-full" generating={busy.is("enhance")} generatingText="Enhancing..." onClick={handleEnhance} title="Use AI to enrich and expand your character description and all attributes">Enhance Description</Button>
             </>
           );
 
           if (sectionId === "generate") return wrapSection(
             <>
-              <Button className="w-full" generating={busy.is("extract")} generatingText="Extracting..." onClick={handleExtractAttributes} title="Reads the image and/or description and fills in the panels you have checked below">Extract Attributes</Button>
+              <Button className="w-full" generating={busy.is("extract")} generatingText="Extracting..." onClick={handleExtractAttributes} title="Auto-fill fields from current image">Extract Attributes</Button>
               <div>
                 <select
                   className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
                   style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
                   value={extractMode}
                   onChange={(e) => setExtractMode(e.target.value as "inspiration" | "recreate")}
-                  title="Controls how the source image is used when generating. 'Inspiration' extracts text details only. 'Exact Match' also sends the image so the AI recreates the character's exact look."
+                  title="How strictly the AI follows the source image"
                 >
                   <option value="inspiration">Generate from description only</option>
                   <option value="recreate">Match source image exactly</option>
@@ -2493,27 +2533,27 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                   style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
                   value={styleLibraryFolder}
                   onChange={(e) => setStyleLibraryFolder(e.target.value)}
-                  title="Pick a style folder to guide the look of your generated images. Use the Style Library page to create and manage folders."
+                  title="Style folder for visual guidance"
                 >
                   <option value="">Default (Gemini)</option>
                   {styleLibraryFolders.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-1.5">
-                <Button size="sm" className="w-full" generating={busy.is("enhance")} generatingText="Enhancing..." onClick={handleEnhance} title="Takes what you've already written and polishes it — adds more detail without starting over">Enhance Attributes</Button>
-                <Button size="sm" className="w-full" generating={busy.is("randomize")} generatingText="Randomizing..." onClick={handleRandomize} title="Creates a brand-new random character. If you've already filled in some fields, it'll build on those as a starting point.">Randomize Full Character</Button>
-                <Button size="sm" className="w-full" onClick={handleOpenImage} title="Load an image from your computer into the viewer">Open Image</Button>
-                <Button size="sm" className="w-full" onClick={handleReset} title="Clear everything and start fresh with a blank character">Reset Character</Button>
+                <Button size="sm" className="w-full" generating={busy.is("enhance")} generatingText="Enhancing..." onClick={handleEnhance} title="Add detail to existing fields">Enhance Attributes</Button>
+                <Button size="sm" className="w-full" generating={busy.is("randomize")} generatingText="Randomizing..." onClick={handleRandomize} title="Fill all fields with random attributes">Randomize Full Character</Button>
+                <Button size="sm" className="w-full" onClick={handleOpenImage} title="Open image from disk">Open Image</Button>
+                <Button size="sm" className="w-full" onClick={handleReset} title="Clear all fields and images">Reset Character</Button>
               </div>
               <div className="pt-1">
-                <Button variant="primary" className="w-full" size="lg" generating={busy.is("generate")} generatingText={genText.generate || "Generating..."} onClick={generationMode === "grid" ? handleGridGenerate : handleGenerate} title="Generate a new character image using all the details you've set up">
+                <Button variant="primary" className="w-full" size="lg" generating={busy.is("generate")} generatingText={genText.generate || "Generating..."} onClick={generationMode === "grid" ? handleGridGenerate : handleGenerate} title="Generate image from current settings">
                   Generate Character Image
                 </Button>
               </div>
               <div className="flex items-center gap-3">
                 <NumberStepper value={genCount} onChange={setGenCount} min={1} max={10} label="Count:" />
                 {modelOptions.length > 0 && (
-                  <select className="min-w-0 flex-1 px-2 py-1 text-xs rounded-[var(--radius-sm)] truncate" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)", maxWidth: "100%" }} value={modelId} onChange={(e) => setModelId(e.target.value)} title="Choose which AI model generates your images. Higher-quality models take longer but produce better results.">
+                  <select className="min-w-0 flex-1 px-2 py-1 text-xs rounded-[var(--radius-sm)] truncate" style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)", maxWidth: "100%" }} value={modelId} onChange={(e) => setModelId(e.target.value)} title="AI model for generation">
                     {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
                 )}
@@ -2640,7 +2680,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                   generatingText={genText.styleFusionGen || "Applying style fusion..."}
                   disabled={!canStyleFusionGen}
                   onClick={handleGenerateStyleFusion}
-                  title="Send the current Main Stage image through the edit pipeline with your style fusion references — no need to use Apply Changes or Generate Character"
+                  title="Apply style fusion to current image"
                 >
                   Generate Style Fusion
                 </Button>
@@ -2659,7 +2699,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}
-                    title="Add images of the characters you want placed in the scene. Add a note to each to describe who they are or how to use them.">
+                    title="Characters to place in the scene">
                     Character Images {envPlacement.characters.length > 0 && <span className="font-normal normal-case" style={{ color: "var(--color-text-muted)" }}>({envPlacement.characters.length})</span>}
                   </p>
                   <input ref={envCharFileRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => {
@@ -2678,7 +2718,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                   <button onClick={() => envCharFileRef.current?.click()} disabled={textBusy}
                     className="px-1.5 py-0.5 text-[9px] rounded cursor-pointer disabled:opacity-40"
                     style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-                    title="Add character images — these are the characters to be placed in the environment">+ Add</button>
+                    title="Add character images">+ Add</button>
                 </div>
                 {envPlacement.characters.length > 0 && (
                   <div className="space-y-1.5">
@@ -2695,7 +2735,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                         <button onClick={() => setEnvPlacement((p) => ({ ...p, characters: p.characters.filter((_, j) => j !== i) }))}
                           className="text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-pointer shrink-0 mt-0.5"
                           style={{ color: "var(--color-text-muted)", background: "transparent", border: "none" }}
-                          title="Remove this character image">✕</button>
+                          title="Remove">✕</button>
                       </div>
                     ))}
                   </div>
@@ -2706,7 +2746,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}
-                    title="Add reference images for the environment, mood, or anything you want to call out specifically.">
+                    title="Environment and mood references">
                     Reference Images {envPlacement.references.length > 0 && <span className="font-normal normal-case" style={{ color: "var(--color-text-muted)" }}>({envPlacement.references.length})</span>}
                   </p>
                   <input ref={envRefFileRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => {
@@ -2725,7 +2765,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                   <button onClick={() => envRefFileRef.current?.click()} disabled={textBusy}
                     className="px-1.5 py-0.5 text-[9px] rounded cursor-pointer disabled:opacity-40"
                     style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-                    title="Add reference images for the environment — mood boards, location photos, etc.">+ Add</button>
+                    title="Add reference images">+ Add</button>
                 </div>
                 {envPlacement.references.length > 0 && (
                   <div className="space-y-1.5">
@@ -2742,7 +2782,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                         <button onClick={() => setEnvPlacement((p) => ({ ...p, references: p.references.filter((_, j) => j !== i) }))}
                           className="text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-pointer shrink-0 mt-0.5"
                           style={{ color: "var(--color-text-muted)", background: "transparent", border: "none" }}
-                          title="Remove this reference image">✕</button>
+                          title="Remove">✕</button>
                       </div>
                     ))}
                   </div>
@@ -2754,7 +2794,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                 <span className="text-[10px] font-semibold uppercase tracking-wider block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Location</span>
                 <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
                   value={envPlacement.location}
-                  title="Pick a preset location or choose Custom to type your own"
+                  title="Scene location"
                   onChange={(e) => setEnvPlacement((p) => ({ ...p, location: e.target.value }))}>
                   {ENV_LOCATION_PRESETS.map((v) => (
                     <option key={v} value={v}>{v === "" ? "— select preset —" : v === "__custom" ? "Custom..." : v}</option>
@@ -2773,7 +2813,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                 <span className="text-[10px] font-semibold uppercase tracking-wider block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Time of Day</span>
                 <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
                   value={envPlacement.timeOfDay}
-                  title="What time of day is it? This affects the overall mood and color temperature."
+                  title="Time of day for lighting and mood"
                   onChange={(e) => setEnvPlacement((p) => ({ ...p, timeOfDay: e.target.value }))}>
                   {ENV_TIME_OPTIONS.map((v) => <option key={v} value={v}>{v || "— select —"}</option>)}
                 </select>
@@ -2788,7 +2828,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                 <span className="text-[10px] font-semibold uppercase tracking-wider block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Lighting</span>
                 <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
                   value={envPlacement.lighting}
-                  title="How is the scene lit? This is one of the biggest factors in the mood of your image."
+                  title="Scene lighting style"
                   onChange={(e) => setEnvPlacement((p) => ({ ...p, lighting: e.target.value }))}>
                   {ENV_LIGHTING_OPTIONS.map((v) => <option key={v} value={v}>{v || "— select —"}</option>)}
                 </select>
@@ -2813,7 +2853,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                   <>
                     <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
                       value={envPlacement.pose}
-                      title="How should the character be standing or positioned?"
+                      title="Character body pose"
                       onChange={(e) => setEnvPlacement((p) => ({ ...p, pose: e.target.value }))}>
                       {ENV_POSE_PRESETS.map((v) => <option key={v} value={v}>{v || "— select —"}</option>)}
                     </select>
@@ -2830,7 +2870,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                 <span className="text-[10px] font-semibold uppercase tracking-wider block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Props</span>
                 <input className="w-full px-2 py-1 text-xs" style={inputStyle} disabled={textBusy}
                   placeholder="e.g. AK-47, fanny pack, torch, medieval shield..."
-                  title="List any objects, weapons, or items the character should be holding or that should be nearby."
+                  title="Props and items in scene"
                   value={envPlacement.props}
                   onChange={(e) => setEnvPlacement((p) => ({ ...p, props: e.target.value }))} />
               </div>
@@ -2840,7 +2880,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                 <span className="text-[10px] font-semibold uppercase tracking-wider block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Camera</span>
                 <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
                   value={envPlacement.camera}
-                  title="The camera framing — how close or far the shot is, and from what angle."
+                  title="Camera framing and angle"
                   onChange={(e) => setEnvPlacement((p) => ({ ...p, camera: e.target.value }))}>
                   {ENV_CAMERA_OPTIONS.map((v) => <option key={v} value={v}>{v || "— select —"}</option>)}
                 </select>
@@ -2855,7 +2895,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                 <span className="text-[10px] font-semibold uppercase tracking-wider block mb-0.5" style={{ color: "var(--color-text-secondary)" }}>Output Format</span>
                 <select className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]" style={inputStyle} disabled={textBusy}
                   value={envPlacement.outputFormat}
-                  title="The aspect ratio of the generated image. When this panel is ON, this format will be used instead of the default."
+                  title="Output aspect ratio override"
                   onChange={(e) => setEnvPlacement((p) => ({ ...p, outputFormat: e.target.value }))}>
                   {ENV_FORMAT_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
                 </select>
@@ -2874,7 +2914,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                 generatingText={genText.envGen || "Generating environment..."}
                 onClick={handleGenerateEnvironment}
                 disabled={busy.any}
-                title="Take the current Main Stage image and place the character into the environment defined above"
+                title="Composite character into environment"
               >Generate Environment</Button>
             </div>
           );
@@ -2892,14 +2932,14 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                   onClick={() => setPreservation({ ...EMPTY_PRESERVATION, preserves: DEFAULT_PRESERVES.map((p) => ({ ...p })), negatives: DEFAULT_NEGATIVES.map((n) => ({ ...n })) })}
                   className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
                   style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-                  title="Reset all preservation rules back to their defaults"
+                  title="Reset to defaults"
                 >Reset</button>
                 <span className="text-[10px]" style={{ color: preservation.enabled ? "var(--color-text-primary)" : "var(--color-text-muted)" }}>
                   {preservation.enabled ? "Active — the AI will try to keep these traits and avoid the negatives" : "Off — no constraints, the AI has full creative freedom"}
                 </span>
               </div>
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "var(--color-text-secondary)" }} title="Check the things you want the AI to keep the same when regenerating">Preserve</p>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "var(--color-text-secondary)" }} title="Elements to preserve across generations">Preserve</p>
                 <div className="space-y-1">
                   {preservation.preserves.map((p, i) => (
                     <div key={p.key} className="flex items-center gap-2 group">
@@ -2921,7 +2961,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                         onClick={() => setPreservation((prev) => ({ ...prev, preserves: prev.preserves.filter((_, j) => j !== i) }))}
                         className="text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-pointer"
                         style={{ color: "var(--color-text-muted)", background: "transparent", border: "none" }}
-                        title="Remove this preserve rule"
+                        title="Remove rule"
                       >✕</button>
                     </div>
                   ))}
@@ -2938,11 +2978,11 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                   }}
                   className="mt-1.5 px-2 py-0.5 text-[10px] rounded cursor-pointer"
                   style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-                  title="Add a new rule telling the AI what to keep unchanged — e.g. Keep face, Keep hairstyle"
+                  title="Add preserve rule"
                 >+ Add Preserve</button>
               </div>
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "var(--color-text-secondary)" }} title="List things the AI should never include in the generated image">Negative Constraints (must avoid)</p>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "var(--color-text-secondary)" }} title="Elements AI must avoid">Negative Constraints (must avoid)</p>
                 <div className="space-y-1">
                   {preservation.negatives.map((n, i) => (
                     <div key={n.id} className="flex items-center gap-2 group">
@@ -2964,7 +3004,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                         onClick={() => setPreservation((prev) => ({ ...prev, negatives: prev.negatives.filter((_, j) => j !== i) }))}
                         className="text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-pointer"
                         style={{ color: "var(--color-text-muted)", background: "transparent", border: "none" }}
-                        title="Remove this negative constraint"
+                        title="Remove constraint"
                       >✕</button>
                     </div>
                   ))}
@@ -2981,7 +3021,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                   }}
                   className="mt-1.5 px-2 py-0.5 text-[10px] rounded cursor-pointer"
                   style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-                  title="Add something the AI must avoid — e.g. No crown, No fantasy elements"
+                  title="Add negative constraint"
                 >+ Add Negative</button>
               </div>
             </div>
@@ -3031,7 +3071,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
               <input className="w-full px-2 py-1 text-xs" style={inputStyle}
                 placeholder="Optional context — e.g. pixel art icons, game UI screenshots"
                 value={urContext} onChange={(e) => setUrContext(e.target.value)}
-                title="Give the AI a hint about what kind of images these are for better results"
+                title="Describe what these reference images show"
               />
 
               {/* Model selector */}
@@ -3039,7 +3079,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                 <select className="w-full min-w-0 px-2 py-1 text-xs rounded-[var(--radius-sm)] truncate"
                   style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)", maxWidth: "100%" }}
                   value={urModelId} onChange={(e) => setUrModelId(e.target.value)}
-                  title="Choose which AI model to use for upscaling or restoring"
+                  title="AI model for upscale/restore"
                 >
                   <option value="">Auto (best available)</option>
                   {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -3075,7 +3115,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                           onClick={() => setUrImages((prev) => prev.filter((_, j) => j !== i))}
                           className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[10px] flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100"
                           style={{ background: "var(--color-error)", color: "#fff" }}
-                          title="Remove this image"
+                          title="Remove"
                         >×</button>
                       </div>
                     ))}
@@ -3095,7 +3135,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                   <button onClick={() => urFileRef.current?.click()}
                     className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
                     style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-                    title="Add images from your computer"
+                    title="Add images from disk"
                   >+ Add Images</button>
                   <button onClick={async () => {
                     try {
@@ -3113,13 +3153,13 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                   }}
                     className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
                     style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-                    title="Paste images from your clipboard"
+                    title="Paste from clipboard"
                   >Paste</button>
                   {urImages.length > 0 && (
                     <button onClick={() => setUrImages([])}
                       className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
                       style={{ background: "var(--color-input-bg)", color: "var(--color-text-muted)", border: "1px solid var(--color-border)" }}
-                      title="Remove all images"
+                      title="Remove all"
                     >Clear All</button>
                   )}
                 </div>
@@ -3137,8 +3177,8 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
 
           if (sectionId === "multiview") return wrapSection(
             <div className="space-y-1.5">
-              <Button className="w-full" size="sm" generating={busy.is("allviews")} generatingText={genText.allviews || "Generating views..."} onClick={handleGenerateAllViews} title="Generate front, back, and side views of your character all at once">Generate All Views</Button>
-              <Button className="w-full" size="sm" generating={busy.is("selview")} generatingText={genText.selview || "Generating..."} onClick={handleGenerateSelectedView} title="Generate only the view you currently have selected (front, back, side, etc.)">Generate Selected View</Button>
+              <Button className="w-full" size="sm" generating={busy.is("allviews")} generatingText={genText.allviews || "Generating views..."} onClick={handleGenerateAllViews} title="Generate front, back, and side views">Generate All Views</Button>
+              <Button className="w-full" size="sm" generating={busy.is("selview")} generatingText={genText.selview || "Generating..."} onClick={handleGenerateSelectedView} title="Generate current view only">Generate Selected View</Button>
               {modelOptions.length > 0 && (
                 <div>
                   <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Gemini model (multi-view)</label>
@@ -3148,7 +3188,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                     value={multiviewModel || modelId}
                     onChange={(e) => setMultiviewModel(e.target.value)}
                     disabled={busy.is("allviews") || busy.is("selview")}
-                    title="Model used for Generate All Views and Generate Selected View. Same options as main character generation."
+                    title="AI model for view generation"
                   >
                     {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
@@ -3161,16 +3201,16 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
           if (sectionId === "saveOptions") return wrapSection(
             <div className="space-y-1.5">
               <div className="grid grid-cols-3 gap-1.5">
-                <Button size="sm" className="w-full" onClick={handleSaveImage} title="Save the current image to your generated images folder">Save Current</Button>
-                <Button size="sm" className="w-full" onClick={handleSendToPS} title="Open the current image directly in Photoshop">Send to PS</Button>
-                <Button size="sm" className="w-full" onClick={handleSendAllToPS} title="Open all generated view images in Photoshop at once">Send ALL to PS</Button>
-                <Button size="sm" className="w-full" onClick={() => setShowXml(true)} title="View the full character data as XML — handy for saving or sharing your setup">Show XML</Button>
-                <Button size="sm" className="w-full" onClick={handleClearCache} title="Clear all cached AI data for this session — useful if results feel stale">Clear Cache</Button>
-                <Button size="sm" className="w-full" title="Save a log of all actions taken during this session">Save Log</Button>
+                <Button size="sm" className="w-full" onClick={handleSaveImage} title="Save image to disk">Save Current</Button>
+                <Button size="sm" className="w-full" onClick={handleSendToPS} title="Send to Photoshop">Send to PS</Button>
+                <Button size="sm" className="w-full" onClick={handleSendAllToPS} title="Send all views to Photoshop">Send ALL to PS</Button>
+                <Button size="sm" className="w-full" onClick={() => setShowXml(true)} title="View character data as XML">Show XML</Button>
+                <Button size="sm" className="w-full" onClick={handleClearCache} title="Clear AI cache">Clear Cache</Button>
+                <Button size="sm" className="w-full" title="Save session log">Save Log</Button>
               </div>
-              <Button size="sm" className="w-full" title="Browse all images you've generated so far">Open Generated Images</Button>
+              <Button size="sm" className="w-full" title="Browse generated images">Open Generated Images</Button>
               <div className="grid grid-cols-2 gap-1.5 pt-1" style={{ borderTop: "1px solid var(--color-border)" }}>
-                <Button size="sm" className="w-full" title="Composite all views into a single reference sheet" onClick={async () => {
+                <Button size="sm" className="w-full" title="Create reference sheet from all views" onClick={async () => {
                   const imgs: {label: string; image_b64: string}[] = [];
                   for (const tab of ["main","3/4","front","back","side"] as const) {
                     const b64 = getImageB64(tab);
@@ -3184,7 +3224,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                     const a = document.createElement("a"); a.href = `data:image/png;base64,${res.image_b64}`; a.download = `ref_sheet_${Date.now()}.png`; a.click();
                   } catch (e) { addToast("Failed to generate ref sheet", "error"); }
                 }}>Ref Sheet</Button>
-                <Button size="sm" className="w-full" title="Export a complete handoff package as ZIP" onClick={async () => {
+                <Button size="sm" className="w-full" title="Export handoff ZIP" onClick={async () => {
                   const imgs: {label: string; image_b64: string}[] = [];
                   for (const tab of ["main","3/4","front","back","side"] as const) {
                     const b64 = getImageB64(tab);
@@ -3205,6 +3245,10 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                 }}>Export ZIP</Button>
               </div>
             </div>
+          );
+
+          if (sectionId === "threeDGen") return wrapSection(
+            <ThreeDGenSidebar embedded getViewImages={getViewImagesForThreeD} toolLabel="Character" />
           );
 
           return null;
@@ -3270,7 +3314,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
           onClick={handleSetDefaultLayout}
           className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded text-[10px] font-medium cursor-pointer transition-colors"
           style={{ background: "transparent", color: "var(--color-text-muted)", border: "1px dashed var(--color-border)" }}
-          title="Remember how you've arranged these panels — next time you open the app, they'll be in the same order and open/closed state"
+          title="Save panel layout as default"
         >
           <Save className="h-3 w-3" />
           Set Active Layout as Default
@@ -3284,7 +3328,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
             <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Edit Character</p>
             <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>Describe changes to apply:</p>
             <Textarea value={editPrompt} onChange={(e) => setEditPrompt(e.target.value)} rows={14} placeholder="Tell the AI what to change — e.g. Add a red scarf, change the boots to brown leather, make the cloak longer..." disabled={busy.is("apply")} />
-            <Button variant="primary" className="w-full" generating={busy.is("apply")} generatingText="Applying..." onClick={handleApplyEdit} title="Send your edit instructions to the AI — it will modify the current image based on what you wrote above">Apply Changes</Button>
+            <Button variant="primary" className="w-full" generating={busy.is("apply")} generatingText="Applying..." onClick={handleApplyEdit} title="Apply edit to current image">Apply Changes</Button>
             {modelOptions.length > 0 && (
               <div>
                 <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Gemini model (edit)</label>
@@ -3294,7 +3338,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                   value={editModel || modelId}
                   onChange={(e) => setEditModel(e.target.value)}
                   disabled={busy.is("apply")}
-                  title="Model used for Apply Changes and style-fusion edits. Same multimodal options as image generation."
+                  title="AI model for edits"
                 >
                   {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
@@ -3326,7 +3370,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                   <Button
                     size="sm" className="w-full"
                     onClick={() => { setPromptPreview(buildPromptPreview()); }}
-                    title="Build the exact prompt that will be sent to the AI — shows everything: style rules, character info, attributes, bible, costume, fusion, environment, constraints"
+                    title="Preview full prompt"
                   >Preview Instructions</Button>
                   <pre
                     className="text-[10px] leading-relaxed whitespace-pre-wrap break-words max-h-[400px] overflow-y-auto p-2 rounded select-text"
@@ -3339,7 +3383,7 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
                         navigator.clipboard.writeText(promptPreview || lastSentPrompt);
                         addToast("Prompt copied to clipboard", "success");
                       }}
-                      title="Copy the prompt text to your clipboard"
+                      title="Copy prompt to clipboard"
                     >Copy Prompt</Button>
                   )}
                 </div>
@@ -3359,20 +3403,20 @@ export function CharacterPage({ instanceId = 0, active = true }: CharacterPagePr
               onSelect={setActiveTab}
               onAddRef={handleAddRef}
               onRemoveTab={handleRemoveRef}
+              onReorder={setTabs}
               noBorder
               generatingTabId={generatingTab}
             />
           </div>
           <div className="flex items-center gap-2 px-2 shrink-0" style={{ paddingBottom: 5 }}>
-            {busy.any && <Button size="sm" variant="danger" onClick={handleCancel} title="Stop all running generations">Cancel</Button>}
-            <Button size="sm" generating={busy.is("quickgen")} generatingText={genText.quickgen || "Generating..."} onClick={handleQuickGenerate} title="Quickly re-generate the current view using your existing settings — great for getting a new variation">Quick Generate</Button>
+            {busy.any && <Button size="sm" variant="danger" onClick={handleCancel} title="Cancel all generations">Cancel</Button>}
           </div>
         </div>
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
         {activeTab === "artboard" ? (
           <ArtboardCanvas />
         ) : activeTab === "deepSearch" ? (
-          <DeepSearchPanel onSendToArtboard={handleSendSearchToArtboard} />
+          <DeepSearchPanel onSendToArtboard={handleSendSearchToArtboard} isActivePage={active} />
         ) : activeTab === "grid" ? (
           <GridGallery
             results={gridResults}

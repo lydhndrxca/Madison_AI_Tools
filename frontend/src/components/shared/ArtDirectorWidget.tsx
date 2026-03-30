@@ -1,9 +1,25 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
   Bot, X, Settings, Send, Trash2, ChevronDown, ChevronUp,
-  Zap, Brain, Power, Save, ImagePlus, Paperclip, Check, Sparkles,
+  Zap, Brain, Power, Save, ImagePlus, Paperclip, Check, Sparkles, Search,
+  MessageCircle, Lightbulb, Square, CheckSquare,
 } from "lucide-react";
 import { useArtDirector, type ChatMessage } from "@/hooks/ArtDirectorContext";
+import { extractDeepSearchQuery, triggerDeepSearch, DS_EVT, confettiBurst } from "@/lib/deepSearchEvents";
+import { apiFetch } from "@/hooks/useApi";
+
+const bubbleKeyframes = `
+@keyframes adBubbleIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+`;
+if (typeof document !== "undefined" && !document.getElementById("ad-bubble-anim")) {
+  const s = document.createElement("style");
+  s.id = "ad-bubble-anim";
+  s.textContent = bubbleKeyframes;
+  document.head.appendChild(s);
+}
 
 interface ArtDirectorWidgetProps {
   onOpenConfig: () => void;
@@ -131,7 +147,7 @@ function MessageBubble({ msg, onApply }: { msg: ChatMessage; onApply: ((suggesti
                   color: "var(--color-text-secondary)",
                   border: "1px solid rgba(255,255,255,0.1)",
                 }}
-                title="Apply all suggestions to the edit prompt"
+                title="Apply suggestions to edit prompt"
               >
                 <Sparkles className="h-3 w-3" /> Apply All to Edit Prompt
               </button>
@@ -197,6 +213,15 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
       ? `[Context: ${quickCtx.trim()}]\n\n${input.trim()}`
       : input.trim();
     if (!text && pendingImages.length === 0) return;
+
+    // Detect deep-search intent and auto-kick it off
+    const dsQuery = extractDeepSearchQuery(text);
+    if (dsQuery) {
+      const imageForSearch = pendingImages.length > 0 ? pendingImages[0] : undefined;
+      triggerDeepSearch(dsQuery, imageForSearch);
+      window.dispatchEvent(new CustomEvent("switch-tab", { detail: { tabId: "deepSearch" } }));
+    }
+
     sendMessage(text || "(see attached images)", pendingImages.length > 0 ? pendingImages : undefined);
     setInput("");
     setPendingImages([]);
@@ -250,42 +275,207 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
     if (id) clearChat();
   }, [saveTranscript, clearChat]);
 
+  // Deep search visual state tracking
+  const [dsState, setDsState] = useState<"idle" | "searching" | "results">("idle");
+  const dsButtonRef = useRef<HTMLButtonElement>(null);
+  const dsButtonTopRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const onStart = () => setDsState("searching");
+    const onComplete = (e: Event) => {
+      const count = (e as CustomEvent).detail?.count ?? 0;
+      if (count > 0) {
+        setDsState("results");
+        // Fire confetti from whichever button is visible
+        const btn = dsButtonRef.current ?? dsButtonTopRef.current;
+        if (btn) confettiBurst(btn);
+      } else {
+        setDsState("idle");
+      }
+    };
+    const onViewed = () => setDsState("idle");
+    window.addEventListener(DS_EVT.START, onStart);
+    window.addEventListener(DS_EVT.COMPLETE, onComplete);
+    window.addEventListener(DS_EVT.VIEWED, onViewed);
+    return () => {
+      window.removeEventListener(DS_EVT.START, onStart);
+      window.removeEventListener(DS_EVT.COMPLETE, onComplete);
+      window.removeEventListener(DS_EVT.VIEWED, onViewed);
+    };
+  }, []);
+
+  const lastModelMsg = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "model" && messages[i].text) return messages[i];
+    }
+    return null;
+  }, [messages]);
+
+  const [bubbleDismissedId, setBubbleDismissedId] = useState<string | null>(null);
+
+  const showBubble = !expanded && config.enabled && lastModelMsg && lastModelMsg.id !== bubbleDismissedId;
+
+  const bubbleText = useMemo(() => {
+    if (!lastModelMsg?.text) return "";
+    const raw = lastModelMsg.text.replace(/\*\*([^*]+)\*\*:\s*/g, "$1: ");
+    return raw.length > 180 ? raw.slice(0, 177) + "..." : raw;
+  }, [lastModelMsg]);
+
   if (!expanded) {
+    const adBorder = `1px solid ${config.enabled ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.1)"}`;
     return (
-      <div
-        className="absolute bottom-3 left-3 z-30 flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer select-none transition-all hover:scale-[1.03]"
-        style={{
-          background: config.enabled ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.6)",
-          border: `1px solid ${config.enabled ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.1)"}`,
-          backdropFilter: "blur(8px)",
-        }}
-        onClick={() => setExpanded(true)}
-        title="Open AI Art Director"
-      >
-        <div className="relative">
-          <Bot
-            className="h-5 w-5"
+      <div className="absolute bottom-3 left-3 z-30 flex items-end gap-0">
+        {/* Widget column */}
+        <div className="flex flex-col w-max">
+          <div
+            className="flex items-center gap-2 px-3 py-1.5 rounded-t-lg rounded-b-none cursor-pointer select-none transition-all hover:scale-[1.03]"
             style={{
-              color: config.enabled ? "var(--color-text-primary)" : "var(--color-text-muted)",
+              background: config.enabled ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.6)",
+              border: adBorder,
+              borderBottom: "1px solid rgba(255,255,255,0.08)",
+              backdropFilter: "blur(8px)",
             }}
-          />
-          {unreadCount > 0 && (
-            <span
-              className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center rounded-full text-[8px] font-bold leading-none px-0.5"
-              style={{ background: "#ef4444", color: "#fff" }}
+            onClick={() => setExpanded(true)}
+            title="Open Art Director"
+          >
+            <div className="relative">
+              <Bot
+                className="h-5 w-5"
+                style={{
+                  color: config.enabled ? "var(--color-text-primary)" : "var(--color-text-muted)",
+                }}
+              />
+              {unreadCount > 0 && (
+                <span
+                  className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center rounded-full text-[8px] font-bold leading-none px-0.5"
+                  style={{ background: "#ef4444", color: "#fff" }}
+                >
+                  {unreadCount > 9 ? "9+" : unreadCount}
+                </span>
+              )}
+            </div>
+            <div>
+              <div className="text-[11px] font-semibold" style={{ color: config.enabled ? "var(--color-foreground)" : "var(--color-text-secondary)" }}>
+                Art Director
+              </div>
+              <div className="text-[9px]" style={{ color: "var(--color-text-muted)" }}>
+                {config.enabled ? (config.mode === "deep" ? "Deep Thinking" : "Fast Mode") : "Off"}
+              </div>
+            </div>
+          </div>
+          <button
+            ref={dsButtonRef}
+            type="button"
+            className={`flex items-center justify-center gap-1 px-3 py-1.5 rounded-b-lg rounded-t-none text-[10px] font-medium cursor-pointer select-none transition-all hover:scale-[1.02]${dsState === "searching" ? " ds-searching" : ""}${dsState === "results" ? " ds-results-ready" : ""}`}
+            style={{
+              background: dsState === "results" ? "rgba(34,197,94,0.08)" : "rgba(255,255,255,0.05)",
+              border: dsState === "results" ? "1px solid rgba(34,197,94,0.5)" : "1px solid rgba(255,255,255,0.08)",
+              borderTop: "none",
+              color: dsState === "results" ? "#22c55e" : "var(--color-text-secondary)",
+              backdropFilter: "blur(8px)",
+            }}
+            onClick={() => {
+              if (dsState === "results") {
+                setDsState("idle");
+                window.dispatchEvent(new CustomEvent(DS_EVT.VIEWED));
+              }
+              window.dispatchEvent(new CustomEvent("switch-tab", { detail: { tabId: "deepSearch" } }));
+            }}
+            title={dsState === "results" ? "Results ready — click to view" : dsState === "searching" ? "Searching..." : "Open Deep Search"}
+          >
+            <Search className="h-3 w-3 shrink-0" style={{ color: dsState === "results" ? "#22c55e" : "var(--color-text-muted)" }} />
+            {dsState === "results" ? "RESULTS READY" : dsState === "searching" ? "Searching..." : "Deep Search"}
+          </button>
+        </div>
+
+        {/* Speech bubble */}
+        {showBubble && (
+          <div
+            className="relative ml-0 mb-1"
+            style={{ maxWidth: 280, minWidth: 120, animation: "adBubbleIn 0.25s ease-out both" }}
+            key={lastModelMsg!.id}
+          >
+            {/* Left-pointing arrow */}
+            <div
+              className="absolute top-1/2 -left-[6px]"
+              style={{
+                width: 0,
+                height: 0,
+                borderTop: "6px solid transparent",
+                borderBottom: "6px solid transparent",
+                borderRight: "6px solid rgba(255,255,255,0.12)",
+                marginTop: -6,
+              }}
+            />
+            <div
+              className="absolute top-1/2 -left-[5px]"
+              style={{
+                width: 0,
+                height: 0,
+                borderTop: "5px solid transparent",
+                borderBottom: "5px solid transparent",
+                borderRight: "5px solid rgba(30,30,30,0.97)",
+                marginTop: -5,
+              }}
+            />
+            <div
+              className="px-3 py-2 rounded-lg text-[11px] leading-relaxed cursor-pointer select-none"
+              style={{
+                background: "rgba(30,30,30,0.97)",
+                border: "1px solid rgba(255,255,255,0.12)",
+                color: "var(--color-text-secondary)",
+                backdropFilter: "blur(12px)",
+                boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+              }}
+              onClick={() => setBubbleDismissedId(lastModelMsg!.id)}
+              title="Click to dismiss"
             >
-              {unreadCount > 9 ? "9+" : unreadCount}
-            </span>
-          )}
-        </div>
-        <div>
-          <div className="text-[11px] font-semibold" style={{ color: config.enabled ? "var(--color-foreground)" : "var(--color-text-secondary)" }}>
-            Art Director
+              {bubbleText}
+            </div>
           </div>
-          <div className="text-[9px]" style={{ color: "var(--color-text-muted)" }}>
-            {config.enabled ? (config.mode === "deep" ? "Deep Thinking" : "Fast Mode") : "Off"}
+        )}
+
+        {/* Typing indicator bubble */}
+        {!expanded && config.enabled && isTyping && !showBubble && (
+          <div
+            className="relative ml-0 mb-1"
+            style={{ minWidth: 48, animation: "adBubbleIn 0.25s ease-out both" }}
+          >
+            <div
+              className="absolute top-1/2 -left-[6px]"
+              style={{
+                width: 0,
+                height: 0,
+                borderTop: "6px solid transparent",
+                borderBottom: "6px solid transparent",
+                borderRight: "6px solid rgba(255,255,255,0.12)",
+                marginTop: -6,
+              }}
+            />
+            <div
+              className="absolute top-1/2 -left-[5px]"
+              style={{
+                width: 0,
+                height: 0,
+                borderTop: "5px solid transparent",
+                borderBottom: "5px solid transparent",
+                borderRight: "5px solid rgba(30,30,30,0.97)",
+                marginTop: -5,
+              }}
+            />
+            <div
+              className="px-3 py-2 rounded-lg"
+              style={{
+                background: "rgba(30,30,30,0.97)",
+                border: "1px solid rgba(255,255,255,0.12)",
+                backdropFilter: "blur(12px)",
+                boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+              }}
+            >
+              <TypingDots />
+            </div>
           </div>
-        </div>
+        )}
       </div>
     );
   }
@@ -336,7 +526,7 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
           <Power className="h-3.5 w-3.5" />
         </button>
 
-        <button onClick={onOpenConfig} className="p-1 rounded cursor-pointer" style={{ color: "var(--color-text-muted)" }} title="Configure Art Director">
+        <button onClick={onOpenConfig} className="p-1 rounded cursor-pointer" style={{ color: "var(--color-text-muted)" }} title="Art Director settings">
           <Settings className="h-3.5 w-3.5" />
         </button>
 
@@ -407,7 +597,7 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
           onClick={() => setShowQuickCtx(!showQuickCtx)}
           className="p-1 rounded cursor-pointer shrink-0"
           style={{ color: showQuickCtx ? "var(--color-text-primary)" : "var(--color-text-muted)" }}
-          title="Toggle quick context"
+          title="Toggle context panel"
         >
           {showQuickCtx ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
         </button>
@@ -416,7 +606,7 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
           onClick={() => fileRef.current?.click()}
           className="p-1 rounded cursor-pointer shrink-0"
           style={{ color: "var(--color-text-muted)" }}
-          title="Attach image"
+          title="Attach image from disk"
         >
           <Paperclip className="h-3.5 w-3.5" />
         </button>
@@ -452,10 +642,10 @@ export function ArtDirectorWidget({ onOpenConfig }: ArtDirectorWidgetProps) {
 
         {messages.length > 0 && (
           <>
-            <button onClick={handleSaveTranscript} className="p-1 rounded cursor-pointer shrink-0" style={{ color: "var(--color-text-muted)" }} title="Save transcript & clear">
+            <button onClick={handleSaveTranscript} className="p-1 rounded cursor-pointer shrink-0" style={{ color: "var(--color-text-muted)" }} title="Save transcript and clear">
               <Save className="h-3 w-3" />
             </button>
-            <button onClick={clearChat} className="p-1 rounded cursor-pointer shrink-0" style={{ color: "var(--color-text-muted)" }} title="Clear chat">
+            <button onClick={clearChat} className="p-1 rounded cursor-pointer shrink-0" style={{ color: "var(--color-text-muted)" }} title="Clear conversation">
               <Trash2 className="h-3 w-3" />
             </button>
           </>

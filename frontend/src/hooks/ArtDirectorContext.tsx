@@ -38,12 +38,14 @@ export interface ChatMessage {
 }
 
 export type ApplyFeedbackFn = (suggestion: string) => void;
+export type UnapplyFeedbackFn = (suggestion: string) => void;
 
 interface ArtDirectorContextValue {
   config: ArtDirectorConfig;
   setConfig: (c: ArtDirectorConfig) => void;
   updateConfig: (partial: Partial<ArtDirectorConfig>) => void;
   messages: ChatMessage[];
+  addMessage: (msg: ChatMessage) => void;
   sendMessage: (text: string, extraImages?: string[]) => Promise<void>;
   clearChat: () => void;
   isTyping: boolean;
@@ -55,6 +57,8 @@ interface ArtDirectorContextValue {
   saveTranscript: (tool: string) => Promise<string | null>;
   onApplyFeedback: ApplyFeedbackFn | null;
   setOnApplyFeedback: (fn: ApplyFeedbackFn | null) => void;
+  onUnapplyFeedback: UnapplyFeedbackFn | null;
+  setOnUnapplyFeedback: (fn: UnapplyFeedbackFn | null) => void;
 }
 
 const DEFAULT_PERSONA: PersonaConfig = {
@@ -82,10 +86,29 @@ const DEFAULT_CONFIG: ArtDirectorConfig = {
 
 const STORAGE_KEY = "madison-art-director-config";
 
+function ensureString(v: unknown): string {
+  if (Array.isArray(v)) return v.join(", ");
+  return typeof v === "string" ? v : "";
+}
+
+function sanitizePersona(p: Record<string, unknown>): PersonaConfig {
+  return {
+    name: typeof p.name === "string" ? p.name : DEFAULT_PERSONA.name,
+    description: ensureString(p.description),
+    philosophy: ensureString(p.philosophy),
+    likes: ensureString(p.likes),
+    dislikes: ensureString(p.dislikes),
+  };
+}
+
 function loadConfig(): ArtDirectorConfig {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+    if (raw) {
+      const parsed = { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+      if (parsed.persona) parsed.persona = sanitizePersona(parsed.persona);
+      return parsed;
+    }
   } catch { /* */ }
   return { ...DEFAULT_CONFIG };
 }
@@ -106,6 +129,7 @@ const Ctx = createContext<ArtDirectorContextValue>({
   setConfig: () => {},
   updateConfig: () => {},
   messages: [],
+  addMessage: () => {},
   sendMessage: async () => {},
   clearChat: () => {},
   isTyping: false,
@@ -117,6 +141,8 @@ const Ctx = createContext<ArtDirectorContextValue>({
   saveTranscript: async () => null,
   onApplyFeedback: null,
   setOnApplyFeedback: () => {},
+  onUnapplyFeedback: null,
+  setOnUnapplyFeedback: () => {},
 });
 
 export const useArtDirector = () => useContext(Ctx);
@@ -128,6 +154,7 @@ export function ArtDirectorProvider({ children }: { children: React.ReactNode })
   const [currentImage, setCurrentImage] = useState<string | null>(null);
   const [attributesContext, setAttributesContext] = useState("");
   const [onApplyFeedback, setOnApplyFeedback] = useState<ApplyFeedbackFn | null>(null);
+  const [onUnapplyFeedback, setOnUnapplyFeedback] = useState<UnapplyFeedbackFn | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const currentImageRef = useRef(currentImage);
   currentImageRef.current = currentImage;
@@ -143,6 +170,10 @@ export function ArtDirectorProvider({ children }: { children: React.ReactNode })
       persistConfig(next);
       return next;
     });
+  }, []);
+
+  const addMessage = useCallback((msg: ChatMessage) => {
+    setMessages((prev) => [...prev, msg]);
   }, []);
 
   const clearChat = useCallback(() => {
@@ -201,7 +232,7 @@ export function ArtDirectorProvider({ children }: { children: React.ReactNode })
           message: text.trim(),
           image_b64: imgB64,
           conversation_history: history,
-          persona: config.persona,
+          persona: sanitizePersona(config.persona as unknown as Record<string, unknown>),
           context_images: [
             ...config.contextImages.filter((ci) => ci.b64).map((ci) => ({ b64: ci.b64.replace(/^data:image\/[^;]+;base64,/, ""), label: ci.label })),
             ...inlineImages,
@@ -263,19 +294,16 @@ export function ArtDirectorProvider({ children }: { children: React.ReactNode })
     }
   }, [messages, config.persona.name]);
 
-  useEffect(() => {
-    persistConfig(config);
-  }, [config]);
-
   return (
     <Ctx.Provider
       value={{
         config, setConfig, updateConfig,
-        messages, sendMessage, clearChat, isTyping, cancelTyping,
+        messages, addMessage, sendMessage, clearChat, isTyping, cancelTyping,
         currentImage, setCurrentImage,
         attributesContext, setAttributesContext,
         saveTranscript,
         onApplyFeedback, setOnApplyFeedback,
+        onUnapplyFeedback, setOnUnapplyFeedback,
       }}
     >
       {children}

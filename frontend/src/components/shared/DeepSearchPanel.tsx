@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { useToastContext } from "@/hooks/ToastContext";
 import { apiFetch } from "@/hooks/useApi";
+import { DS_EVT, dsDispatch } from "@/lib/deepSearchEvents";
 
 const DEPTH_OPTIONS = [
   { value: "quick", label: "Quick" },
@@ -30,9 +31,10 @@ interface RefInput {
 
 interface DeepSearchPanelProps {
   onSendToArtboard?: (images: SearchResult[]) => void;
+  isActivePage?: boolean;
 }
 
-export function DeepSearchPanel({ onSendToArtboard }: DeepSearchPanelProps) {
+export function DeepSearchPanel({ onSendToArtboard, isActivePage = true }: DeepSearchPanelProps) {
   const { addToast } = useToastContext();
   const [query, setQuery] = useState("");
   const [numImages, setNumImages] = useState(12);
@@ -51,6 +53,27 @@ export function DeepSearchPanel({ onSendToArtboard }: DeepSearchPanelProps) {
   const abortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const queryRef = useRef<HTMLTextAreaElement>(null);
+
+  // Listen for Art Director (or other) trigger events.
+  // We store the triggered query in a ref and use a flag + effect so
+  // handleSearch runs with the committed state.
+  const [triggerFlag, setTriggerFlag] = useState(0);
+
+  useEffect(() => {
+    if (!isActivePage) return;
+    const onTrigger = (e: Event) => {
+      const { query: q, imageB64 } = (e as CustomEvent).detail ?? {};
+      if (typeof q === "string" && q.trim()) {
+        setQuery(q.trim());
+        if (imageB64) {
+          setRefInputs([{ id: crypto.randomUUID(), b64: imageB64, note: "" }]);
+        }
+        setTriggerFlag((f) => f + 1);
+      }
+    };
+    window.addEventListener(DS_EVT.TRIGGER, onTrigger);
+    return () => window.removeEventListener(DS_EVT.TRIGGER, onTrigger);
+  }, [isActivePage]);
 
   const addRefImage = useCallback((b64: string) => {
     setRefInputs((prev) => [...prev, { id: crypto.randomUUID(), b64, note: "" }]);
@@ -113,6 +136,7 @@ export function DeepSearchPanel({ onSendToArtboard }: DeepSearchPanelProps) {
   const handleSearch = useCallback(async (append = false) => {
     if (!query.trim() && refInputs.length === 0) return;
     setSearching(true);
+    dsDispatch(DS_EVT.START);
     if (!append) {
       setResults([]);
       setSelected(new Set());
@@ -197,8 +221,18 @@ export function DeepSearchPanel({ onSendToArtboard }: DeepSearchPanelProps) {
     } finally {
       setSearching(false);
       abortRef.current = null;
+      // Notify other components that results are ready
+      setResults((cur) => {
+        if (cur.length > 0) dsDispatch(DS_EVT.COMPLETE, { count: cur.length });
+        return cur;
+      });
     }
   }, [query, numImages, depth, refInputs, addToast]);
+
+  // Auto-fire search when externally triggered (Art Director, etc.)
+  useEffect(() => {
+    if (triggerFlag > 0) handleSearch(false);
+  }, [triggerFlag]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCancel = useCallback(() => {
     abortRef.current?.abort();

@@ -206,7 +206,7 @@ export function StyleFusionPanel({
             style={inputStyle}
             disabled={disabled}
             value={fusion.slots[0].takeFrom}
-            title="Choose which aspect of this style to borrow"
+            title="Style aspect to apply"
             onChange={(e) => updateSlot(0, { takeFrom: e.target.value })}
           >
             {takeOptions.map((t) => (
@@ -275,7 +275,7 @@ export function StyleFusionPanel({
             style={inputStyle}
             disabled={disabled}
             value={fusion.slots[1].takeFrom}
-            title="Choose which aspect of this style to borrow"
+            title="Style aspect to apply"
             onChange={(e) => updateSlot(1, { takeFrom: e.target.value })}
           >
             {takeOptions.map((t) => (

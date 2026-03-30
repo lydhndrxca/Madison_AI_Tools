@@ -65,7 +65,7 @@ export function ColorField({ label, value, onChange, placeholder, disabled = fal
             border: "1px solid var(--color-border)",
             opacity: (resolved && !disabled) ? 1 : 0.4,
           }}
-          title="Open the color wheel to choose a color visually"
+          title="Open color picker"
           onClick={() => pickerRef.current?.click()}
         />
         <input
@@ -82,7 +82,7 @@ export function ColorField({ label, value, onChange, placeholder, disabled = fal
             disabled={disabled}
             className="w-6 h-6 flex items-center justify-center rounded-[var(--radius-sm)] shrink-0 cursor-pointer text-[12px] disabled:opacity-40 disabled:pointer-events-none"
             style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-secondary)" }}
-            title="Pick a color from anywhere on your screen — click this, then click on any color you see"
+            title="Eyedropper — pick color from screen"
             onClick={handleEyedropper}
           >
             &#x1F4A7;

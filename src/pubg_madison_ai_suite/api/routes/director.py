@@ -212,11 +212,11 @@ async def generate_persona(req: PersonaGenRequest):
     prompt = (
         f'Research the creative figure "{req.name}" and generate a detailed art director '
         f"persona based on their known artistic style, preferences, and philosophy.\n\n"
-        f"Return ONLY valid JSON with these exact keys:\n"
+        f"Return ONLY valid JSON with these exact keys (all values must be strings, NOT arrays):\n"
         f'{{"name": "...", "description": "A 2-3 sentence description of their creative identity", '
         f'"philosophy": "Their design philosophy and what drives their creative choices", '
-        f'"likes": "Visual elements, techniques, themes they are drawn to (bullet points)", '
-        f'"dislikes": "Things they avoid or react against in design (bullet points)"}}'
+        f'"likes": "A comma-separated list of visual elements, techniques, themes they love", '
+        f'"dislikes": "A comma-separated list of things they avoid or react against in design"}}'
     )
 
     result = core.rest_generate_text(api_key, "gemini-2.0-flash", prompt, timeout=30, cost_category="art_director")
@@ -234,6 +234,11 @@ async def generate_persona(req: PersonaGenRequest):
         persona = json.loads(cleaned)
     except json.JSONDecodeError:
         raise HTTPException(500, f"Gemini returned invalid JSON: {cleaned[:200]}")
+
+    for field in ("likes", "dislikes", "description", "philosophy"):
+        val = persona.get(field)
+        if isinstance(val, list):
+            persona[field] = ", ".join(str(v) for v in val)
 
     return persona
 

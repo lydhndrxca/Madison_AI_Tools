@@ -1,14 +1,16 @@
 const { app, BrowserWindow, shell } = require("electron");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 const http = require("http");
 
+const ROOT = path.resolve(__dirname, "..");
 const DEV_URL = "http://127.0.0.1:5173";
 const API_PORT = 8420;
 const API_URL = `http://127.0.0.1:${API_PORT}`;
 
 let mainWindow = null;
 let backendProcess = null;
+let viteProcess = null;
 
 function waitForServer(url, timeoutMs = 30000) {
   const start = Date.now();
@@ -31,13 +33,28 @@ function waitForServer(url, timeoutMs = 30000) {
   });
 }
 
+function killPortProcess(port) {
+  try {
+    const out = execSync(
+      `netstat -ano | findstr ":${port} " | findstr "LISTENING"`,
+      { encoding: "utf8", windowsHide: true, stdio: ["pipe", "pipe", "pipe"] }
+    );
+    const pids = new Set(
+      out.split("\n").map((l) => l.trim().split(/\s+/).pop()).filter(Boolean)
+    );
+    for (const pid of pids) {
+      try { execSync(`taskkill /F /PID ${pid}`, { windowsHide: true, stdio: "pipe" }); }
+      catch { /* already dead */ }
+    }
+  } catch { /* nothing listening */ }
+}
+
 function startBackend() {
-  const root = path.resolve(__dirname, "..");
   const env = {
     ...process.env,
-    PYTHONPATH: path.join(root, "src"),
-    PUBG_SUITE_SAVE_ROOT: path.join(root, "ALL GENERATED IMAGES"),
-    PUBG_SUITE_ROOT: root,
+    PYTHONPATH: path.join(ROOT, "src"),
+    PUBG_SUITE_SAVE_ROOT: path.join(ROOT, "ALL GENERATED IMAGES"),
+    PUBG_SUITE_ROOT: ROOT,
   };
 
   backendProcess = spawn("python", [
@@ -45,13 +62,30 @@ function startBackend() {
     "pubg_madison_ai_suite.api.server:app",
     "--host", "127.0.0.1",
     "--port", String(API_PORT),
-  ], { cwd: root, env, stdio: "pipe", windowsHide: true });
+  ], { cwd: ROOT, env, stdio: "pipe", windowsHide: true });
 
   backendProcess.stdout.on("data", (d) => process.stdout.write(`[backend] ${d}`));
   backendProcess.stderr.on("data", (d) => process.stderr.write(`[backend] ${d}`));
   backendProcess.on("exit", (code) => {
     console.log(`[backend] exited with code ${code}`);
     backendProcess = null;
+  });
+}
+
+function startVite() {
+  viteProcess = spawn("npx", ["vite", "--host", "127.0.0.1"], {
+    cwd: path.join(ROOT, "frontend"),
+    env: process.env,
+    stdio: "pipe",
+    shell: true,
+    windowsHide: true,
+  });
+
+  viteProcess.stdout.on("data", (d) => process.stdout.write(`[vite] ${d}`));
+  viteProcess.stderr.on("data", (d) => process.stderr.write(`[vite] ${d}`));
+  viteProcess.on("exit", (code) => {
+    console.log(`[vite] exited with code ${code}`);
+    viteProcess = null;
   });
 }
 
@@ -88,9 +122,13 @@ function createWindow() {
 
 app.on("ready", async () => {
   createWindow();
-  mainWindow.loadURL("data:text/html,<html style='background:#1a1a2e;color:#ccc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'><div style='text-align:center'><h2>Madison AI Suite</h2><p>Starting servers...</p></div></html>");
+  mainWindow.loadURL("data:text/html,<html style='background:#1a1a2e;color:#ccc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'><div style='text-align:center'><h2>Madison AI Suite</h2><p>Starting servers\u2026</p></div></html>");
+
+  killPortProcess(API_PORT);
+  killPortProcess(5173);
 
   startBackend();
+  startVite();
 
   try {
     await waitForServer(`${API_URL}/api/system/health`, 30000);
@@ -100,11 +138,11 @@ app.on("ready", async () => {
   }
 
   try {
-    await waitForServer(DEV_URL, 15000);
+    await waitForServer(DEV_URL, 30000);
     console.log("[main] Frontend ready");
   } catch {
     console.log("[main] Vite not detected — trying production build");
-    const distIndex = path.join(__dirname, "..", "frontend", "dist", "index.html");
+    const distIndex = path.join(ROOT, "frontend", "dist", "index.html");
     mainWindow.loadFile(distIndex);
     return;
   }
@@ -112,20 +150,17 @@ app.on("ready", async () => {
   mainWindow.loadURL(DEV_URL);
 });
 
+function cleanupChildren() {
+  if (viteProcess) { viteProcess.kill(); viteProcess = null; }
+  if (backendProcess) { backendProcess.kill(); backendProcess = null; }
+}
+
 app.on("window-all-closed", () => {
-  if (backendProcess) {
-    backendProcess.kill();
-    backendProcess = null;
-  }
+  cleanupChildren();
   app.quit();
 });
 
-app.on("before-quit", () => {
-  if (backendProcess) {
-    backendProcess.kill();
-    backendProcess = null;
-  }
-});
+app.on("before-quit", cleanupChildren);
 
 app.on("activate", () => {
   if (mainWindow === null) createWindow();

@@ -362,7 +362,6 @@ _CHARACTER_TOOLS: list[dict] = [
     {"name": "extract_attributes", "description": "Extract character attributes from the current image or description.", "parameters": {"type": "OBJECT", "properties": {}}},
     {"name": "enhance_description", "description": "Enhance and expand the current character description with more detail.", "parameters": {"type": "OBJECT", "properties": {}}},
     {"name": "randomize", "description": "Randomize all character fields to create a new random character.", "parameters": {"type": "OBJECT", "properties": {}}},
-    {"name": "quick_generate", "description": "Randomize a character and immediately generate an image.", "parameters": {"type": "OBJECT", "properties": {}}},
     {"name": "generate_all_views", "description": "Generate front, back, side, and 3/4 views of the character.", "parameters": {"type": "OBJECT", "properties": {}}},
     {"name": "generate_selected_view", "description": "Generate only the currently selected view tab or a named view.", "parameters": {"type": "OBJECT", "properties": {"view": {"type": "STRING", "description": "View name: front, back, side, or 3/4"}}}},
     {"name": "set_field", "description": "Set a character form field to a specific value without generating.", "parameters": {"type": "OBJECT", "properties": {"field": {"type": "STRING", "description": "Field name: description, age, race, gender, or build"}, "value": {"type": "STRING", "description": "Value to set"}}, "required": ["field", "value"]}},

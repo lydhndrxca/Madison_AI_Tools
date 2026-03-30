@@ -179,7 +179,7 @@ function EntryEditor({
                 onClick={pasteFromClipboard}
                 className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[11px] rounded cursor-pointer"
                 style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-secondary)" }}
-                title="Paste an image from your clipboard (or use Ctrl+V anywhere in this editor)"
+                title="Paste from clipboard (Ctrl+V)"
               >
                 <ClipboardPaste className="h-3 w-3" /> Paste Image
               </button>

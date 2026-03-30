@@ -12,6 +12,7 @@ import { useVoiceDirector } from "@/hooks/useVoiceDirector";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import { CostCounter } from "./CostCounter";
 import type { PageId } from "@/app";
+import { DS_EVT, confettiBurst } from "@/lib/deepSearchEvents";
 
 interface AppShellProps {
   activePage: PageId;
@@ -159,6 +160,8 @@ const PAGE_LABELS: Record<PageId, string> = {
   "uilab": "AI UI Lab",
   "3d": "3D GEN AI",
   "transcripts": "Art Direction Logs",
+  "brainstorm": "Idea Brainstorming",
+  "writingroom": "Writing Room",
 };
 
 export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
@@ -172,6 +175,31 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
   const director = useVoiceDirector();
   const [voiceCtxMenu, setVoiceCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [voiceRestartPending, setVoiceRestartPending] = useState(false);
+
+  // Deep Search visual states
+  const [dsState, setDsState] = useState<"idle" | "searching" | "results">("idle");
+  const dsTopBtnRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const onStart = () => setDsState("searching");
+    const onComplete = (e: Event) => {
+      const count = (e as CustomEvent).detail?.count ?? 0;
+      if (count > 0) {
+        setDsState("results");
+        if (dsTopBtnRef.current) confettiBurst(dsTopBtnRef.current);
+      } else {
+        setDsState("idle");
+      }
+    };
+    const onViewed = () => setDsState("idle");
+    window.addEventListener(DS_EVT.START, onStart);
+    window.addEventListener(DS_EVT.COMPLETE, onComplete);
+    window.addEventListener(DS_EVT.VIEWED, onViewed);
+    return () => {
+      window.removeEventListener(DS_EVT.START, onStart);
+      window.removeEventListener(DS_EVT.COMPLETE, onComplete);
+      window.removeEventListener(DS_EVT.VIEWED, onViewed);
+    };
+  }, []);
   const { registerAction, unregisterAction } = useShortcuts();
 
   const toggleVoiceToText = useCallback(() => {
@@ -202,7 +230,7 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
   useEffect(() => {
     const handler = (e: Event) => {
       const { action, params } = (e as CustomEvent).detail;
-      if (action === "navigate" && params?.page) {
+      if (action === "navigate" && params?.page && params.page in PAGE_LABELS) {
         onNavigate(params.page as PageId);
       }
     };
@@ -261,7 +289,7 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
               onClick={() => setSidebarCollapsed(false)}
               className="px-3 py-1 text-[13px] font-bold tracking-tight cursor-pointer shrink-0"
               style={{ background: "transparent", border: "none", color: "var(--color-foreground)", borderRight: "1px solid var(--color-border)", marginRight: 2 }}
-              title="Click to open the tools panel"
+              title="Open tools panel"
             >
               {PAGE_LABELS[activePage] || "Madison AI Suite"}
             </button>
@@ -297,15 +325,15 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
             onContextMenu={(e) => { e.preventDefault(); setVoiceCtxMenu({ x: e.clientX, y: e.clientY }); }}
             className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded cursor-pointer font-medium${voice.active ? " voice-recording-indicator" : ""}`}
             style={{
-              background: voice.active ? "rgba(224, 80, 80, 0.15)" : "transparent",
-              border: voice.active ? "1px solid rgba(224, 80, 80, 0.4)" : "1px solid transparent",
-              color: voice.active ? "#e05050" : "var(--color-text-secondary)",
+              background: voice.active ? "rgba(224, 80, 80, 0.15)" : "rgba(148, 163, 184, 0.12)",
+              border: voice.active ? "1px solid rgba(224, 80, 80, 0.4)" : "1px solid rgba(148, 163, 184, 0.28)",
+              color: voice.active ? "#e05050" : "var(--color-text-primary)",
             }}
-            title={`${voice.active ? "Voice recording is active — click to stop" : "Start voice-to-text — click into a text field and speak to dictate"}\nEngine: ${voice.settings.engine === "native" ? "Windows / Native" : "Gemini (AI)"}\nRight-click to switch engine`}
+            title={`${voice.active ? "Dictation active — click to stop" : "Dictate — click into a text field and speak to type"}\nEngine: ${voice.settings.engine === "native" ? "Windows / Native" : "Gemini (AI)"}\nRight-click to switch engine`}
           >
             {voice.active && <span className="voice-recording-dot" />}
             {!voice.active && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>}
-            {voice.active ? "Voice Recording Active" : `Voice to Text${voice.settings.engine === "native" ? " (Native)" : ""}`}
+            {voice.active ? "Dictating..." : `Dictate${voice.settings.engine === "native" ? " (Native)" : ""}`}
           </button>
 
           {/* Voice Director button — hands-free art direction via Gemini function calling */}
@@ -314,15 +342,60 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
             onClick={toggleDirector}
             className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded cursor-pointer font-medium${director.active ? " voice-recording-indicator" : ""}`}
             style={{
-              background: director.active ? "rgba(139, 92, 246, 0.15)" : "transparent",
-              border: director.active ? "1px solid rgba(139, 92, 246, 0.4)" : "1px solid transparent",
-              color: director.active ? "#a78bfa" : "var(--color-text-secondary)",
+              background: director.active ? "rgba(139, 92, 246, 0.15)" : "rgba(148, 163, 184, 0.12)",
+              border: director.active ? "1px solid rgba(139, 92, 246, 0.4)" : "1px solid rgba(148, 163, 184, 0.28)",
+              color: director.active ? "#a78bfa" : "var(--color-text-primary)",
             }}
-            title={director.active ? "Voice Director is active — click to stop" : "Start Voice Director — speak commands to control the AI tools hands-free"}
+            title={director.active ? "Voice Commands active — click to stop" : "Voice Commands — speak instructions to control the AI tools hands-free"}
           >
             {director.active && <span className="voice-recording-dot" style={{ background: "#a78bfa" }} />}
             {!director.active && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 4-8 8 3 3 8-8"/><path d="m18 7-3-3"/><path d="M9 15 4.4 19.6a2.1 2.1 0 1 0 3 3L12 18"/></svg>}
-            {director.active ? "Director Listening..." : "Voice Director"}
+            {director.active ? "Listening..." : "Voice Commands"}
+          </button>
+
+          <button
+            ref={dsTopBtnRef}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              if (dsState === "results") {
+                setDsState("idle");
+                window.dispatchEvent(new CustomEvent(DS_EVT.VIEWED));
+              }
+              window.dispatchEvent(new CustomEvent("switch-tab", { detail: { tabId: "deepSearch" } }));
+            }}
+            className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded cursor-pointer font-medium${dsState === "searching" ? " ds-searching" : ""}${dsState === "results" ? " ds-results-ready" : ""}`}
+            style={{
+              background: dsState === "results" ? "rgba(34,197,94,0.1)" : "rgba(148, 163, 184, 0.12)",
+              border: dsState === "results" ? "1px solid rgba(34,197,94,0.5)" : "1px solid rgba(148, 163, 184, 0.28)",
+              color: dsState === "results" ? "#22c55e" : "var(--color-text-primary)",
+            }}
+            title={dsState === "results" ? "Results ready — click to view" : dsState === "searching" ? "Searching..." : "Open Deep Search"}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={dsState === "results" ? "#22c55e" : "currentColor"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+            </svg>
+            {dsState === "results" ? "RESULTS READY" : dsState === "searching" ? "Searching..." : "Deep Search"}
+          </button>
+
+          <div className="flex-1" />
+
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => window.dispatchEvent(new CustomEvent("voice-command", { detail: { action: "quick_generate", params: {} } }))}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded cursor-pointer font-medium"
+            style={{
+              background: "rgba(148, 163, 184, 0.12)",
+              border: "1px solid rgba(148, 163, 184, 0.28)",
+              color: "var(--color-text-primary)",
+            }}
+            title="Quick generate with current settings"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+            </svg>
+            Quick Generate
           </button>
 
           <CostCounter />

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback, Fragment } from "react";
 import { cn } from "@/lib/cn";
 
 // Backwards-compatible flat TabBar for pages that use string[] tabs
@@ -54,6 +54,7 @@ interface GroupedTabBarProps {
   noBorder?: boolean;
   /** Tab id currently receiving an image generation (pulsing highlight). */
   generatingTabId?: string | null;
+  onReorder?: (tabs: TabDef[]) => void;
 }
 
 const GROUP_BG: Record<string, string> = {
@@ -65,11 +66,53 @@ const GROUP_BG: Record<string, string> = {
   refs: "rgba(0,0,0,0.08)",
 };
 
-export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, noBorder, generatingTabId }: GroupedTabBarProps) {
+export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, noBorder, generatingTabId, onReorder }: GroupedTabBarProps) {
   const groups: ("stage" | "views" | "library" | "artboard" | "search" | "refs")[] = ["stage", "views", "library", "artboard", "search", "refs"];
 
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
   const ctxRef = useRef<HTMLDivElement>(null);
+  const [draggedTab, setDraggedTab] = useState<TabDef | null>(null);
+  const [dragOverTab, setDragOverTab] = useState<string | null>(null);
+  const draggedTabRef = useRef<TabDef | null>(null);
+
+  const handleDragStart = useCallback((e: React.DragEvent, tab: TabDef) => {
+    if (!onReorder) return;
+    draggedTabRef.current = tab;
+    setDraggedTab(tab);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", tab.id);
+  }, [onReorder]);
+
+  const handleDragOver = useCallback((e: React.DragEvent, tab: TabDef) => {
+    if (!onReorder || !draggedTabRef.current || draggedTabRef.current.id === tab.id) return;
+    e.preventDefault();
+    setDragOverTab(tab.id);
+  }, [onReorder]);
+
+  const handleDragEnd = useCallback(() => {
+    draggedTabRef.current = null;
+    setDraggedTab(null);
+    setDragOverTab(null);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent, targetTab: TabDef) => {
+    if (!onReorder) return;
+    e.preventDefault();
+    const source = draggedTabRef.current;
+    if (!source || source.id === targetTab.id) {
+      handleDragEnd();
+      return;
+    }
+    const without = tabs.filter((t) => t.id !== source.id);
+    const toIndex = without.findIndex((t) => t.id === targetTab.id);
+    if (toIndex < 0) {
+      handleDragEnd();
+      return;
+    }
+    const next = [...without.slice(0, toIndex), source, ...without.slice(toIndex)];
+    onReorder(next);
+    handleDragEnd();
+  }, [onReorder, tabs, handleDragEnd]);
 
   useEffect(() => {
     if (!ctxMenu) return;
@@ -89,60 +132,101 @@ export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, n
     setCtxMenu({ x: e.clientX, y: e.clientY, tabId: tab.id });
   };
 
+  const renderTabButton = (tab: TabDef, group: TabDef["group"]) => {
+    const isActive = active === tab.id;
+    const isGenerating = generatingTabId != null && generatingTabId === tab.id;
+    const showDropIndicator = !!onReorder && dragOverTab === tab.id;
+    return (
+      <button
+        draggable={!!onReorder}
+        onDragStart={(e) => handleDragStart(e, tab)}
+        onDragOver={(e) => handleDragOver(e, tab)}
+        onDragEnd={handleDragEnd}
+        onDrop={(e) => handleDrop(e, tab)}
+        onClick={() => onSelect(tab.id)}
+        onContextMenu={(e) => handleTabContextMenu(e, tab)}
+        className={cn(
+          "text-xs font-medium transition-all whitespace-nowrap cursor-pointer relative",
+          isGenerating && "btn-generating rounded-md",
+          isActive
+            ? "text-[var(--color-foreground)]"
+            : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]",
+        )}
+        style={{
+          background: isActive ? "var(--color-card)" : GROUP_BG[group],
+          border: isActive ? "1px solid var(--color-border)" : "1px solid transparent",
+          borderBottom: isActive ? "1px solid var(--color-card)" : "1px solid var(--color-border)",
+          borderLeft: showDropIndicator ? "2px solid rgba(255,255,255,0.4)" : undefined,
+          borderRadius: isActive ? "6px 6px 0 0" : "4px 4px 0 0",
+          padding: isActive ? "6px 14px 5px" : tab.group === "artboard" ? "5px 16px 5px" : "4px 12px 5px",
+          marginBottom: -1,
+          zIndex: isActive ? 2 : 1,
+          opacity: draggedTab?.id === tab.id ? 0.55 : 1,
+        }}
+      >
+        {tab.label}
+      </button>
+    );
+  };
+
   return (
     <>
       <div
         className="flex items-end gap-0 shrink-0 no-scrollbar"
         style={{ background: noBorder ? "transparent" : "var(--color-background)", borderBottom: noBorder ? "none" : "1px solid var(--color-border)", paddingTop: noBorder ? 0 : 4 }}
       >
-        {groups.map((group, gi) => {
-          const groupTabs = tabs.filter((t) => t.group === group);
-          if (groupTabs.length === 0) return null;
-          return (
-            <div key={group} className="flex items-end">
-              {gi > 0 && (
-                <div className="w-px self-stretch mx-1" style={{ background: "var(--color-border)", marginBottom: 0 }} />
-              )}
-              {groupTabs.map((tab) => {
-                const isActive = active === tab.id;
-                const isGenerating = generatingTabId != null && generatingTabId === tab.id;
-                return (
+        {onReorder ? (
+          <>
+            {tabs.map((tab, i) => {
+              const prev = i > 0 ? tabs[i - 1] : null;
+              const showDivider = prev != null && tab.group !== prev.group;
+              const isLastInRefRun =
+                tab.group === "refs"
+                && (i === tabs.length - 1 || tabs[i + 1].group !== "refs");
+              return (
+                <Fragment key={tab.id}>
+                  {showDivider && (
+                    <div className="w-px self-stretch mx-1" style={{ background: "var(--color-border)", marginBottom: 0 }} />
+                  )}
+                  {renderTabButton(tab, tab.group)}
+                  {isLastInRefRun && onAddRef && (
+                    <button
+                      type="button"
+                      onClick={onAddRef}
+                      className="px-2 text-xs cursor-pointer transition-colors"
+                      style={{ color: "var(--color-text-muted)", background: "transparent", border: "none", paddingBottom: 5, marginBottom: -1 }}
+                      title="Add reference tab"
+                    >+</button>
+                  )}
+                </Fragment>
+              );
+            })}
+          </>
+        ) : (
+          groups.map((group, gi) => {
+            const groupTabs = tabs.filter((t) => t.group === group);
+            if (groupTabs.length === 0) return null;
+            return (
+              <div key={group} className="flex items-end">
+                {gi > 0 && (
+                  <div className="w-px self-stretch mx-1" style={{ background: "var(--color-border)", marginBottom: 0 }} />
+                )}
+                {groupTabs.map((tab) => (
+                  <Fragment key={tab.id}>{renderTabButton(tab, group)}</Fragment>
+                ))}
+                {group === "refs" && onAddRef && (
                   <button
-                    key={tab.id}
-                    onClick={() => onSelect(tab.id)}
-                    onContextMenu={(e) => handleTabContextMenu(e, tab)}
-                    className={cn(
-                      "text-xs font-medium transition-all whitespace-nowrap cursor-pointer relative",
-                      isGenerating && "btn-generating rounded-md",
-                      isActive
-                        ? "text-[var(--color-foreground)]"
-                        : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]",
-                    )}
-                    style={{
-                      background: isActive ? "var(--color-card)" : GROUP_BG[group],
-                      border: isActive ? "1px solid var(--color-border)" : "1px solid transparent",
-                      borderBottom: isActive ? "1px solid var(--color-card)" : "1px solid var(--color-border)",
-                      borderRadius: isActive ? "6px 6px 0 0" : "4px 4px 0 0",
-                      padding: isActive ? "6px 14px 5px" : tab.group === "artboard" ? "5px 16px 5px" : "4px 12px 5px",
-                      marginBottom: -1,
-                      zIndex: isActive ? 2 : 1,
-                    }}
-                  >
-                    {tab.label}
-                  </button>
-                );
-              })}
-              {group === "refs" && onAddRef && (
-                <button
-                  onClick={onAddRef}
-                  className="px-2 text-xs cursor-pointer transition-colors"
-                  style={{ color: "var(--color-text-muted)", background: "transparent", border: "none", paddingBottom: 5, marginBottom: -1 }}
-                  title="Add a new reference image tab"
-                >+</button>
-              )}
-            </div>
-          );
-        })}
+                    type="button"
+                    onClick={onAddRef}
+                    className="px-2 text-xs cursor-pointer transition-colors"
+                    style={{ color: "var(--color-text-muted)", background: "transparent", border: "none", paddingBottom: 5, marginBottom: -1 }}
+                    title="Add reference tab"
+                  >+</button>
+                )}
+              </div>
+            );
+          })
+        )}
       </div>
 
       {/* Right-click context menu for ref tabs */}

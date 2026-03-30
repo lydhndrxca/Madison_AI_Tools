@@ -177,7 +177,7 @@ export function AudioSettingsModal({ open, onClose }: AudioSettingsModalProps) {
               Input Device (Microphone)
             </h3>
             <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-              Select the mic you want to use for Voice to Text.
+              Select the mic you want to use for Dictate and Voice Commands.
             </p>
             {error && (
               <p className="text-[11px] rounded px-2 py-1" style={{ color: "#e05050", background: "rgba(224,80,80,0.1)" }}>{error}</p>
@@ -354,7 +354,7 @@ export function AudioSettingsModal({ open, onClose }: AudioSettingsModalProps) {
           {/* ── Info ──────────────────────────────────────────── */}
           <div className="rounded px-3 py-2" style={{ background: "rgba(90,90,90,0.3)", border: "1px solid var(--color-border)" }}>
             <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
-              Voice to Text is powered by <strong>Google Gemini</strong> — the same API you already use for image generation. Audio is recorded locally, sent to Gemini for transcription, and the text is inserted into whatever field has focus. Uses your existing API key.
+              Dictation is powered by <strong>Google Gemini</strong> — the same API you already use for image generation. Audio is recorded locally, sent to Gemini for transcription, and the text is inserted into whatever field has focus. Uses your existing API key.
             </p>
           </div>
         </div>

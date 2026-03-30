@@ -972,6 +972,56 @@ class AlphaTrimRequest(BaseModel):
     pixels: int = Field(default=1, ge=-20, le=20)
 
 
+class UIEnhanceRequest(BaseModel):
+    prompt: str = ""
+    element_type: str = "button"
+    button_shape: str = "auto"
+    border_style: str = "auto"
+    text_size: str = "auto"
+    style_guidance: str = ""
+
+
+class UIEnhanceResponse(BaseModel):
+    prompt: Optional[str] = None
+    error: Optional[str] = None
+
+
+def _do_enhance_prompt(req: UIEnhanceRequest) -> UIEnhanceResponse:
+    api_key = core.get_api_key()
+    if not api_key:
+        return UIEnhanceResponse(error="No API key")
+    try:
+        instruction = (
+            "You are an expert UI/UX designer. The user has provided a prompt describing a UI element. "
+            "Enhance and expand the prompt to be more vivid, detailed, and production-ready. "
+            "Keep the same core concept but add specificity about visual style, colors, states, "
+            "textures, lighting, materials, and micro-interactions.\n\n"
+            f"Element type: {req.element_type}\n"
+            f"Button shape: {req.button_shape}\n"
+            f"Border style: {req.border_style}\n"
+            f"Text size: {req.text_size}\n"
+        )
+        if req.style_guidance:
+            instruction += f"Style guidance: {req.style_guidance}\n"
+        instruction += (
+            f"\nOriginal prompt:\n{req.prompt}\n\n"
+            "Return ONLY valid JSON with one key:\n"
+            '- "prompt": string (2-4 sentence enhanced prompt for the UI element)\n'
+        )
+        data = core.rest_generate_json(api_key, "gemini-2.0-flash", [instruction])
+        if data is None:
+            return UIEnhanceResponse(error="No response from Gemini")
+        return UIEnhanceResponse(prompt=data.get("prompt", req.prompt))
+    except Exception as e:
+        return UIEnhanceResponse(error=str(e))
+
+
+@router.post("/enhance", response_model=UIEnhanceResponse)
+async def enhance(body: UIEnhanceRequest):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, _do_enhance_prompt, body)
+
+
 @router.post("/trim-alpha")
 async def trim_alpha(req: AlphaTrimRequest):
     """Shrink (positive) or expand (negative) the alpha border by N pixels."""

@@ -338,7 +338,7 @@ export function ProjectTabsWrapper({
               border: "1px solid var(--color-border)",
               color: "var(--color-text-muted)",
             }}
-            title="New project"
+            title="Create new project"
           >
             <Plus className="h-3 w-3" />
           </button>

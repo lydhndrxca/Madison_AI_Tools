@@ -9,6 +9,7 @@ import { useToastContext } from "@/hooks/ToastContext";
 import { useFavorites } from "@/hooks/FavoritesContext";
 import { useSessionRegister } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
+import { useModels, type ModelInfo } from "@/hooks/ModelsContext";
 
 const DEFAULT_TABS: TabDef[] = [
   { id: "main", label: "Main Stage", group: "stage" },
@@ -17,7 +18,6 @@ const DEFAULT_TABS: TabDef[] = [
   { id: "refC", label: "Ref C", group: "refs" },
 ];
 
-interface ModelInfo { id: string; label: string; resolution: string; time_estimate: string; multimodal: boolean; }
 interface EditEntry { timestamp: string; prompt: string; imageFile?: string; isOriginal?: boolean; }
 
 const DIMENSION_PRESETS = [
@@ -58,8 +58,8 @@ export function GeminiPage() {
   const { addToast } = useToastContext();
   const { addFavorite, removeFavorite, isFavorited, getFavoriteId } = useFavorites();
 
+  const { models, defaultModelId } = useModels();
   const [modelId, setModelId] = useState("");
-  const [models, setModels] = useState<ModelInfo[]>([]);
   const [aspectPreset, setAspectPreset] = useState("1:1");
   const [customW, setCustomW] = useState(1024);
   const [customH, setCustomH] = useState(1024);
@@ -70,11 +70,8 @@ export function GeminiPage() {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
-    apiFetch<{ models: ModelInfo[]; current: string }>("/system/models").then((r) => {
-      setModels(r.models.filter((m) => m.multimodal));
-      if (!modelId) setModelId(r.current);
-    }).catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (defaultModelId && !modelId) setModelId(defaultModelId);
+  }, [defaultModelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!genStartTime) return;
@@ -328,7 +325,7 @@ export function GeminiPage() {
           <div className="px-3 py-2 space-y-2">
             <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Model</p>
             {models.length > 0 && (
-              <select className="w-full min-w-0 px-2 py-1.5 text-xs truncate" style={selectStyle} value={modelId} onChange={(e) => setModelId(e.target.value)} title="Choose which AI model generates your images">
+              <select className="w-full min-w-0 px-2 py-1.5 text-xs truncate" style={selectStyle} value={modelId} onChange={(e) => setModelId(e.target.value)} title="AI model for generation">
                 {models.map((m) => <option key={m.id} value={m.id}>{m.label} — {m.resolution} ({m.time_estimate})</option>)}
               </select>
             )}
@@ -344,7 +341,7 @@ export function GeminiPage() {
         <Card>
           <div className="px-3 py-2 space-y-2">
             <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Dimensions</p>
-            <select className="w-full min-w-0 px-2 py-1.5 text-xs" style={selectStyle} value={aspectPreset} onChange={(e) => setAspectPreset(e.target.value)} title="Choose the aspect ratio for your generated image">
+            <select className="w-full min-w-0 px-2 py-1.5 text-xs" style={selectStyle} value={aspectPreset} onChange={(e) => setAspectPreset(e.target.value)} title="Output aspect ratio">
               {DIMENSION_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
             </select>
             {isCustomDim && (
@@ -361,10 +358,10 @@ export function GeminiPage() {
         <Card>
           <div className="px-3 py-2 space-y-2">
             <NumberStepper value={batchCount} onChange={setBatchCount} min={1} max={20} label="Count:" />
-            <Button variant="primary" className="w-full" generating={isGenerating} generatingText={batchCount > 1 ? `Generating ${completedCount}/${batchCount}...` : "Generating..."} onClick={handleGenerate} title="Send your prompt to the AI and generate images">
+            <Button variant="primary" className="w-full" generating={isGenerating} generatingText={batchCount > 1 ? `Generating ${completedCount}/${batchCount}...` : "Generating..."} onClick={handleGenerate} title="Generate from prompt">
               Generate {batchCount > 1 ? `${batchCount} Images` : "Image"}
             </Button>
-            {busy.any && <Button variant="danger" size="sm" className="w-full" onClick={handleCancel} title="Stop the current generation">Cancel</Button>}
+            {busy.any && <Button variant="danger" size="sm" className="w-full" onClick={handleCancel} title="Cancel generation">Cancel</Button>}
           </div>
         </Card>
 
@@ -373,12 +370,12 @@ export function GeminiPage() {
           <div className="px-3 py-2 space-y-1.5">
             <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--color-text-secondary)" }}>Input</p>
             <div className="grid grid-cols-2 gap-1.5">
-              <Button size="sm" className="w-full" onClick={handleOpenImage} title="Load an image from your computer">Open Image</Button>
-              <Button size="sm" className="w-full" onClick={handlePaste} title="Paste an image from your clipboard">Paste Image</Button>
-              <Button size="sm" className="w-full" onClick={handleSendToPS} title="Open the current image directly in Photoshop">Send to PS</Button>
-              <Button size="sm" className="w-full" onClick={handleSaveImage} title="Save the current image to disk">Save Image</Button>
+              <Button size="sm" className="w-full" onClick={handleOpenImage} title="Open image from disk">Open Image</Button>
+              <Button size="sm" className="w-full" onClick={handlePaste} title="Paste from clipboard">Paste Image</Button>
+              <Button size="sm" className="w-full" onClick={handleSendToPS} title="Send to Photoshop">Send to PS</Button>
+              <Button size="sm" className="w-full" onClick={handleSaveImage} title="Save image to disk">Save Image</Button>
             </div>
-            <Button size="sm" className="w-full" onClick={handleReset} title="Clear everything and start fresh">Reset</Button>
+            <Button size="sm" className="w-full" onClick={handleReset} title="Clear all">Reset</Button>
           </div>
         </Card>
 

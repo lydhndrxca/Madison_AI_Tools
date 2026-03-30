@@ -141,7 +141,7 @@ export function EditorToolbar({
           disabled={!hasMask || locked}
           className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded cursor-pointer transition-colors disabled:opacity-40 disabled:pointer-events-none"
           style={{ background: "var(--color-input-bg)", color: hasMask ? "var(--color-text-secondary)" : "var(--color-text-muted)", border: "1px solid var(--color-border)", opacity: (hasMask && !locked) ? 1 : 0.4 }}
-          title="Remove all painted selections so you can start fresh"
+          title="Clear all selections"
         ><Trash2 className="h-3 w-3 shrink-0" />Clear Mask</button>
       </div>
 

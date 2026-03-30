@@ -34,18 +34,20 @@ export function ArtDirectorConfigModal({ open, onClose }: Props) {
     if (!name) return;
     setGenBusy(true);
     try {
-      const res = await apiFetch<PersonaConfig>("/director/generate-persona", {
+      const res = await apiFetch<Record<string, unknown>>("/director/generate-persona", {
         method: "POST",
         body: JSON.stringify({ name }),
       });
+      const toStr = (v: unknown): string =>
+        Array.isArray(v) ? v.join(", ") : typeof v === "string" ? v : "";
       setDraft((prev) => ({
         ...prev,
         persona: {
-          name: res.name || name,
-          description: res.description || "",
-          philosophy: res.philosophy || "",
-          likes: res.likes || "",
-          dislikes: res.dislikes || "",
+          name: (typeof res.name === "string" && res.name) || name,
+          description: toStr(res.description),
+          philosophy: toStr(res.philosophy),
+          likes: toStr(res.likes),
+          dislikes: toStr(res.dislikes),
         },
       }));
     } catch { /* */ }

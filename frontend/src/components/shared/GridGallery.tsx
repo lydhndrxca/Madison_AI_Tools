@@ -287,7 +287,7 @@ export function GridGallery({
                     style={{ background: "repeating-conic-gradient(rgba(128,128,128,0.15) 0% 25%, transparent 0% 50%) 50%/16px 16px" }}
                     onDoubleClick={() => handleExpand(result.id)}
                     onContextMenu={(e) => handleGridContextMenu(e, result.id)}
-                    title="Double-click to expand · Right-click for AI Upres / Restore"
+                    title="Double-click to expand, right-click for options"
                   >
                     <span
                       className="absolute top-1 left-1 text-[9px] font-bold px-1 rounded z-[1]"
@@ -361,7 +361,7 @@ export function GridGallery({
                           disabled={isBusy}
                           className="flex-1 px-1 py-0.5 text-[9px] rounded cursor-pointer font-medium"
                           style={{ background: "rgba(106,42,154,0.2)", color: "#b07ee8", border: "1px solid rgba(140,80,180,0.4)" }}
-                          title="Generate another batch using this image as reference"
+                          title="Generate more from this image"
                         >Regen</button>
                       )}
                       {onSendToMainstage && (
@@ -389,7 +389,7 @@ export function GridGallery({
                         onChange={(e) => handleEditChange(result.id, e.target.value)}
                         onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleEditSend(result.id); } }}
                         disabled={isBusy}
-                        title="Type a prompt to modify this image, then press Enter or click Send"
+                        title="Edit prompt — Enter or click Send"
                       />
                       <button
                         onClick={() => handleEditSend(result.id)}
@@ -576,7 +576,7 @@ export function GridGallery({
                       disabled={enhancer.busy}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium disabled:opacity-40"
                       style={previewActionBtn}
-                      title="Upscale this image using AI — makes it bigger and sharper"
+                      title="AI upscale"
                     >
                       {enhancingId === expandedResult.id ? "Processing…" : "AI Upres"}
                     </button>
@@ -586,7 +586,7 @@ export function GridGallery({
                       disabled={enhancer.busy}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium disabled:opacity-40"
                       style={previewActionBtn}
-                      title="Restore this image using AI — fixes artifacts and blur"
+                      title="AI restore"
                     >
                       {enhancingId === expandedResult.id ? "Processing…" : "AI Restore"}
                     </button>
@@ -630,7 +630,7 @@ export function GridGallery({
                     onClick={() => { onRegenerate(expandedResult.id); handleCollapse(); }}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium"
                     style={previewActionBtn}
-                    title="Generate another batch using this image as reference"
+                    title="Generate more from this image"
                   >
                     Regenerate
                   </button>
@@ -646,7 +646,7 @@ export function GridGallery({
                     disabled={!!trimBusy[expandedResult.id]}
                     className="flex items-center gap-1 px-2 py-1 text-[11px] rounded cursor-pointer font-medium"
                     style={previewActionBtn}
-                    title="Shrink alpha border by 1px (removes green fringe)"
+                    title="Shrink alpha border 1px"
                   >
                     <Minus className="h-3 w-3" /> Shrink
                   </button>
@@ -690,7 +690,7 @@ export function GridGallery({
                     onClick={() => handleCreateStyleLib(expandedResult.id)}
                     className="flex items-center gap-1 px-2 py-1 text-[11px] rounded cursor-pointer font-medium"
                     style={previewActionBtn}
-                    title="Create a new style library folder from this image"
+                    title="Create style folder from image"
                   >
                     <FolderPlus className="h-3 w-3" /> New Style
                   </button>

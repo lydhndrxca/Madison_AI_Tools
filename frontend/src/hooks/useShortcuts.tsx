@@ -55,12 +55,12 @@ const DEFAULT_SHORTCUTS: ShortcutDef[] = [
   { id: "toggleConsole", label: "Toggle Console", category: "global", defaultKeys: "Ctrl+`", currentKeys: "Ctrl+`" },
   { id: "saveSession", label: "Save Session", category: "global", defaultKeys: "Ctrl+S", currentKeys: "Ctrl+S" },
   { id: "openSession", label: "Open Session", category: "global", defaultKeys: "Ctrl+O", currentKeys: "Ctrl+O" },
-  { id: "toggleVoice", label: "Toggle Voice to Text", category: "global", defaultKeys: "Ctrl+R", currentKeys: "Ctrl+R" },
+  { id: "toggleVoice", label: "Toggle Dictate", category: "global", defaultKeys: "Ctrl+R", currentKeys: "Ctrl+R" },
   { id: "toggleFullscreen", label: "Toggle Fullscreen Viewer", category: "global", defaultKeys: "Ctrl+F", currentKeys: "Ctrl+F" },
   { id: "exitFullscreen", label: "Exit Fullscreen", category: "global", defaultKeys: "Escape", currentKeys: "Escape", singleKey: false },
 
   // Navigation
-  { id: "navGenerate", label: "Go to AI Generate Image", category: "navigation", defaultKeys: "Ctrl+1", currentKeys: "Ctrl+1" },
+  { id: "navGenerate", label: "Go to Default Gemini", category: "navigation", defaultKeys: "Ctrl+1", currentKeys: "Ctrl+1" },
   { id: "navMultiview", label: "Go to Multiview", category: "navigation", defaultKeys: "Ctrl+2", currentKeys: "Ctrl+2" },
   { id: "navCharacter", label: "Go to AI CharacterLab", category: "navigation", defaultKeys: "Ctrl+3", currentKeys: "Ctrl+3" },
   { id: "navWeapon", label: "Go to AI WeaponLab", category: "navigation", defaultKeys: "Ctrl+4", currentKeys: "Ctrl+4" },

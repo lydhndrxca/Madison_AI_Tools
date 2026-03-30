@@ -621,14 +621,14 @@ export function GeneratedImagesPage({ defaultTab, onNavigate }: GeneratedImagesP
                 <button onClick={handleSendToPS} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="Open this image in Adobe Photoshop">
                   <Monitor className="h-3.5 w-3.5" /> Send to PS
                 </button>
-                <button onClick={() => handleEnhancePreview("upscale")} disabled={enhancer.busy} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium disabled:opacity-40" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="Upscale this image using AI — makes it bigger and sharper">
+                <button onClick={() => handleEnhancePreview("upscale")} disabled={enhancer.busy} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium disabled:opacity-40" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="AI upscale">
                   {enhancer.busy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <span className="text-[9px] font-bold">▲</span>} AI Upres
                 </button>
-                <button onClick={() => handleEnhancePreview("restore")} disabled={enhancer.busy} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium disabled:opacity-40" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="Restore this image using AI — fixes artifacts and blur">
+                <button onClick={() => handleEnhancePreview("restore")} disabled={enhancer.busy} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium disabled:opacity-40" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="AI restore">
                   {enhancer.busy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <span className="text-[9px] font-bold">✦</span>} AI Restore
                 </button>
                 {onNavigate && (
-                  <button onClick={handleRestore} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="Restore this image and all its settings back to the tool's main stage">
+                  <button onClick={handleRestore} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="Restore to main stage">
                     <RotateCcw className="h-3.5 w-3.5" /> Restore to Main Stage
                   </button>
                 )}

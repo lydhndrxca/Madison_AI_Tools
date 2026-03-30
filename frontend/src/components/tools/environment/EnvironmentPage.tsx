@@ -7,6 +7,7 @@ import { ArtboardCanvas } from "@/components/shared/ArtboardCanvas";
 import type { TabDef } from "@/components/shared/TabBar";
 import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
+import { useModels, type ModelInfo } from "@/hooks/ModelsContext";
 import { useFavorites } from "@/hooks/FavoritesContext";
 import { useSessionRegister } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
@@ -41,10 +42,10 @@ const BUILTIN_TABS: TabDef[] = [
   { id: "panoramic", label: "Panoramic", group: "views", prompt: "Ultra-wide cinematic establishing shot." },
   { id: "detail", label: "Detail", group: "views", prompt: "Tight crop on a signature material or architectural detail." },
   { id: "artboard", label: "Art Table", group: "artboard" },
-  { id: "deepSearch", label: "Deep Search", group: "search" },
   { id: "refA", label: "Ref A", group: "refs" },
   { id: "refB", label: "Ref B", group: "refs" },
   { id: "refC", label: "Ref C", group: "refs" },
+  { id: "deepSearch", label: "Deep Search", group: "search" },
 ];
 
 const VIEW_TYPE_MAP: Record<string, string> = {
@@ -189,9 +190,8 @@ const SECTION_TIPS: Record<SectionId, string> = {
 const NON_COLLAPSIBLE: Set<SectionId> = new Set(["generate"]);
 const TOGGLEABLE_SECTIONS: Set<SectionId> = new Set(["identity", "envDescription", "attributes", "reimagine", "styleFusion", "preservation"]);
 
-interface ModelInfo { id: string; label: string; resolution: string; time_estimate: string; multimodal: boolean }
 
-interface LayoutState { order: SectionId[]; collapsed: Partial<Record<SectionId, boolean>> }
+interface LayoutState { order: SectionId[]; collapsed: Partial<Record<SectionId, boolean>>; hidden?: SectionId[] }
 
 function layoutStorageKeyFor(instanceId: number) {
   return `madison-env-layout${instanceId ? `-${instanceId}` : ""}`;
@@ -205,7 +205,7 @@ function loadDefaultLayout(key?: string): LayoutState {
       const allIds = new Set<SectionId>(DEFAULT_SECTION_ORDER);
       const order = parsed.order.filter((id) => allIds.has(id));
       for (const id of DEFAULT_SECTION_ORDER) { if (!order.includes(id)) order.push(id); }
-      return { order, collapsed: parsed.collapsed ?? {} };
+      return { order, collapsed: parsed.collapsed ?? {}, hidden: parsed.hidden };
     }
   } catch { /* */ }
   return { order: [...DEFAULT_SECTION_ORDER], collapsed: { reimagine: true, styleFusion: true, preservation: true, upscaleRestore: true, multiview: true, saveOptions: true } };
@@ -287,7 +287,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
   const [modelId, setModelId] = useState("");
   const [editModel, setEditModel] = useState("");
   const [multiviewModel, setMultiviewModel] = useState("");
-  const [models, setModels] = useState<ModelInfo[]>([]);
+  const { models, defaultModelId } = useModels();
   const { addToast } = useToastContext();
   const { addFavorite, removeFavorite, isFavorited, getFavoriteId } = useFavorites();
   const artboard = useArtboard();
@@ -362,19 +362,19 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
   const handleSetDefaultLayout = useCallback(() => {
     const collapsed: Partial<Record<SectionId, boolean>> = {};
     for (const id of layout.order) { if (NON_COLLAPSIBLE.has(id)) continue; collapsed[id] = isSectionCollapsed(id); }
-    localStorage.setItem(layoutStorageKey, JSON.stringify({ order: layout.order, collapsed }));
+    localStorage.setItem(layoutStorageKey, JSON.stringify({ order: layout.order, collapsed, hidden: layout.hidden }));
     addToast("Layout saved as default", "success");
-  }, [layout.order, isSectionCollapsed, addToast, layoutStorageKey]);
+  }, [layout.order, layout.hidden, isSectionCollapsed, addToast, layoutStorageKey]);
 
   const [xmlOpen, setXmlOpen] = useState(false);
 
   const refCounter = useRef(0);
 
   useEffect(() => {
-    apiFetch<{ models: ModelInfo[]; current: string }>("/system/models").then((r) => {
-      setModels(r.models.filter((m) => m.multimodal));
-      if (!modelId) setModelId(r.current);
-    }).catch(() => {});
+    if (defaultModelId && !modelId) setModelId(defaultModelId);
+  }, [defaultModelId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
     apiFetch<{ name: string; guidance_text: string }[]>("/styles/folders?category=general").then((folders) => {
       setStyleLibraryFolders(folders);
     }).catch(() => {});
@@ -622,8 +622,6 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
     } catch (e) { addToast(String(e), "error"); }
     busy.end("gen");
   }, [activeTab, genCount, buildRequestBody, addToast, setTabImage, appendToGallery, busy]);
-
-  const handleQuickGenerate = useCallback(() => handleGenerate("main"), [handleGenerate]);
 
   const handleGenerateAllViews = useCallback(async () => {
     const mainImg = getMainImageB64();
@@ -1176,6 +1174,18 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
     return () => window.removeEventListener("voice-command", handler);
   }, [active]);
 
+  useEffect(() => {
+    if (!active) return;
+    const handler = (e: Event) => {
+      const tabId = (e as CustomEvent).detail?.tabId;
+      if (typeof tabId === "string" && tabs.some((t) => t.id === tabId)) {
+        setActiveTab(tabId);
+      }
+    };
+    window.addEventListener("switch-tab", handler);
+    return () => window.removeEventListener("switch-tab", handler);
+  }, [active, tabs]);
+
   // --- Gallery restore listener ---
   useEffect(() => {
     if (!active) return;
@@ -1370,7 +1380,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
   // --- Generate section ---
   const renderGenerateSection = () => (
     <>
-      <Button className="w-full" generating={busy.is("extract")} generatingText="Extracting..." onClick={handleExtractAttributes} disabled={textBusy} title="Analyze the current image and description to populate identity/attributes">
+      <Button className="w-full" generating={busy.is("extract")} generatingText="Extracting..." onClick={handleExtractAttributes} disabled={textBusy} title="Auto-fill fields from current image">
         Extract Attributes
       </Button>
       <div>
@@ -1379,7 +1389,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
           onChange={(e) => setExtractMode(e.target.value as "inspiration" | "recreate")}
           className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
           style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
-          title="Controls how the source image is used when generating"
+          title="How strictly AI follows source image"
         >
           <option value="inspiration">Generate from description only</option>
           <option value="recreate">Match source image exactly</option>
@@ -1413,7 +1423,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
           onChange={(e) => setStyleLibraryFolder(e.target.value)}
           className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)] min-w-0 truncate"
           style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)", maxWidth: "100%" }}
-          title="Select a style library folder for style guidance"
+          title="Style folder for visual guidance"
         >
           <option value="">Default (Gemini)</option>
           {styleLibraryFolders.map((f) => (
@@ -1422,15 +1432,15 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
         </select>
       </div>
       <div className="grid grid-cols-2 gap-1.5">
-        <Button size="sm" className="w-full" generating={busy.is("enhance")} generatingText="Enhancing..." onClick={handleEnhanceDescription} disabled={textBusy} title="Enhance existing fields with richer detail">
+        <Button size="sm" className="w-full" generating={busy.is("enhance")} generatingText="Enhancing..." onClick={handleEnhanceDescription} disabled={textBusy} title="Add detail to existing fields">
           Enhance
         </Button>
-        <Button size="sm" className="w-full" generating={busy.is("randomize")} generatingText="Randomizing..." onClick={handleRandomizeFull} disabled={textBusy} title="Generate a random environment with all attributes filled in">
+        <Button size="sm" className="w-full" generating={busy.is("randomize")} generatingText="Randomizing..." onClick={handleRandomizeFull} disabled={textBusy} title="Fill all fields with random attributes">
           Randomize
         </Button>
       </div>
       <div className="pt-1">
-        <Button variant="primary" className="w-full" size="lg" generating={busy.is("gen")} generatingText="Generating..." onClick={generationMode === "grid" ? handleGridGenerate : () => handleGenerate()} title="Generate a new environment concept based on all enabled panels">
+        <Button variant="primary" className="w-full" size="lg" generating={busy.is("gen")} generatingText="Generating..." onClick={generationMode === "grid" ? handleGridGenerate : () => handleGenerate()} title="Generate image from current settings">
           Generate Environment
         </Button>
       </div>
@@ -1441,7 +1451,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
           onChange={(e) => setModelId(e.target.value)}
           className="min-w-0 flex-1 px-2 py-1 text-xs rounded-[var(--radius-sm)] truncate"
           style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)", maxWidth: "100%" }}
-          title="Select the AI model for image generation"
+          title="AI model for generation"
         >
           {models.map((m) => (
             <option key={m.id} value={m.id}>{m.label} — {m.resolution}</option>
@@ -1496,7 +1506,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
 
   // --- Description section ---
   const renderDescriptionSection = () => (
-    <div>
+    <div className="space-y-1.5">
       <Textarea
         value={description}
         onChange={(e) => setDescription(e.target.value)}
@@ -1505,6 +1515,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
         disabled={textBusy}
         data-voice-target="envDescription"
       />
+      <Button size="sm" className="w-full" generating={busy.is("enhance")} generatingText="Enhancing..." onClick={handleEnhanceDescription} title="Use AI to enrich and expand your environment description and all attributes">Enhance Description</Button>
     </div>
   );
 
@@ -1619,7 +1630,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
         generatingText="Reimagining..."
         onClick={handleReimagine}
         disabled={busy.is("reimagine") || reimagineScreenshots.length === 0}
-        title="Transform uploaded screenshots into finished environment concept art"
+        title="Transform screenshots into concept art"
       >
         Reimagine Screenshot
       </Button>
@@ -1652,14 +1663,14 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
           onClick={() => setPreservation({ ...EMPTY_PRESERVATION, preserves: DEFAULT_PRESERVES.map((p) => ({ ...p })), negatives: DEFAULT_NEGATIVES.map((n) => ({ ...n })) })}
           className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
           style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-          title="Reset all preservation rules back to their defaults"
+          title="Reset to defaults"
         >Reset</button>
         <span className="text-[10px]" style={{ color: preservation.enabled ? "var(--color-text-primary)" : "var(--color-text-muted)" }}>
           {preservation.enabled ? "Active — the AI will try to keep these traits and avoid the negatives" : "Off — no constraints, the AI has full creative freedom"}
         </span>
       </div>
       <div>
-        <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "var(--color-text-secondary)" }} title="Check the things you want the AI to keep the same when regenerating">Preserve</p>
+        <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "var(--color-text-secondary)" }} title="Elements to preserve across generations">Preserve</p>
         <div className="space-y-1">
           {preservation.preserves.map((p, i) => (
             <div key={p.key} className="flex items-center gap-2 group">
@@ -1683,7 +1694,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
                 onClick={() => setPreservation((prev) => ({ ...prev, preserves: prev.preserves.filter((_, j) => j !== i) }))}
                 className="text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-pointer"
                 style={{ color: "var(--color-text-muted)", background: "transparent", border: "none" }}
-                title="Remove this preserve rule"
+                title="Remove rule"
               >✕</button>
             </div>
           ))}
@@ -1701,11 +1712,11 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
           }}
           className="mt-1.5 px-2 py-0.5 text-[10px] rounded cursor-pointer"
           style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-          title="Add a new rule telling the AI what to keep unchanged"
+          title="Add preserve rule"
         >+ Add Preserve</button>
       </div>
       <div>
-        <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "var(--color-text-secondary)" }} title="List things the AI should never include in the generated image">Negative Constraints (must avoid)</p>
+        <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "var(--color-text-secondary)" }} title="Elements AI must avoid">Negative Constraints (must avoid)</p>
         <div className="space-y-1">
           {preservation.negatives.map((n, i) => (
             <div key={n.id} className="flex items-center gap-2 group">
@@ -1737,7 +1748,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
                 onClick={() => setPreservation((prev) => ({ ...prev, negatives: prev.negatives.filter((_, j) => j !== i) }))}
                 className="text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-pointer shrink-0"
                 style={{ color: "var(--color-text-muted)", background: "transparent", border: "none" }}
-                title="Remove this negative constraint"
+                title="Remove constraint"
               >✕</button>
             </div>
           ))}
@@ -1750,7 +1761,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
           }))}
           className="mt-1.5 px-2 py-0.5 text-[10px] rounded cursor-pointer"
           style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-          title="Add a negative constraint"
+          title="Add negative constraint"
         >+ Add Negative</button>
       </div>
     </div>
@@ -1805,14 +1816,14 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
         placeholder="Optional context — e.g. pixel art icons, game UI screenshots"
         value={urContext}
         onChange={(e) => setUrContext(e.target.value)}
-        title="Give the AI a hint about what kind of images these are for better results"
+        title="Describe what these reference images show"
       />
       <select
         value={urModelId || modelId}
         onChange={(e) => setUrModelId(e.target.value)}
         className="w-full min-w-0 px-2 py-1 text-xs rounded-[var(--radius-sm)] truncate"
         style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)", maxWidth: "100%" }}
-        title="Choose which AI model to use for upscaling or restoring"
+        title="AI model for upscale/restore"
       >
         {models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
       </select>
@@ -1846,7 +1857,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
                   onClick={() => setUrImages((prev) => prev.filter((_, j) => j !== i))}
                   className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[10px] flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100"
                   style={{ background: "var(--color-error)", color: "#fff" }}
-                  title="Remove this image"
+                  title="Remove"
                 >×</button>
               </div>
             ))}
@@ -1868,7 +1879,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
             onClick={() => urFileRef.current?.click()}
             className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
             style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-            title="Add images from your computer"
+            title="Add images from disk"
           >+ Add Images</button>
           <button
             type="button"
@@ -1888,7 +1899,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
             }}
             className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
             style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
-            title="Paste images from your clipboard"
+            title="Paste from clipboard"
           >Paste</button>
           {urImages.length > 0 && (
             <button
@@ -1896,7 +1907,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
               onClick={() => setUrImages([])}
               className="px-2 py-0.5 text-[10px] rounded cursor-pointer"
               style={{ background: "var(--color-input-bg)", color: "var(--color-text-muted)", border: "1px solid var(--color-border)" }}
-              title="Remove all images"
+              title="Remove all"
             >Clear All</button>
           )}
         </div>
@@ -1922,13 +1933,13 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
         generating={busy.is("allViews")}
         generatingText="Generating views..."
         onClick={handleGenerateAllViews}
-        title="Generate Player POV, Bird's Eye, Panoramic, and Detail views from the hero shot"
+        title="Generate all environment views"
       >Generate All Views</Button>
       <Button
         className="w-full"
         size="sm"
         onClick={handleGenerateSelectedView}
-        title="Generate only the currently selected view"
+        title="Generate current view only"
       >Generate Selected View</Button>
       {modelOptions.length > 0 && (
         <div>
@@ -1939,7 +1950,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
             value={multiviewModel || modelId}
             onChange={(e) => setMultiviewModel(e.target.value)}
             disabled={busy.is("allViews")}
-            title="Model used for Generate All Views and Generate Selected View."
+            title="AI model for view generation"
           >
             {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
@@ -1953,12 +1964,12 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
   const renderSaveSection = () => (
     <div className="space-y-1.5">
       <div className="grid grid-cols-3 gap-1.5">
-        <Button size="sm" className="w-full" onClick={handleSendToPS} title="Send the current image to Photoshop">Send to PS</Button>
-        <Button size="sm" className="w-full" onClick={() => setXmlOpen(true)} title="Show the XML representation of this environment">Show XML</Button>
-        <Button size="sm" className="w-full" onClick={handleReset} title="Clear all environment data and images">Clear All</Button>
+        <Button size="sm" className="w-full" onClick={handleSendToPS} title="Send to Photoshop">Send to PS</Button>
+        <Button size="sm" className="w-full" onClick={() => setXmlOpen(true)} title="View environment data as XML">Show XML</Button>
+        <Button size="sm" className="w-full" onClick={handleReset} title="Clear all fields and images">Clear All</Button>
       </div>
       <div className="pt-1" style={{ borderTop: "1px solid var(--color-border)" }}>
-        <Button size="sm" className="w-full" title="Export a complete handoff package as ZIP" onClick={async () => {
+        <Button size="sm" className="w-full" title="Export handoff ZIP" onClick={async () => {
           const imgs: {label: string; image_b64: string}[] = [];
           for (const tab of ["main","player_pov","birds_eye","panoramic","detail"] as const) {
             const b64 = getImageB64(tab);
@@ -1992,7 +2003,10 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
         className="w-[400px] h-full shrink-0 overflow-y-auto p-3 space-y-2"
         style={{ borderRight: "1px solid var(--color-border)" }}
       >
-        {layout.order.map((id) => renderSection(id))}
+        {layout.order.map((id) => {
+          if (layout.hidden?.includes(id)) return null;
+          return renderSection(id);
+        })}
 
         {customSections.sections.map((cs) => {
           const csCollapsed = customSections.isCollapsed(cs.id);
@@ -2056,7 +2070,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
           onClick={handleSetDefaultLayout}
           className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded text-[10px] font-medium cursor-pointer transition-colors"
           style={{ background: "transparent", color: "var(--color-text-muted)", border: "1px dashed var(--color-border)" }}
-          title="Save current panel order and collapsed states as default"
+          title="Save panel layout as default"
         >
           <Save className="h-3 w-3" />
           Set Active Layout as Default
@@ -2070,7 +2084,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
             <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Edit Environment</p>
             <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>Describe changes to apply:</p>
             <Textarea value={editPrompt} onChange={(e) => setEditPrompt(e.target.value)} rows={14} placeholder="Tell the AI what to change — e.g. Add fog in the valley, change to sunset lighting, make the water more turbulent..." disabled={busy.is("apply")} />
-            <Button variant="primary" className="w-full" generating={busy.is("apply")} generatingText="Applying..." onClick={handleApplyEdit} title="Send your edit instructions to the AI — it will modify the current image based on what you wrote above">Apply Changes</Button>
+            <Button variant="primary" className="w-full" generating={busy.is("apply")} generatingText="Applying..." onClick={handleApplyEdit} title="Apply edit to current image">Apply Changes</Button>
             {modelOptions.length > 0 && (
               <div>
                 <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Gemini model (edit)</label>
@@ -2080,7 +2094,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
                   value={editModel || modelId}
                   onChange={(e) => setEditModel(e.target.value)}
                   disabled={busy.is("apply")}
-                  title="Model used for Apply Changes edits."
+                  title="AI model for edits"
                 >
                   {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
@@ -2115,7 +2129,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
                   <Button
                     size="sm" className="w-full"
                     onClick={() => { setPromptPreview(buildPromptPreview()); }}
-                    title="Build the exact prompt that will be sent to the AI"
+                    title="Preview full prompt"
                   >Preview Instructions</Button>
                   <pre
                     className="text-[10px] leading-relaxed whitespace-pre-wrap break-words max-h-[400px] overflow-y-auto p-2 rounded select-text"
@@ -2128,7 +2142,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
                         navigator.clipboard.writeText(promptPreview || lastSentPrompt);
                         addToast("Prompt copied to clipboard", "success");
                       }}
-                      title="Copy the prompt text to your clipboard"
+                      title="Copy prompt to clipboard"
                     >Copy Prompt</Button>
                   )}
                 </div>
@@ -2146,13 +2160,13 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
               tabs={tabs}
               active={activeTab}
               onSelect={setActiveTab}
+              onReorder={setTabs}
               onAddRef={handleAddRef}
               onRemoveTab={handleRemoveRef}
               noBorder
             />
           </div>
           <div className="flex items-center gap-1.5 px-2 pb-1 shrink-0">
-            <Button className="text-[11px] py-1" onClick={handleQuickGenerate} disabled={busy.is("gen")}>Quick Generate</Button>
             {busy.any && (
               <Button className="text-[11px] py-1" onClick={handleCancel} style={{ background: "rgba(220,80,80,0.15)", color: "#e05050", border: "1px solid rgba(220,80,80,0.3)" }}>Cancel</Button>
             )}
@@ -2164,7 +2178,7 @@ export function EnvironmentPage({ instanceId = 0, active = true }: EnvironmentPa
           {activeTab === "artboard" ? (
             <ArtboardCanvas />
           ) : activeTab === "deepSearch" ? (
-            <DeepSearchPanel onSendToArtboard={handleSendSearchToArtboard} />
+            <DeepSearchPanel onSendToArtboard={handleSendSearchToArtboard} isActivePage={active} />
           ) : activeTab === "grid" ? (
             <GridGallery
               results={gridResults}

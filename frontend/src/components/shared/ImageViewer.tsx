@@ -683,17 +683,17 @@ export function ImageViewer({
       {showToolbar && (
         <div className="flex items-center gap-1 px-2 py-1 shrink-0" style={{ borderBottom: "1px solid var(--color-border)" }}>
           <span className="text-xs mr-1" style={{ color: "var(--color-text-secondary)" }}>Zoom</span>
-          <button onClick={() => setZoom((z) => Math.max(0.02, z / 1.25))} className="p-1 rounded transition-colors cursor-pointer hover:bg-[var(--color-hover)]" style={toolbarBtnStyle} title="Zoom out — make the image smaller (keyboard shortcut: minus key)">
+          <button onClick={() => setZoom((z) => Math.max(0.02, z / 1.25))} className="p-1 rounded transition-colors cursor-pointer hover:bg-[var(--color-hover)]" style={toolbarBtnStyle} title="Zoom out (−)">
             <ZoomOut className="h-3.5 w-3.5" />
           </button>
           <span className="text-xs w-12 text-center tabular-nums" style={{ color: "var(--color-text-muted)" }}>{Math.round(zoom * 100)}%</span>
-          <button onClick={() => setZoom((z) => Math.min(50, z * 1.25))} className="p-1 rounded transition-colors cursor-pointer hover:bg-[var(--color-hover)]" style={toolbarBtnStyle} title="Zoom in — make the image bigger (keyboard shortcut: plus key)">
+          <button onClick={() => setZoom((z) => Math.min(50, z * 1.25))} className="p-1 rounded transition-colors cursor-pointer hover:bg-[var(--color-hover)]" style={toolbarBtnStyle} title="Zoom in (+)">
             <ZoomIn className="h-3.5 w-3.5" />
           </button>
-          <button onClick={fitToContainer} className="p-1 rounded transition-colors cursor-pointer hover:bg-[var(--color-hover)] ml-0.5" style={toolbarBtnStyle} title="Fit the whole image in the window (keyboard shortcut: F)">
+          <button onClick={fitToContainer} className="p-1 rounded transition-colors cursor-pointer hover:bg-[var(--color-hover)] ml-0.5" style={toolbarBtnStyle} title="Fit to window (F)">
             <Maximize2 className="h-3.5 w-3.5" />
           </button>
-          <button onClick={enterFullscreen} className="p-1 rounded transition-colors cursor-pointer hover:bg-[var(--color-hover)] ml-0.5" style={toolbarBtnStyle} title="View in full screen (Ctrl+F) — Escape to exit">
+          <button onClick={enterFullscreen} className="p-1 rounded transition-colors cursor-pointer hover:bg-[var(--color-hover)] ml-0.5" style={toolbarBtnStyle} title="Full screen (Ctrl+F)">
             <Maximize className="h-3.5 w-3.5" />
           </button>
           {onToggleFavorite && src && (
@@ -711,7 +711,7 @@ export function ImageViewer({
               onClick={onExtractPalette}
               className="p-1 rounded transition-colors cursor-pointer hover:bg-[var(--color-hover)] ml-0.5"
               style={toolbarBtnStyle}
-              title="Extract color palette from the current image"
+              title="Extract color palette"
             >
               <Pipette className="h-3.5 w-3.5" />
             </button>
