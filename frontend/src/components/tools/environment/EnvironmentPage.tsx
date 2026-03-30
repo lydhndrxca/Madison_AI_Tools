@@ -341,7 +341,11 @@ export function EnvironmentPage({ instanceId = 0, active = true, projectUid }: E
     setLayout((prev) => ({ ...prev, collapsed: { ...prev.collapsed, [id]: !prev.collapsed[id] } }));
   }, []);
 
-  const handleDragStart = useCallback((id: SectionId) => { dragItemRef.current = id; }, []);
+  const handleDragStart = useCallback((e: React.DragEvent, id: SectionId) => {
+    const active = document.activeElement;
+    if (active && e.currentTarget.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) { e.preventDefault(); return; }
+    dragItemRef.current = id;
+  }, []);
   const handleDragOver = useCallback((e: React.DragEvent, id: SectionId) => { e.preventDefault(); setDragOverId(id); }, []);
   const handleDrop = useCallback((targetId: SectionId) => {
     const from = dragItemRef.current;
@@ -1276,7 +1280,7 @@ export function EnvironmentPage({ instanceId = 0, active = true, projectUid }: E
       <div
         key={id}
         draggable
-        onDragStart={() => handleDragStart(id)}
+        onDragStart={(e) => handleDragStart(e, id)}
         onDragOver={(e) => handleDragOver(e, id)}
         onDrop={() => handleDrop(id)}
         onDragEnd={handleDragEnd}

@@ -14,7 +14,6 @@ import {
   Palette,
   FolderOpen,
   Puzzle,
-  Star,
   MessageSquare,
   Lightbulb,
   PenTool,
@@ -33,11 +32,8 @@ interface SidebarProps {
 type NavItem = { id: PageId; label: string; icon: React.ComponentType<{ className?: string }>; disabled?: boolean };
 
 const TOP_ITEMS: NavItem[] = [
-  { id: "generated-images", label: "Generated Images", icon: FolderOpen },
-  { id: "favorites", label: "Favorites", icon: Star },
-  { id: "prompt-builder", label: "Prompt Builder", icon: Puzzle },
   { id: "style-library", label: "Style Library", icon: Palette },
-  { id: "transcripts", label: "Art Direction Logs", icon: MessageSquare },
+  { id: "generated-images", label: "Generated Images", icon: FolderOpen },
 ];
 
 const TOOL_ITEMS: NavItem[] = [
@@ -47,6 +43,8 @@ const TOOL_ITEMS: NavItem[] = [
   { id: "weapon", label: "AI Weapon Lab", icon: Crosshair },
   { id: "environment", label: "AI Environment Lab", icon: Mountain },
   { id: "3d", label: "3D GEN AI", icon: Box },
+  { id: "gemini", label: "Default Gemini", icon: Sparkles },
+  { id: "multiview", label: "Multiview", icon: Image },
 ];
 
 const CREATIVE_ITEMS: NavItem[] = [
@@ -55,8 +53,8 @@ const CREATIVE_ITEMS: NavItem[] = [
 ];
 
 const UTILITY_ITEMS: NavItem[] = [
-  { id: "gemini", label: "Default Gemini", icon: Sparkles },
-  { id: "multiview", label: "Multiview", icon: Image },
+  { id: "transcripts", label: "Art Direction Logs", icon: MessageSquare },
+  { id: "prompt-builder", label: "Prompt Builder", icon: Puzzle },
 ];
 
 export function Sidebar({ activePage, onNavigate, onSettingsClick, collapsed, setCollapsed }: SidebarProps) {

@@ -533,7 +533,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       <div
-        className="w-[640px] max-h-[85vh] flex flex-col animate-fade-in"
+        className="w-[640px] h-[80vh] max-h-[85vh] flex flex-col animate-fade-in"
         style={{
           background: "var(--color-card)",
           border: "1px solid var(--color-border)",
@@ -660,16 +660,11 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   </div>
                 </div>
               </div>
-            </>
-          )}
 
-          {/* ── 3D Gen AI ── */}
-          {activeTab === "threeD" && (
-            <>
               <div className="space-y-2">
                 <h3 className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
                   3D Gen AI Keys
-                  <span className="text-[10px] font-normal ml-2" style={{ color: "var(--color-text-muted)" }}>Meshy + Hitem3D</span>
+                  <span className="text-[10px] font-normal ml-2" style={{ color: "var(--color-text-muted)" }}>optional — Meshy + Hitem3D</span>
                 </h3>
                 <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
                   API keys for 3D model generation services.
@@ -708,7 +703,12 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   </div>
                 </div>
               </div>
+            </>
+          )}
 
+          {/* ── 3D Gen AI ── */}
+          {activeTab === "threeD" && (
+            <>
               <div className="space-y-2">
                 <h3 className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>Export & Tools</h3>
                 <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
@@ -775,7 +775,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               </div>
               <div className="space-y-1">
                 <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
-                  Audio input devices can be selected using the microphone icon in the top toolbar when Dictate or Voice Commands are active.
+                  Audio input devices can be selected using the microphone icon in the top toolbar when Dictate is active.
                 </p>
               </div>
             </>

@@ -177,7 +177,7 @@ export function AudioSettingsModal({ open, onClose }: AudioSettingsModalProps) {
               Input Device (Microphone)
             </h3>
             <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-              Select the mic you want to use for Dictate and Voice Commands.
+              Select the mic you want to use for Dictate.
             </p>
             {error && (
               <p className="text-[11px] rounded px-2 py-1" style={{ color: "#e05050", background: "rgba(224,80,80,0.1)" }}>{error}</p>

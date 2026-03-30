@@ -81,6 +81,8 @@ function findElementByStamp(stamp: string): HTMLInputElement | HTMLTextAreaEleme
 
 interface VoiceToTextContextValue {
   active: boolean;
+  /** True when recording has stopped but transcription requests are still in flight */
+  processing: boolean;
   toggle: () => void;
   supported: boolean;
   settings: VoiceSettings;
@@ -89,6 +91,7 @@ interface VoiceToTextContextValue {
 
 const VoiceToTextContext = createContext<VoiceToTextContextValue>({
   active: false,
+  processing: false,
   toggle: () => {},
   supported: true,
   settings: DEFAULT_SETTINGS,
@@ -147,6 +150,7 @@ export const nativeSpeechSupported = !!SpeechRecognitionCtor;
 
 export function VoiceToTextProvider({ children }: { children: React.ReactNode }) {
   const [active, setActive] = useState(false);
+  const [processing, setProcessing] = useState(false);
   const [settings, setSettings] = useState<VoiceSettings>(loadSettings);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -159,6 +163,7 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
   const activeRef = useRef(false);
   const targetStampRef = useRef<string | null>(null);
   const recentTranscriptsRef = useRef<string[]>([]);
+  const pendingRequestsRef = useRef(0);
 
   // Native engine ref
   const recognitionRef = useRef<NativeSpeechRecognition | null>(null);
@@ -222,6 +227,7 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
 
   const sendChunk = useCallback(async (blob: Blob) => {
     if (blob.size < 200) return;
+    pendingRequestsRef.current++;
     try {
       const buf = await blob.arrayBuffer();
       const b64 = arrayBufferToBase64(buf);
@@ -264,6 +270,12 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
     } catch (err) {
       if ((err as Error)?.name !== "AbortError") {
         console.warn("[VoiceToText] Request failed:", err);
+      }
+    } finally {
+      pendingRequestsRef.current--;
+      if (pendingRequestsRef.current <= 0 && !activeRef.current) {
+        setProcessing(false);
+        if (processingTimeoutRef.current) { clearTimeout(processingTimeoutRef.current); processingTimeoutRef.current = null; }
       }
     }
   }, [insertText]);
@@ -312,10 +324,13 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
   const startGemini = useCallback(async (preTarget: HTMLInputElement | HTMLTextAreaElement | null) => {
     try {
       const deviceId = getSavedDeviceId();
-      const constraints: MediaStreamConstraints = {
-        audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+      const audioConstraints: MediaTrackConstraints = {
+        ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+        noiseSuppression: true,
+        echoCancellation: true,
+        autoGainControl: true,
       };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
       streamRef.current = stream;
 
       mimeRef.current = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
@@ -402,11 +417,18 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
 
   /* ── Unified start / stop / toggle ──────────────────────────── */
 
+  const processingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const stopRecording = useCallback(() => {
     stopGemini();
     stopNative();
     activeRef.current = false;
     setActive(false);
+    if (pendingRequestsRef.current > 0) {
+      setProcessing(true);
+      if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
+      processingTimeoutRef.current = setTimeout(() => setProcessing(false), 15000);
+    }
   }, [stopGemini, stopNative]);
 
   const startRecording = useCallback(async () => {
@@ -450,6 +472,7 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
     return () => {
       activeRef.current = false;
       if (sendTimerRef.current) clearTimeout(sendTimerRef.current);
+      if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
       if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
       if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
       if (recognitionRef.current) { recognitionRef.current.abort(); recognitionRef.current = null; }
@@ -457,7 +480,7 @@ export function VoiceToTextProvider({ children }: { children: React.ReactNode })
   }, []);
 
   return (
-    <VoiceToTextContext.Provider value={{ active, toggle, supported: true, settings, updateSettings }}>
+    <VoiceToTextContext.Provider value={{ active, processing, toggle, supported: true, settings, updateSettings }}>
       {children}
     </VoiceToTextContext.Provider>
   );

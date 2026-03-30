@@ -329,7 +329,11 @@ export function PropPage({ instanceId = 0, active = true, projectUid }: PropPage
     setLayout((prev) => ({ ...prev, collapsed: { ...prev.collapsed, [id]: !prev.collapsed[id] } }));
   }, []);
 
-  const handleDragStart = useCallback((id: SectionId) => { dragItemRef.current = id; }, []);
+  const handleDragStart = useCallback((e: React.DragEvent, id: SectionId) => {
+    const active = document.activeElement;
+    if (active && e.currentTarget.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) { e.preventDefault(); return; }
+    dragItemRef.current = id;
+  }, []);
   const handleDragOver = useCallback((e: React.DragEvent, id: SectionId) => { e.preventDefault(); setDragOverId(id); }, []);
   const handleDrop = useCallback((targetId: SectionId) => {
     const from = dragItemRef.current;
@@ -1820,7 +1824,7 @@ export function PropPage({ instanceId = 0, active = true, projectUid }: PropPage
             <div
               key={sectionId}
               draggable
-              onDragStart={() => handleDragStart(sectionId)}
+              onDragStart={(e) => handleDragStart(e, sectionId)}
               onDragOver={(e) => handleDragOver(e, sectionId)}
               onDrop={() => handleDrop(sectionId)}
               onDragEnd={handleDragEnd}

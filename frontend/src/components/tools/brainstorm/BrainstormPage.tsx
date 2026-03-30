@@ -642,11 +642,11 @@ export function BrainstormPage() {
   const inputBase: React.CSSProperties = {
     width: "100%",
     boxSizing: "border-box",
-    borderRadius: 6,
+    borderRadius: "var(--radius-sm)",
     border: "1px solid var(--color-border)",
     background: "var(--color-input-bg)",
     color: "var(--color-text-primary)",
-    fontSize: 13,
+    fontSize: 12,
     outline: "none",
   };
 
@@ -654,12 +654,12 @@ export function BrainstormPage() {
     display: "inline-flex",
     alignItems: "center",
     gap: 6,
-    padding: "8px 14px",
-    borderRadius: 6,
+    padding: "7px 14px",
+    borderRadius: "var(--radius-sm)",
     border: "1px solid var(--color-accent)",
     background: "var(--color-accent)",
     color: "var(--color-foreground)",
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: 600,
     cursor: "pointer",
   };
@@ -668,12 +668,13 @@ export function BrainstormPage() {
     display: "inline-flex",
     alignItems: "center",
     gap: 6,
-    padding: "8px 14px",
-    borderRadius: 6,
+    padding: "7px 14px",
+    borderRadius: "var(--radius-sm)",
     border: "1px solid var(--color-border)",
-    background: "transparent",
+    background: "var(--color-input-bg)",
     color: "var(--color-text-primary)",
-    fontSize: 13,
+    fontSize: 12,
+    fontWeight: 500,
     cursor: "pointer",
   };
 
@@ -699,19 +700,19 @@ export function BrainstormPage() {
           display: "flex",
           flexWrap: "wrap",
           alignItems: "center",
-          gap: 12,
-          padding: "12px 16px",
+          gap: 10,
+          padding: "8px 12px",
           borderBottom: "1px solid var(--color-border)",
           background: "var(--color-card)",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Brain size={20} style={{ color: "var(--color-accent)" }} aria-hidden />
+          <Brain size={16} style={{ color: "var(--color-accent)" }} aria-hidden />
           <input
             type="text"
             value={session.name}
             onChange={(e) => setSession((p) => ({ ...p, name: e.target.value, updatedAt: Date.now() }))}
-            style={{ ...inputBase, width: 200, padding: "8px 10px" }}
+            style={{ ...inputBase, width: 200, padding: "6px 8px" }}
             aria-label="Session name"
           />
         </div>
@@ -731,7 +732,7 @@ export function BrainstormPage() {
             style={{
               ...inputBase,
               width: 220,
-              padding: "8px 32px 8px 10px",
+              padding: "6px 28px 6px 8px",
               cursor: "pointer",
               appearance: "none",
               WebkitAppearance: "none",
@@ -766,7 +767,7 @@ export function BrainstormPage() {
             placeholder="Emotional / tonal prompt…"
             value={session.emotionalPrompt ?? ""}
             onChange={(e) => setSession((p) => ({ ...p, emotionalPrompt: e.target.value || undefined, updatedAt: Date.now() }))}
-            style={{ ...inputBase, flex: 1, padding: "8px 10px" }}
+            style={{ ...inputBase, flex: 1, padding: "6px 8px" }}
           />
         </div>
 
@@ -801,8 +802,8 @@ export function BrainstormPage() {
             background: "var(--color-background)",
           }}
         >
-          <div style={{ fontSize: 11, fontWeight: 600, color: "var(--color-text-muted)", marginBottom: 12, letterSpacing: "0.06em" }}>
-            PIPELINE
+          <div style={{ fontSize: 10, fontWeight: 600, color: "var(--color-text-muted)", marginBottom: 12, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+            Pipeline
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch" }}>
             {STAGE_IDS.map((id, index) => {
@@ -877,21 +878,21 @@ export function BrainstormPage() {
           <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px 24px" }}>
             {selectedStageId === "seed" ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                <label style={{ fontSize: 12, color: "var(--color-text-muted)" }}>Idea</label>
+                <label style={{ fontSize: 10, fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Idea</label>
                 <textarea
                   value={session.seedText}
                   onChange={(e) => setSession((p) => ({ ...p, seedText: e.target.value, updatedAt: Date.now() }))}
                   rows={8}
                   placeholder="Your raw idea, concept, or inspiration…"
-                  style={{ ...inputBase, padding: 12, resize: "vertical", minHeight: 160 }}
+                  style={{ ...inputBase, padding: "8px 10px", resize: "vertical", minHeight: 160 }}
                 />
-                <label style={{ fontSize: 12, color: "var(--color-text-muted)" }}>Context</label>
+                <label style={{ fontSize: 10, fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Context</label>
                 <textarea
                   value={session.seedContext}
                   onChange={(e) => setSession((p) => ({ ...p, seedContext: e.target.value, updatedAt: Date.now() }))}
                   rows={4}
                   placeholder="Constraints, audience, references…"
-                  style={{ ...inputBase, padding: 12, resize: "vertical" }}
+                  style={{ ...inputBase, padding: "8px 10px", resize: "vertical" }}
                 />
                 <div>
                   <input ref={fileInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={onPickImage} />
@@ -900,7 +901,7 @@ export function BrainstormPage() {
                     style={{ ...btnGhost, marginTop: 4 }}
                     onClick={() => fileInputRef.current?.click()}
                   >
-                    <Upload size={16} />
+                    <Upload size={14} />
                     Upload image <span style={{ fontWeight: 400, opacity: 0.6 }}>(visual reference only)</span>
                   </button>
                   {session.seedImageB64 ? (
@@ -987,11 +988,11 @@ export function BrainstormPage() {
 
             {selectedStageId === "commit" ? (
               <div style={{ marginBottom: 16 }}>
-                <label style={{ display: "block", fontSize: 12, color: "var(--color-text-muted)", marginBottom: 6 }}>Template type</label>
+                <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: "var(--color-text-muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" }}>Template type</label>
                 <select
                   value={cfg.templateType ?? "design_doc"}
                   onChange={(e) => patchConfig("commit", { templateType: e.target.value })}
-                  style={{ ...inputBase, maxWidth: 280, padding: "8px 10px", cursor: "pointer" }}
+                  style={{ ...inputBase, maxWidth: 280, padding: "6px 8px", cursor: "pointer" }}
                 >
                   {COMMIT_TEMPLATES.map((t) => (
                     <option key={t.value} value={t.value}>
@@ -1043,13 +1044,13 @@ export function BrainstormPage() {
             </OutputShell>
 
             <div style={{ marginTop: 20 }}>
-              <label style={{ fontSize: 12, color: "var(--color-text-muted)", display: "block", marginBottom: 6 }}>Custom instructions</label>
+              <label style={{ fontSize: 10, fontWeight: 600, color: "var(--color-text-muted)", display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" }}>Custom instructions</label>
               <textarea
                 value={cfg.customInstructions ?? ""}
                 onChange={(e) => patchConfig(selectedStageId, { customInstructions: e.target.value })}
                 rows={3}
                 placeholder="Extra guidance for this stage…"
-                style={{ ...inputBase, padding: 10, resize: "vertical", width: "100%" }}
+                style={{ ...inputBase, padding: "8px 10px", resize: "vertical", width: "100%" }}
               />
             </div>
           </div>

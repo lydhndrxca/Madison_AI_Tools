@@ -2,13 +2,14 @@ import React, { useState, useCallback, useEffect, useRef } from "react";
 import { Sidebar } from "./Sidebar";
 import { StatusBar } from "./StatusBar";
 import { SettingsPanel } from "./SettingsPanel";
+import { WelcomeModal } from "./WelcomeModal";
 import { ConsolePanel } from "@/components/shared/ConsolePanel";
 import { AudioSettingsModal } from "@/components/shared/AudioSettingsModal";
 import { useWebSocket } from "@/hooks/useApi";
 import { useSessionContext } from "@/hooks/SessionContext";
 import { useVoiceToText, nativeSpeechSupported } from "@/hooks/useVoiceToText";
 import type { VoiceEngine } from "@/hooks/useVoiceToText";
-import { useVoiceDirector } from "@/hooks/useVoiceDirector";
+
 import { useShortcuts } from "@/hooks/useShortcuts";
 import { CostCounter } from "./CostCounter";
 import type { PageId } from "@/app";
@@ -172,7 +173,6 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
   const [audioSettingsOpen, setAudioSettingsOpen] = useState(false);
   const { triggerSave, triggerOpen } = useSessionContext();
   const voice = useVoiceToText();
-  const director = useVoiceDirector();
   const [voiceCtxMenu, setVoiceCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [voiceRestartPending, setVoiceRestartPending] = useState(false);
 
@@ -203,14 +203,8 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
   const { registerAction, unregisterAction } = useShortcuts();
 
   const toggleVoiceToText = useCallback(() => {
-    if (director.active) director.toggle();
     voice.toggle();
-  }, [voice, director]);
-
-  const toggleDirector = useCallback(() => {
-    if (voice.active) voice.toggle();
-    director.toggle();
-  }, [voice, director]);
+  }, [voice]);
 
   const switchVoiceEngine = useCallback((engine: VoiceEngine) => {
     if (voice.settings.engine === engine) { setVoiceCtxMenu(null); return; }
@@ -226,17 +220,6 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
     const timer = setTimeout(() => { voice.toggle(); setVoiceRestartPending(false); }, 150);
     return () => clearTimeout(timer);
   }, [voiceRestartPending, voice]);
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const { action, params } = (e as CustomEvent).detail;
-      if (action === "navigate" && params?.page && params.page in PAGE_LABELS) {
-        onNavigate(params.page as PageId);
-      }
-    };
-    window.addEventListener("voice-command", handler);
-    return () => window.removeEventListener("voice-command", handler);
-  }, [onNavigate]);
 
   const onWsMessage = useCallback(
     (msg: { type: string; data: Record<string, unknown> }) => {
@@ -325,32 +308,16 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
             onContextMenu={(e) => { e.preventDefault(); setVoiceCtxMenu({ x: e.clientX, y: e.clientY }); }}
             className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded cursor-pointer font-medium${voice.active ? " voice-recording-indicator" : ""}`}
             style={{
-              background: voice.active ? "rgba(224, 80, 80, 0.15)" : "rgba(148, 163, 184, 0.12)",
-              border: voice.active ? "1px solid rgba(224, 80, 80, 0.4)" : "1px solid rgba(148, 163, 184, 0.28)",
-              color: voice.active ? "#e05050" : "var(--color-text-primary)",
+              background: voice.active ? "rgba(224, 80, 80, 0.15)" : voice.processing ? "rgba(251, 191, 36, 0.12)" : "rgba(148, 163, 184, 0.12)",
+              border: voice.active ? "1px solid rgba(224, 80, 80, 0.4)" : voice.processing ? "1px solid rgba(251, 191, 36, 0.35)" : "1px solid rgba(148, 163, 184, 0.28)",
+              color: voice.active ? "#e05050" : voice.processing ? "#fbbf24" : "var(--color-text-primary)",
             }}
-            title={`${voice.active ? "Dictation active — click to stop" : "Dictate — click into a text field and speak to type"}\nEngine: ${voice.settings.engine === "native" ? "Windows / Native" : "Gemini (AI)"}\nRight-click to switch engine`}
+            title={`${voice.active ? "Recording in progress — click to stop" : voice.processing ? "Processing remaining audio..." : "Dictate — click into a text field and speak to type"}\nEngine: ${voice.settings.engine === "native" ? "Windows / Native" : "Gemini (AI)"}\nRight-click to switch engine`}
           >
             {voice.active && <span className="voice-recording-dot" />}
-            {!voice.active && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>}
-            {voice.active ? "Dictating..." : `Dictate${voice.settings.engine === "native" ? " (Native)" : ""}`}
-          </button>
-
-          {/* Voice Director button — hands-free art direction via Gemini function calling */}
-          <button
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={toggleDirector}
-            className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded cursor-pointer font-medium${director.active ? " voice-recording-indicator" : ""}`}
-            style={{
-              background: director.active ? "rgba(139, 92, 246, 0.15)" : "rgba(148, 163, 184, 0.12)",
-              border: director.active ? "1px solid rgba(139, 92, 246, 0.4)" : "1px solid rgba(148, 163, 184, 0.28)",
-              color: director.active ? "#a78bfa" : "var(--color-text-primary)",
-            }}
-            title={director.active ? "Voice Commands active — click to stop" : "Voice Commands — speak instructions to control the AI tools hands-free"}
-          >
-            {director.active && <span className="voice-recording-dot" style={{ background: "#a78bfa" }} />}
-            {!director.active && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 4-8 8 3 3 8-8"/><path d="m18 7-3-3"/><path d="M9 15 4.4 19.6a2.1 2.1 0 1 0 3 3L12 18"/></svg>}
-            {director.active ? "Listening..." : "Voice Commands"}
+            {voice.processing && !voice.active && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="animate-spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>}
+            {!voice.active && !voice.processing && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>}
+            {voice.active ? "Recording in progress..." : voice.processing ? "Processing..." : `Dictate${voice.settings.engine === "native" ? " (Native)" : ""}`}
           </button>
 
           <button
@@ -419,6 +386,7 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <ConsolePanel open={consoleOpen} onClose={() => setConsoleOpen(false)} />
       <AudioSettingsModal open={audioSettingsOpen} onClose={() => setAudioSettingsOpen(false)} />
+      <WelcomeModal />
 
       {/* Voice engine right-click context menu */}
       {voiceCtxMenu && (

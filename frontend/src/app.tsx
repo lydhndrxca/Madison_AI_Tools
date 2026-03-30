@@ -17,7 +17,7 @@ import { ArtboardProvider } from "./hooks/ArtboardContext";
 import { FavoritesProvider } from "./hooks/FavoritesContext";
 import { PromptBuilderPage } from "./components/tools/prompt-builder/PromptBuilderPage";
 import { CustomSectionsProvider } from "./hooks/CustomSectionsContext";
-import { VoiceDirectorProvider } from "./hooks/useVoiceDirector";
+
 import { useSettingsBackup } from "./hooks/useSettingsBackup";
 import { ArtDirectorProvider } from "./hooks/ArtDirectorContext";
 import { ModelsProvider } from "./hooks/ModelsContext";
@@ -35,12 +35,11 @@ function AppInner() {
   const setPage = useCallback((p: string) => { if (VALID_PAGES.has(p)) setActivePage(p as PageId); }, []);
 
   return (
-    <VoiceDirectorProvider activePage={activePage}>
     <SessionProvider activePage={activePage} onSetActivePage={setPage} onToast={addToast}>
       <AppShell activePage={activePage} onNavigate={setActivePage}>
         <div className="h-full" style={{ display: activePage === "style-library" ? "contents" : "none" }}><StyleLibraryPage /></div>
         <div className="h-full" style={{ display: activePage === "prompt-builder" ? "contents" : "none" }}><PromptBuilderPage /></div>
-        <div className="h-full" style={{ display: activePage === "generated-images" || activePage === "favorites" ? "contents" : "none" }}><GeneratedImagesPage defaultTab={activePage === "favorites" ? "favorites" : undefined} onNavigate={setPage} /></div>
+        <div className="h-full" style={{ display: activePage === "generated-images" || activePage === "favorites" ? "contents" : "none" }}><GeneratedImagesPage defaultTab={activePage === "favorites" ? "favorites" : "browse"} onNavigate={setPage} /></div>
         <div className="h-full" style={{ display: activePage === "gemini" ? "contents" : "none" }}><GeminiPage /></div>
         <div className="h-full" style={{ display: activePage === "multiview" ? "contents" : "none" }}><MultiviewPage /></div>
         <div className="h-full" style={{ display: activePage === "character" ? "contents" : "none" }}><CharacterLabWrapper /></div>
@@ -54,7 +53,6 @@ function AppInner() {
         <div className="h-full" style={{ display: activePage === "writingroom" ? "contents" : "none" }}><WritingRoomPage /></div>
       </AppShell>
     </SessionProvider>
-    </VoiceDirectorProvider>
   );
 }
 

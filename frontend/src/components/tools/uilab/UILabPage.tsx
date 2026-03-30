@@ -275,7 +275,11 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     setLayout((prev) => ({ ...prev, collapsed: { ...prev.collapsed, [id]: !prev.collapsed[id] } }));
   }, []);
 
-  const handleDragStart = useCallback((id: SectionId) => { dragItemRef.current = id; }, []);
+  const handleDragStart = useCallback((e: React.DragEvent, id: SectionId) => {
+    const active = document.activeElement;
+    if (active && e.currentTarget.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) { e.preventDefault(); return; }
+    dragItemRef.current = id;
+  }, []);
   const handleDragOver = useCallback((e: React.DragEvent, id: SectionId) => { e.preventDefault(); setDragOverId(id); }, []);
   const handleDrop = useCallback((targetId: SectionId) => {
     const from = dragItemRef.current;
@@ -1144,7 +1148,10 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
         {/* Row 3: Output size + Color */}
         <div className="flex items-end gap-2">
           <div className="flex-1 min-w-0">
-            <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Output Size</label>
+            <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>
+              Output Size
+              {useGrid && showGridOptions && <span className="font-normal ml-1" style={{ color: "var(--color-text-muted)", opacity: 0.7 }}>(single only)</span>}
+            </label>
             <input
               className="w-full text-[11px] px-2 py-1 rounded"
               style={inputStyle}
@@ -1152,7 +1159,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
               value={outputSize}
               onChange={(e) => setOutputSize(e.target.value)}
               disabled={busy.any}
-              title="Output size (WxH), blank for 1024x1024"
+              title={useGrid && showGridOptions ? "Only applies to single image generation — 4×4 grid uses Cell Size instead" : "Output size (WxH), blank for 1024x1024"}
             />
           </div>
           <div className="flex items-center gap-3 shrink-0 pb-0.5">
@@ -1219,7 +1226,10 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
         {/* Row 6: Cell size (grid mode only) */}
         {useGrid && showGridOptions && (
           <div>
-            <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Cell Size (WxH)</label>
+            <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>
+              Grid Cell Size (WxH)
+              <span className="font-normal ml-1" style={{ opacity: 0.7 }}>— each cell in the 4×4 grid</span>
+            </label>
             <input
               className="w-full text-[11px] px-2 py-1 rounded"
               style={inputStyle}
@@ -1227,7 +1237,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
               value={cellSize}
               onChange={(e) => setCellSize(e.target.value)}
               disabled={busy.any}
-              title="Grid cell size (WxH), blank for 256x256"
+              title="Size of each cell in the 4×4 grid (WxH), blank for 256x256"
             />
           </div>
         )}
@@ -2088,7 +2098,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
             <div
               key={sectionId}
               draggable
-              onDragStart={() => handleDragStart(sectionId)}
+              onDragStart={(e) => handleDragStart(e, sectionId)}
               onDragOver={(e) => handleDragOver(e, sectionId)}
               onDrop={() => handleDrop(sectionId)}
               onDragEnd={handleDragEnd}

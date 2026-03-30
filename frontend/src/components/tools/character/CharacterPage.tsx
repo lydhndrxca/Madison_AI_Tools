@@ -683,7 +683,12 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
     }));
   }, [sectionsOpen, toggleSection]);
 
-  const handleDragStart = useCallback((id: SectionId) => {
+  const handleDragStart = useCallback((e: React.DragEvent, id: SectionId) => {
+    const active = document.activeElement;
+    if (active && e.currentTarget.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) {
+      e.preventDefault();
+      return;
+    }
     dragItemRef.current = id;
   }, []);
 
@@ -2397,7 +2402,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
             <div
               key={sectionId}
               draggable
-              onDragStart={() => handleDragStart(sectionId)}
+              onDragStart={(e) => handleDragStart(e, sectionId)}
               onDragOver={(e) => handleDragOver(e, sectionId)}
               onDrop={() => handleDrop(sectionId)}
               onDragEnd={handleDragEnd}

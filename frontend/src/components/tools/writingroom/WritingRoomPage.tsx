@@ -191,17 +191,19 @@ const baseInputStyle: CSSProperties = {
   background: "var(--color-input-bg)",
   color: "var(--color-text-primary)",
   border: "1px solid var(--color-border)",
-  borderRadius: "var(--radius-sm, 6px)",
-  padding: "0.5rem 0.65rem",
-  fontSize: "0.875rem",
+  borderRadius: "var(--radius-sm)",
+  padding: "6px 8px",
+  fontSize: "12px",
 };
 
 const labelStyle: CSSProperties = {
   display: "block",
-  fontSize: "0.75rem",
+  fontSize: "10px",
   fontWeight: 600,
-  color: "var(--color-text-secondary)",
-  marginBottom: "0.35rem",
+  color: "var(--color-text-muted)",
+  marginBottom: "4px",
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
 };
 
 export function WritingRoomPage() {
@@ -667,14 +669,14 @@ export function WritingRoomPage() {
           flexShrink: 0,
           display: "flex",
           alignItems: "center",
-          gap: "0.5rem",
-          padding: "0.75rem 1rem",
+          gap: "8px",
+          padding: "8px 12px",
           borderBottom: "1px solid var(--color-border)",
           background: "var(--color-card)",
         }}
       >
-        <Sparkles size={18} style={{ color: "var(--color-accent)" }} />
-        <h1 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700 }}>Writing Room</h1>
+        <Sparkles size={16} style={{ color: "var(--color-accent)" }} />
+        <h1 style={{ margin: 0, fontSize: "13px", fontWeight: 700 }}>Writing Room</h1>
         <div style={{ flex: 1 }} />
         <TabButton
           active={mainTab === "planning"}
@@ -742,45 +744,45 @@ export function WritingRoomPage() {
 
           <section style={{ marginBottom: "1.25rem" }}>
             <label style={labelStyle}>Scope</label>
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-              {SCOPE_OPTIONS.map((sc) => (
-                <label
-                  key={sc.id}
-                  style={{
-                    display: "flex",
-                    gap: "0.5rem",
-                    alignItems: "flex-start",
-                    cursor: "pointer",
-                    padding: "0.5rem 0.65rem",
-                    borderRadius: "var(--radius-sm, 6px)",
-                    border: `1px solid ${
-                      planning.scopeLength === sc.id ? "var(--color-accent)" : "var(--color-border)"
-                    }`,
-                    background:
-                      planning.scopeLength === sc.id ? "var(--color-hover)" : "var(--color-card)",
-                  }}
-                >
-                  <input
-                    type="radio"
-                    name="scope"
-                    checked={planning.scopeLength === sc.id}
-                    onChange={() => updatePlanning({ scopeLength: sc.id })}
-                  />
-                  <span>
-                    <span style={{ fontWeight: 600, fontSize: "0.875rem" }}>{sc.label}</span>
-                    <span
-                      style={{
-                        display: "block",
-                        fontSize: "0.75rem",
-                        color: "var(--color-text-muted)",
-                        marginTop: "0.15rem",
-                      }}
-                    >
-                      {sc.description}
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              {SCOPE_OPTIONS.map((sc) => {
+                const selected = planning.scopeLength === sc.id;
+                return (
+                  <label
+                    key={sc.id}
+                    style={{
+                      display: "flex",
+                      gap: "8px",
+                      alignItems: "flex-start",
+                      cursor: "pointer",
+                      padding: "8px 10px",
+                      borderRadius: "var(--radius-sm)",
+                      border: selected ? "1px solid var(--color-accent)" : "1px solid var(--color-border)",
+                      background: selected ? "var(--color-hover)" : "var(--color-input-bg)",
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="scope"
+                      checked={selected}
+                      onChange={() => updatePlanning({ scopeLength: sc.id })}
+                    />
+                    <span>
+                      <span style={{ fontWeight: 600, fontSize: "12px", color: "var(--color-text-primary)" }}>{sc.label}</span>
+                      <span
+                        style={{
+                          display: "block",
+                          fontSize: "10px",
+                          color: "var(--color-text-muted)",
+                          marginTop: "2px",
+                        }}
+                      >
+                        {sc.description}
+                      </span>
                     </span>
-                  </span>
-                </label>
-              ))}
+                  </label>
+                );
+              })}
             </div>
           </section>
 
@@ -805,7 +807,7 @@ export function WritingRoomPage() {
 
           <section style={{ marginBottom: "1.25rem" }}>
             <label style={labelStyle}>Tones</label>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
               {TONE_OPTIONS.map((t) => {
                 const on = planning.tones.includes(t.id);
                 return (
@@ -814,12 +816,13 @@ export function WritingRoomPage() {
                     type="button"
                     onClick={() => toggleTone(t.id)}
                     style={{
-                      border: `1px solid ${on ? "var(--color-accent)" : "var(--color-border)"}`,
-                      background: on ? "var(--color-hover)" : "var(--color-input-bg)",
-                      color: "var(--color-text-primary)",
-                      borderRadius: "999px",
-                      padding: "0.25rem 0.65rem",
-                      fontSize: "0.75rem",
+                      border: on ? "1px solid var(--color-accent)" : "1px solid var(--color-border)",
+                      background: on ? "rgba(139,92,246,0.15)" : "var(--color-input-bg)",
+                      color: on ? "var(--color-accent)" : "var(--color-text-secondary)",
+                      borderRadius: "var(--radius-sm)",
+                      padding: "5px 10px",
+                      fontSize: "11px",
+                      fontWeight: on ? 600 : 500,
                       cursor: "pointer",
                     }}
                   >
@@ -929,25 +932,25 @@ export function WritingRoomPage() {
             </div>
           </section>
 
-          <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
             <button
               type="button"
               onClick={startWriting}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
-                gap: "0.35rem",
-                padding: "0.55rem 1rem",
-                borderRadius: "var(--radius-sm, 6px)",
-                border: "none",
+                gap: "6px",
+                padding: "8px 16px",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid var(--color-accent)",
                 background: "var(--color-accent)",
                 color: "var(--color-foreground, #fff)",
                 fontWeight: 600,
                 cursor: "pointer",
-                fontSize: "0.875rem",
+                fontSize: "12px",
               }}
             >
-              <ChevronRight size={16} />
+              <ChevronRight size={14} />
               Start Writing
             </button>
             <button
@@ -957,19 +960,19 @@ export function WritingRoomPage() {
               style={{
                 display: "inline-flex",
                 alignItems: "center",
-                gap: "0.35rem",
-                padding: "0.55rem 1rem",
-                borderRadius: "var(--radius-sm, 6px)",
+                gap: "6px",
+                padding: "8px 16px",
+                borderRadius: "var(--radius-sm)",
                 border: "1px solid var(--color-border)",
                 background: "var(--color-input-bg)",
                 color: "var(--color-text-primary)",
                 fontWeight: 600,
                 cursor: randomizing ? "not-allowed" : "pointer",
-                fontSize: "0.875rem",
+                fontSize: "12px",
                 opacity: randomizing ? 0.6 : 1,
               }}
             >
-              <Shuffle size={16} />
+              <Shuffle size={14} />
               {randomizing ? "Randomizing…" : "Randomize"}
             </button>
           </div>
@@ -1156,17 +1159,18 @@ export function WritingRoomPage() {
                 onClick={() => void runAgentTurn()}
                 disabled={isGenerating}
                 style={{
-                  fontSize: "0.72rem",
-                  padding: "0.35rem 0.6rem",
-                  borderRadius: "6px",
-                  border: "1px solid var(--color-border)",
-                  background: "var(--color-input-bg)",
-                  color: "var(--color-text-primary)",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  padding: "5px 12px",
+                  borderRadius: "var(--radius-sm)",
+                  border: "1px solid var(--color-accent)",
+                  background: "var(--color-accent)",
+                  color: "var(--color-foreground, #fff)",
                   cursor: isGenerating ? "not-allowed" : "pointer",
                   opacity: isGenerating ? 0.6 : 1,
                 }}
               >
-                Run agent turn
+                Run Agent Turn
               </button>
             </div>
 
@@ -1239,12 +1243,12 @@ function TabButton({
       type="button"
       onClick={onClick}
       style={{
-        padding: "0.35rem 0.75rem",
-        borderRadius: "var(--radius-sm, 6px)",
+        padding: "5px 12px",
+        borderRadius: "var(--radius-sm)",
         border: `1px solid ${active ? "var(--color-accent)" : "var(--color-border)"}`,
-        background: active ? "var(--color-hover)" : "transparent",
+        background: active ? "var(--color-hover)" : "var(--color-input-bg)",
         color: active ? "var(--color-text-primary)" : "var(--color-text-secondary)",
-        fontSize: "0.8rem",
+        fontSize: "12px",
         fontWeight: 600,
         cursor: "pointer",
       }}
@@ -1272,13 +1276,14 @@ function ControlPill({
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: "0.3rem",
-        fontSize: "0.72rem",
-        padding: "0.35rem 0.55rem",
-        borderRadius: "999px",
+        gap: "4px",
+        fontSize: "11px",
+        fontWeight: 500,
+        padding: "5px 10px",
+        borderRadius: "var(--radius-sm)",
         border: `1px solid ${active ? "var(--color-accent)" : "var(--color-border)"}`,
-        background: active ? "var(--color-hover)" : "var(--color-input-bg)",
-        color: "var(--color-text-primary)",
+        background: active ? "rgba(139,92,246,0.15)" : "var(--color-input-bg)",
+        color: active ? "var(--color-accent)" : "var(--color-text-primary)",
         cursor: "pointer",
       }}
     >

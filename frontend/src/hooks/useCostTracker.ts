@@ -13,7 +13,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   image_generation: "Image Generation",
   text_generation: "Text / JSON",
   art_director: "Art Director Chat",
-  voice_director: "Voice Commands",
+
   voice_transcription: "Dictation",
   deep_search: "Deep Reference Search",
   grounding: "Grounded Search",
