@@ -131,10 +131,12 @@ app.on("ready", async () => {
   startVite();
 
   try {
-    await waitForServer(`${API_URL}/api/system/health`, 30000);
+    await waitForServer(`${API_URL}/api/system/health`, 60000);
     console.log("[main] Backend ready");
   } catch (e) {
     console.error("[main] Backend failed to start:", e.message);
+    console.error("[main] This usually means Python dependencies are missing.");
+    console.error("[main] Try running: python -m pip install -r requirements.txt");
   }
 
   try {

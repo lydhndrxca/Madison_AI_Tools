@@ -107,6 +107,7 @@ function loadConfig(): ArtDirectorConfig {
     if (raw) {
       const parsed = { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
       if (parsed.persona) parsed.persona = sanitizePersona(parsed.persona);
+      parsed.enabled = false;
       return parsed;
     }
   } catch { /* */ }

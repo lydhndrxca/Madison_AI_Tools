@@ -1327,14 +1327,32 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
   }, [description, age, race, gender, build, modelId, envPlacement, isSectionEnabled, resolveSection, getExtraContext, getMainImageB64, setTabImage, addToast, busy, styleFusion, customSections]);
 
   const handleApplyEdit = useCallback(async () => {
-    if (!editPrompt.trim()) return;
-    const mainB64 = getMainImageB64();
-    if (!mainB64) return;
-    busy.start("apply");
-    setGenText((p) => ({ ...p, apply: "Applying edits..." }));
     const identityOn = isSectionEnabled("identity");
     const attrText = resolveSection("attributes");
     const attrBrief = attrText ? `\n\n${attrText}` : "";
+    const userEdit = editPrompt.trim();
+
+    const mainB64 = getMainImageB64();
+    if (!mainB64) {
+      if (userEdit || attrText) {
+        handleGenerate();
+      } else {
+        addToast("Generate or load an image first, or enter a description to generate one", "info");
+      }
+      return;
+    }
+
+    const effectiveEdit = userEdit
+      ? (attrText ? `${userEdit}\n\nAlso apply these attributes:\n${attrText}` : userEdit)
+      : (attrText ? `Update the character to match these attributes:\n${attrText}` : "");
+
+    if (!effectiveEdit) {
+      addToast("Enter an edit description or change attributes in the sidebar first", "info");
+      return;
+    }
+
+    busy.start("apply");
+    setGenText((p) => ({ ...p, apply: "Applying edits..." }));
     const bibleCtx = resolveSection("bible");
     const costumeCtx = resolveSection("costume");
     const lockCtx = resolveSection("preservation");
@@ -1347,7 +1365,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
             description: ((identityOn ? description : "") + attrBrief).trim(),
             age: identityOn ? age : "", race: identityOn ? race : "",
             gender: identityOn ? gender : "", build: identityOn ? build : "",
-            edit_prompt: editPrompt, reference_image_b64: mainB64,
+            edit_prompt: effectiveEdit, reference_image_b64: mainB64,
             ref_a_b64: getImageB64("refA"), ref_b_b64: getImageB64("refB"), ref_c_b64: getImageB64("refC"),
             mode: "quality", model_id: editModel || modelId || undefined,
             bible_context: bibleCtx || undefined, costume_context: costumeCtx || undefined,
@@ -1360,11 +1378,12 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
         },
       );
       if (resp.image_b64) {
-        setTabImage("main", `data:image/png;base64,${resp.image_b64}`, `Edit: ${editPrompt.slice(0, 40)}`);
+        const label = userEdit ? `Edit: ${userEdit.slice(0, 40)}` : "Attribute update";
+        setTabImage("main", `data:image/png;base64,${resp.image_b64}`, label);
       } else if (resp.error) addToast(resp.error, "error");
     } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
     busy.end("apply");
-  }, [editPrompt, description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, getMainImageB64, getImageB64, editModel, modelId, setTabImage, addToast, busy, styleFusion]);
+  }, [editPrompt, description, age, race, gender, build, attributes, bible, costume, preservation, isSectionEnabled, getExtraContext, buildAttrBrief, resolveSection, handleGenerate, getMainImageB64, getImageB64, editModel, modelId, setTabImage, addToast, busy, styleFusion]);
 
   const handleGenerateStyleFusion = useCallback(async () => {
     const mainB64 = getMainImageB64();

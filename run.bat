@@ -62,6 +62,19 @@ if not exist "frontend\node_modules" (
     echo.
 )
 
+rem --- Verify backend can import before launching Electron ---
+cd /d "%~dp0"
+set "PYTHONPATH=%~dp0src"
+python -c "from pubg_madison_ai_suite.api.server import app; print('[CHECK] Backend modules OK')" 2>&1
+if !ERRORLEVEL! neq 0 (
+    echo.
+    echo [ERROR] Backend failed to load. A Python dependency may be missing.
+    echo         Try running: python -m pip install -r requirements.txt
+    echo         Then try again.
+    pause
+    exit /b 1
+)
+
 rem --- Launch ---
 echo Starting Madison AI Suite...
 echo.
