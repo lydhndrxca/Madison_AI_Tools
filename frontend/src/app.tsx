@@ -26,13 +26,14 @@ import { TranscriptsPage } from "./components/tools/transcripts/TranscriptsPage"
 import { ThreeDGenPage } from "./components/tools/threedgen/ThreeDGenPage";
 import { BrainstormPage } from "./components/tools/brainstorm/BrainstormPage";
 import { WritingRoomPage } from "./components/tools/writingroom/WritingRoomPage";
+import { HelpPage } from "./components/tools/help/HelpPage";
 
-export type PageId = "style-library" | "prompt-builder" | "generated-images" | "favorites" | "gemini" | "multiview" | "character" | "weapon" | "prop" | "environment" | "uilab" | "3d" | "transcripts" | "brainstorm" | "writingroom";
+export type PageId = "style-library" | "prompt-builder" | "generated-images" | "favorites" | "gemini" | "multiview" | "character" | "weapon" | "prop" | "environment" | "uilab" | "3d" | "transcripts" | "brainstorm" | "writingroom" | "help";
 
 function AppInner() {
   const [activePage, setActivePage] = useState<PageId>("character");
   const { addToast } = useToastContext();
-  const VALID_PAGES = new Set<string>(["style-library", "prompt-builder", "generated-images", "favorites", "gemini", "multiview", "character", "weapon", "prop", "environment", "uilab", "3d", "transcripts", "brainstorm", "writingroom"]);
+  const VALID_PAGES = new Set<string>(["style-library", "prompt-builder", "generated-images", "favorites", "gemini", "multiview", "character", "weapon", "prop", "environment", "uilab", "3d", "transcripts", "brainstorm", "writingroom", "help"]);
   const setPage = useCallback((p: string) => { if (VALID_PAGES.has(p)) setActivePage(p as PageId); }, []);
 
   return (
@@ -53,6 +54,7 @@ function AppInner() {
         <div className="h-full" style={{ display: activePage === "3d" ? "contents" : "none" }}><ThreeDGenPage visible={activePage === "3d"} /></div>
         <div className="h-full" style={{ display: activePage === "brainstorm" ? "contents" : "none" }}><BrainstormPage /></div>
         <div className="h-full" style={{ display: activePage === "writingroom" ? "contents" : "none" }}><WritingRoomPage /></div>
+        <div className="h-full" style={{ display: activePage === "help" ? "contents" : "none" }}><HelpPage /></div>
       </AppShell>
     </SessionProvider>
     </ActivePageProvider>

@@ -181,6 +181,28 @@ export function StyleLibraryPage() {
     }, 600);
   }, [selectedFolder]);
 
+  /* ── Shared image helpers (must be declared before consumers) ── */
+
+  const readFileAsDataUrl = useCallback((file: File): Promise<string> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.readAsDataURL(file);
+    });
+  }, []);
+
+  const uploadDataUrls = useCallback(async (items: { filename: string; data_url: string }[]) => {
+    if (!selectedFolder || items.length === 0) return;
+    try {
+      await apiFetch(`/styles/folders/${encodeURIComponent(selectedFolder)}/images`, {
+        method: "POST",
+        body: JSON.stringify(items),
+      });
+      loadImages(selectedFolder, activeSubfolder);
+      loadFolders();
+    } catch (e) { console.error("[StyleLibrary] Upload failed:", e); }
+  }, [selectedFolder, activeSubfolder, loadImages, loadFolders]);
+
   /* ── Images ────────────────────────────────────────────────── */
 
   const handleAddImages = useCallback(() => {
@@ -220,28 +242,6 @@ export function StyleLibraryPage() {
       loadImages(selectedFolder, activeSubfolder);
     } catch (e) { console.error(e); }
   }, [selectedFolder, activeSubfolder, loadImages]);
-
-  /* ── Shared image upload helper ─────────────────────────────── */
-
-  const uploadDataUrls = useCallback(async (items: { filename: string; data_url: string }[]) => {
-    if (!selectedFolder || items.length === 0) return;
-    try {
-      await apiFetch(`/styles/folders/${encodeURIComponent(selectedFolder)}/images`, {
-        method: "POST",
-        body: JSON.stringify(items),
-      });
-      loadImages(selectedFolder, activeSubfolder);
-      loadFolders();
-    } catch (e) { console.error("[StyleLibrary] Upload failed:", e); }
-  }, [selectedFolder, activeSubfolder, loadImages, loadFolders]);
-
-  const readFileAsDataUrl = useCallback((file: File): Promise<string> => {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.readAsDataURL(file);
-    });
-  }, []);
 
   /* ── Clipboard paste ───────────────────────────────────────── */
 

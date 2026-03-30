@@ -46,6 +46,9 @@ default_api_key.txt
 # Bundled runtime (not needed in repo)
 runtime/
 
+# First-run marker
+.python_deps_installed
+
 # Frontend build output
 frontend/dist/
 frontend/node_modules/

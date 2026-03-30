@@ -163,6 +163,7 @@ const PAGE_LABELS: Record<PageId, string> = {
   "transcripts": "Art Direction Logs",
   "brainstorm": "Idea Brainstorming",
   "writingroom": "Writing Room",
+  "help": "Help Wiki",
 };
 
 export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
@@ -350,6 +351,24 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
           <button
             type="button"
             onMouseDown={(e) => e.preventDefault()}
+            onClick={() => onNavigate("help" as PageId)}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded cursor-pointer font-medium"
+            style={{
+              background: activePage === "help" ? "rgba(148, 163, 184, 0.22)" : "rgba(148, 163, 184, 0.08)",
+              border: activePage === "help" ? "1px solid rgba(148, 163, 184, 0.4)" : "1px solid transparent",
+              color: activePage === "help" ? "var(--color-foreground)" : "var(--color-text-muted)",
+            }}
+            title="Help Wiki — documentation and AI assistant"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>
+            </svg>
+            Help
+          </button>
+
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => window.dispatchEvent(new CustomEvent("voice-command", { detail: { action: "quick_generate", params: {} } }))}
             className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded cursor-pointer font-medium"
             style={{
@@ -386,7 +405,7 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <ConsolePanel open={consoleOpen} onClose={() => setConsoleOpen(false)} />
       <AudioSettingsModal open={audioSettingsOpen} onClose={() => setAudioSettingsOpen(false)} />
-      <WelcomeModal />
+      <WelcomeModal onNavigate={onNavigate as (page: string) => void} />
 
       {/* Voice engine right-click context menu */}
       {voiceCtxMenu && (

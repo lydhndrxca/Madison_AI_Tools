@@ -22,6 +22,8 @@ import {
   Sword,
   TreePine,
   Monitor,
+  BookOpen,
+  HelpCircle,
 } from "lucide-react";
 
 const STORAGE_KEY = "madison-welcome-dismissed";
@@ -31,7 +33,11 @@ interface ExtraKeyInfo {
   key_masked: string;
 }
 
-export function WelcomeModal() {
+interface WelcomeModalProps {
+  onNavigate?: (page: string) => void;
+}
+
+export function WelcomeModal({ onNavigate }: WelcomeModalProps) {
   const [visible, setVisible] = useState(false);
   const [dontShow, setDontShow] = useState(false);
   const [page, setPage] = useState<1 | 2>(1);
@@ -174,7 +180,7 @@ export function WelcomeModal() {
           </div>
           <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
             {page === 1
-              ? "A quick overview to get you started. You can always access Settings from the sidebar."
+              ? "A quick overview to get you started. For the full guide, visit the Help Wiki from the top menu bar any time."
               : "Here's a deeper look at what each tool and feature can do for your workflow."}
           </p>
         </div>
@@ -361,6 +367,39 @@ export function WelcomeModal() {
                 </div>
               ))}
 
+              {/* Help Wiki callout */}
+              <div
+                className="rounded-md p-4"
+                style={{ background: "rgba(99,179,237,0.06)", border: "1px solid rgba(99,179,237,0.2)" }}
+              >
+                <div className="flex items-start gap-3">
+                  <div
+                    className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center"
+                    style={{ background: "rgba(99,179,237,0.12)", border: "1px solid rgba(99,179,237,0.25)" }}
+                  >
+                    <BookOpen size={16} style={{ color: "#63b3ed" }} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-xs font-bold mb-1" style={{ color: "#63b3ed" }}>
+                      Help Wiki — Your Master Resource
+                    </h3>
+                    <p className="text-[11px] leading-relaxed mb-2.5" style={{ color: "var(--color-text-muted)" }}>
+                      The <strong style={{ color: "var(--color-text-secondary)" }}>Help Wiki</strong> is your go-to reference for everything in Madison AI Suite. It has detailed documentation on every tool, feature, and workflow — plus a built-in AI assistant you can ask questions any time. Find it in the top menu bar or the sidebar under Utilities.
+                    </p>
+                    {onNavigate && (
+                      <button
+                        onClick={() => { onNavigate("help"); dismiss(); }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-semibold cursor-pointer transition-colors"
+                        style={{ background: "rgba(99,179,237,0.15)", border: "1px solid rgba(99,179,237,0.3)", color: "#63b3ed" }}
+                      >
+                        <HelpCircle size={12} />
+                        Open Help Wiki
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               {/* Pro tips */}
               <div
                 className="rounded-md p-3"
@@ -374,7 +413,21 @@ export function WelcomeModal() {
                   <li><strong style={{ color: "var(--color-text-secondary)" }}>Drag sections</strong> in the left sidebar to reorder your workflow, then save as default layout.</li>
                   <li><strong style={{ color: "var(--color-text-secondary)" }}>Middle-click</strong> on style library images to quickly enable/disable them.</li>
                   <li><strong style={{ color: "var(--color-text-secondary)" }}>Ctrl+V</strong> anywhere to paste images from your clipboard into the active tool.</li>
+                  <li><strong style={{ color: "var(--color-text-secondary)" }}>Copy/paste between tools</strong> — generate a character, paste it into the Prop Lab as a reference, send it to 3D Gen AI, or drop it into the Art Table. Mix and match!</li>
                 </ul>
+              </div>
+
+              {/* Encouragement */}
+              <div
+                className="rounded-md p-3"
+                style={{ background: "rgba(52,211,153,0.04)", border: "1px solid rgba(52,211,153,0.15)" }}
+              >
+                <h3 className="text-xs font-semibold mb-1.5" style={{ color: "#34d399" }}>
+                  Get Creative
+                </h3>
+                <p className="text-[11px] leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
+                  There's no single "right way" to use this suite. Explore, experiment, and develop your own workflow. Generate a character in Character Lab, deep-search for inspiration, refine the style in Style Fusion, paste the result into the Environment Lab to place them in a scene, then send it all to the Art Table to compare. The tools are designed to flow into each other — the more you explore, the more creative possibilities you'll discover.
+                </p>
               </div>
             </>
           )}

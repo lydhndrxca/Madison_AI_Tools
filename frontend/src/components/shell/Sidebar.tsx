@@ -17,6 +17,7 @@ import {
   MessageSquare,
   Lightbulb,
   PenTool,
+  HelpCircle,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { PageId } from "@/app";
@@ -55,6 +56,7 @@ const CREATIVE_ITEMS: NavItem[] = [
 const UTILITY_ITEMS: NavItem[] = [
   { id: "transcripts", label: "Art Direction Logs", icon: MessageSquare },
   { id: "prompt-builder", label: "Prompt Builder", icon: Puzzle },
+  { id: "help", label: "Help Wiki", icon: HelpCircle },
 ];
 
 export function Sidebar({ activePage, onNavigate, onSettingsClick, collapsed, setCollapsed }: SidebarProps) {
