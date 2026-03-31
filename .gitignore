@@ -52,3 +52,6 @@ runtime/
 # Frontend build output
 frontend/dist/
 frontend/node_modules/
+
+# Blender temp files
+scripts/blender/_tmp_args.json
