@@ -111,6 +111,7 @@ export function ArtboardCanvas() {
   const [slCategory, setSlCategory] = useState<"general" | "ui">("general");
   const [isMiddlePanning, setIsMiddlePanning] = useState(false);
   const middlePanRef = useRef({ lastX: 0, lastY: 0 });
+  const middlePanCleanupRef = useRef<(() => void) | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
   const spaceHeldRef = useRef(false);
   const [spacePanning, setSpacePanning] = useState(false);
@@ -195,13 +196,71 @@ export function ArtboardCanvas() {
   useEffect(() => {
     const el = containerRef.current; if (!el) return;
 
+    const applyPanSteps = (clientXs: number[], clientYs: number[]) => {
+      let dx = 0;
+      let dy = 0;
+      let lx = middlePanRef.current.lastX;
+      let ly = middlePanRef.current.lastY;
+      for (let i = 0; i < clientXs.length; i++) {
+        dx += clientXs[i]! - lx;
+        dy += clientYs[i]! - ly;
+        lx = clientXs[i]!;
+        ly = clientYs[i]!;
+      }
+      middlePanRef.current = { lastX: lx, lastY: ly };
+      if (dx === 0 && dy === 0) return;
+      const v = viewportRef.current;
+      setViewport({ zoom: v.zoom, panX: v.panX + dx, panY: v.panY + dy });
+      markViewportTouched();
+    };
+
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 1) return;
       e.preventDefault();
       e.stopPropagation();
+      middlePanCleanupRef.current?.();
+      const pid = e.pointerId;
       middlePanRef.current = { lastX: e.clientX, lastY: e.clientY };
       middlePanActiveRef.current = true;
       setIsMiddlePanning(true);
+
+      const onMove = (ev: PointerEvent) => {
+        if (!middlePanActiveRef.current || ev.pointerId !== pid) return;
+        const coalesced = typeof ev.getCoalescedEvents === "function" ? ev.getCoalescedEvents() : [];
+        const xs: number[] = [];
+        const ys: number[] = [];
+        if (coalesced.length > 0) {
+          for (const c of coalesced) {
+            xs.push(c.clientX);
+            ys.push(c.clientY);
+          }
+        } else {
+          xs.push(ev.clientX);
+          ys.push(ev.clientY);
+        }
+        applyPanSteps(xs, ys);
+      };
+
+      const cleanup = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", endPan);
+        window.removeEventListener("pointercancel", endPan);
+        middlePanCleanupRef.current = null;
+      };
+
+      const endPan = (ev: PointerEvent) => {
+        if (ev.type === "pointerup" && ev.pointerId !== pid) return;
+        if (!middlePanActiveRef.current) return;
+        middlePanActiveRef.current = false;
+        setIsMiddlePanning(false);
+        cleanup();
+      };
+
+      middlePanCleanupRef.current = cleanup;
+      // Attach immediately so the first pointer moves after mousedown are not dropped (React effect delay caused chunky jumps).
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", endPan);
+      window.addEventListener("pointercancel", endPan);
     };
 
     // Prevent the browser's native auto-scroll on middle-click
@@ -212,36 +271,12 @@ export function ArtboardCanvas() {
     el.addEventListener("pointerdown", onPointerDown);
     el.addEventListener("mousedown", onMouseDown);
     return () => {
+      middlePanCleanupRef.current?.();
+      middlePanActiveRef.current = false;
       el.removeEventListener("pointerdown", onPointerDown);
       el.removeEventListener("mousedown", onMouseDown);
     };
-  }, []);
-
-  // Window-level move/up listeners while middle-panning
-  useEffect(() => {
-    if (!isMiddlePanning) return;
-    const onMove = (e: PointerEvent) => {
-      if (!middlePanActiveRef.current) return;
-      const { lastX, lastY } = middlePanRef.current;
-      middlePanRef.current = { lastX: e.clientX, lastY: e.clientY };
-      const v = viewportRef.current;
-      setViewport({ zoom: v.zoom, panX: v.panX + e.clientX - lastX, panY: v.panY + e.clientY - lastY });
-      markViewportTouched();
-    };
-    const onUp = (e: PointerEvent) => {
-      if (e.button !== 1) return;
-      middlePanActiveRef.current = false;
-      setIsMiddlePanning(false);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-    return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-    };
-  }, [isMiddlePanning, setViewport, markViewportTouched]);
+  }, [setViewport, markViewportTouched]);
 
   // ---------------------------------------------------------------------------
   // Space + drag pan (hold Space, then left-click drag to pan)

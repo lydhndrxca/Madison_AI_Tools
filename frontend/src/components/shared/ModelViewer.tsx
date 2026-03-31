@@ -153,44 +153,53 @@ function applyTexturesToGroup(group: THREE.Group | THREE.Object3D, textures?: Te
 }
 
 function stripGroundPlanes(group: THREE.Group) {
+  const meshes: THREE.Mesh[] = [];
   const toRemove: THREE.Object3D[] = [];
   group.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) return;
-    const geo = child.geometry;
-    if (!geo) return;
+    if (child instanceof THREE.Mesh) meshes.push(child);
+  });
+  if (meshes.length <= 1) return;
+  for (const mesh of meshes) {
+    const geo = mesh.geometry;
+    if (!geo) continue;
     geo.computeBoundingBox();
     const bb = geo.boundingBox;
-    if (!bb) return;
+    if (!bb) continue;
     const s = new THREE.Vector3();
     bb.getSize(s);
     const dims = [s.x, s.y, s.z].sort((a, b) => a - b);
     const thin = dims[0];
     const wide = dims[2];
     if (wide > 0 && thin / wide < 0.005) {
-      toRemove.push(child);
+      toRemove.push(mesh);
     }
-  });
+  }
+  if (toRemove.length >= meshes.length) return;
   for (const obj of toRemove) obj.removeFromParent();
 }
 
 function autoFitModel(group: THREE.Group) {
-  stripGroundPlanes(group);
+  try {
+    stripGroundPlanes(group);
 
-  const box = new THREE.Box3().setFromObject(group);
-  if (box.isEmpty()) return;
-  const size = new THREE.Vector3();
-  box.getSize(size);
-  const maxDim = Math.max(size.x, size.y, size.z);
-  if (maxDim > 0) {
-    const TARGET = 2;
-    const s = TARGET / maxDim;
-    group.scale.multiplyScalar(s);
+    const box = new THREE.Box3().setFromObject(group);
+    if (box.isEmpty()) return;
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const maxDim = Math.max(size.x, size.y, size.z);
+    if (maxDim > 0) {
+      const TARGET = 2;
+      const s = TARGET / maxDim;
+      group.scale.multiplyScalar(s);
+    }
+    box.setFromObject(group);
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+    group.position.sub(center);
+    group.position.y -= box.min.y - center.y;
+  } catch (err) {
+    console.warn("[autoFitModel] failed, using model as-is:", err);
   }
-  box.setFromObject(group);
-  const center = new THREE.Vector3();
-  box.getCenter(center);
-  group.position.sub(center);
-  group.position.y -= box.min.y - center.y;
 }
 
 function LoadedFBX({ url, viewMode, textures }: { url: string; viewMode: ViewMode; textures?: TextureMap }) {

@@ -210,6 +210,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   const [outputSize, setOutputSize] = useState("");
   const [matchRefDims, setMatchRefDims] = useState(false);
   const [reenvision, setReenvision] = useState(false);
+  const [strictRefAdherence, setStrictRefAdherence] = useState(false);
   const [addColor, setAddColor] = useState(false);
   const [noColor, setNoColor] = useState(false);
   const [useGrid, setUseGrid] = useState(true);
@@ -400,6 +401,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       setRefImageB64(b64);
       setMatchRefDims(false);
       setReenvision(false);
+      setStrictRefAdherence(false);
     };
     reader.readAsDataURL(file);
     e.target.value = "";
@@ -430,6 +432,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     setRefImageB64(null);
     setMatchRefDims(false);
     setReenvision(false);
+    setStrictRefAdherence(false);
   }, []);
 
   // Collect all ref tab b64 images for style/ref context
@@ -611,6 +614,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       ref_images: refImagesB64.length > 0 ? refImagesB64 : undefined,
       reenvision,
       match_ref_dims: matchRefDims,
+      strict_reference_adherence: strictRefAdherence,
       add_color: addColor,
       no_color: noColor,
       button_shape: buttonShape,
@@ -757,7 +761,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
         busy.end("gen");
       }
     }
-  }, [busy, elementType, prompt, genCount, modelId, refImageB64, reenvision, matchRefDims, addColor, noColor,
+  }, [busy, elementType, prompt, genCount, modelId, refImageB64, reenvision, matchRefDims, strictRefAdherence, addColor, noColor,
     useGrid, buttonShape, borderStyle, addIcon, addText, textSize, sbTrack, sbThumb, sbArrows, sbOrientation,
     fontChars, styleFusion, styleLibraryFolder, styleLibraryFolders, resolveOutputDims, resolveCellDims, collectRefImagesB64, setMainstageImage, addToast,
     resolveSection, customSections.getPromptContributions, customSections.getImageAttachments]);
@@ -784,6 +788,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     setOutputSize("");
     setMatchRefDims(false);
     setReenvision(false);
+    setStrictRefAdherence(false);
     setAddColor(false);
     setNoColor(false);
     setUseGrid(true);
@@ -965,6 +970,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       `  <outputSize>${outputSize || "1024x1024"}</outputSize>`,
       `  <useGrid>${useGrid}</useGrid>`,
       `  <reenvision>${reenvision}</reenvision>`,
+      `  <strictRefAdherence>${strictRefAdherence}</strictRefAdherence>`,
     ];
     if (elementType === "button") {
       lines.push(`  <buttonShape>${buttonShape}</buttonShape>`);
@@ -987,14 +993,14 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     lines.push(`  <generatedCount>${galleryResults.length}</generatedCount>`);
     lines.push(`</uilab>`);
     return lines.join("\n");
-  }, [elementType, prompt, outputSize, useGrid, reenvision, buttonShape, borderStyle, addIcon, addText, textSize,
+  }, [elementType, prompt, outputSize, useGrid, reenvision, strictRefAdherence, buttonShape, borderStyle, addIcon, addText, textSize,
     sbTrack, sbThumb, sbArrows, sbOrientation, fontChars, styleFusion, galleryResults.length]);
 
   // Session persistence
   useSessionRegister(
     sessionKey,
     () => ({
-      elementType, prompt, genCount, outputSize, matchRefDims, reenvision, addColor, noColor,
+      elementType, prompt, genCount, outputSize, matchRefDims, reenvision, strictRefAdherence, addColor, noColor,
       useGrid, cellSize, buttonShape, borderStyle, addIcon, addText, textSize,
       sbTrack, sbThumb, sbArrows, sbOrientation, fontChars, styleFusion,
       styleLibraryFolder, sectionEnabled, layout, tabs, activeTab, modelId,
@@ -1008,6 +1014,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       if (typeof d.outputSize === "string") setOutputSize(d.outputSize);
       if (typeof d.matchRefDims === "boolean") setMatchRefDims(d.matchRefDims);
       if (typeof d.reenvision === "boolean") setReenvision(d.reenvision);
+      if (typeof d.strictRefAdherence === "boolean") setStrictRefAdherence(d.strictRefAdherence);
       if (typeof d.addColor === "boolean") setAddColor(d.addColor);
       if (typeof d.noColor === "boolean") setNoColor(d.noColor);
       if (typeof d.useGrid === "boolean") setUseGrid(d.useGrid);
@@ -1241,6 +1248,9 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
               disabled={busy.any}
               title="Size of each cell in the 4×4 grid (WxH), blank for 256x256"
             />
+            <p className="text-[9px] mt-1 leading-snug" style={{ color: "var(--color-text-muted)" }}>
+              Each cell should contain one {elementType} only — if you see stacked duplicates, regenerate (prompt is tightened server-side).
+            </p>
           </div>
         )}
 
@@ -1263,16 +1273,18 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     );
   };
 
-  const refMode = reenvision ? "reenvision" : matchRefDims ? "match" : "none";
+  const refMode = reenvision ? "reenvision" : strictRefAdherence ? "strict" : matchRefDims ? "match" : "none";
   const handleRefModeChange = useCallback((mode: string) => {
-    setMatchRefDims(mode === "match");
     setReenvision(mode === "reenvision");
+    setStrictRefAdherence(mode === "strict");
+    setMatchRefDims(mode === "match" || mode === "strict");
   }, []);
 
   const REF_MODE_HINTS: Record<string, string> = {
-    none: "Image used as visual context only — AI sees it but makes no dimensional or creative guarantees.",
-    match: "AI will match the aspect ratio and dimensions of your reference image in its output.",
-    reenvision: "AI reimagines the reference as a new element in your chosen style, preserving subject and composition.",
+    none: "The model can look at this picture for colors, layout, and mood. Output width and height still follow your settings above — not this image’s pixels.",
+    match: "Output is resized to match this image: same aspect ratio and pixel dimensions. The model may vary the design more freely than Strict adherence.",
+    strict: "Like “REMAKE THIS”: keep the same aspect ratio and general layout/feel as the reference. Your style library and prompt supply a new visual flavor (colors, line, texture, era) — not a new size, aspect, or composition template. Output dimensions match the reference image.",
+    reenvision: "Looser than Remake (strict): same rough idea, but the model may change framing, angle, or layout more freely while adopting your style and prompt.",
   };
 
   const renderRefImageSection = () => (
@@ -1297,7 +1309,15 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-[11px] font-medium truncate" style={{ color: "var(--color-text-primary)" }}>Reference loaded</p>
-              <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>Used as {refMode === "reenvision" ? "re-envision source" : refMode === "match" ? "dimension reference" : "visual context"}</p>
+              <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+                {refMode === "reenvision"
+                  ? "Mode: redraw this image as your new UI"
+                  : refMode === "strict"
+                    ? "Mode: remake — same aspect & feel; new flavor from style + prompt"
+                  : refMode === "match"
+                    ? "Mode: output same size as this image"
+                    : "Mode: inspiration only; size from settings"}
+              </p>
             </div>
           </div>
         ) : (
@@ -1317,22 +1337,26 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
 
       {/* Reference mode selector */}
       <div>
-        <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Use as Reference</label>
+        <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>
+          How to use this image when you generate
+        </label>
         <select
           className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
           style={inputStyle}
           value={refMode}
           onChange={(e) => handleRefModeChange(e.target.value)}
           disabled={!refImageB64 || busy.any}
+          title="Remake (strict): same aspect ratio and layout feel as the reference; style library + prompt change the visual flavor only."
         >
-          <option value="none">Visual Context Only</option>
-          <option value="match">Match Dimensions</option>
-          <option value="reenvision">Re-envision</option>
+          <option value="none">Inspiration only — output size from settings above</option>
+          <option value="match">Match size — same width, height, aspect (looser on likeness)</option>
+          <option value="strict">Remake (strict) — same aspect ratio & feel; new look from style + prompt</option>
+          <option value="reenvision">Re-envision — freer creative redraw, new angles/layouts</option>
         </select>
       </div>
 
       <p className="text-[9px] leading-snug" style={{ color: "var(--color-text-muted)" }}>
-        {REF_MODE_HINTS[refMode]}
+        {REF_MODE_HINTS[refMode] ?? REF_MODE_HINTS.none}
       </p>
     </div>
   );

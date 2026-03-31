@@ -100,6 +100,19 @@ export interface ArtboardContextValue {
   applyRemoteDelta: (delta: ArtboardDelta) => void;
   setRoomUsers: React.Dispatch<React.SetStateAction<RoomUser[]>>;
   setRemoteCursors: React.Dispatch<React.SetStateAction<Map<string, RemoteCursor>>>;
+
+  snapshotForSession: () => ArtboardSessionSnapshot;
+  /** Reset (null) or restore from template. Leaves shared rooms. */
+  applySessionState: (snapshot: ArtboardSessionSnapshot | null) => void;
+}
+
+/** Serializable Art Table snapshot for session templates / save (all boards). */
+export interface ArtboardSessionSnapshot {
+  boards: BoardMeta[];
+  activeBoardId: string;
+  itemsByBoard: Record<string, ArtboardItem[]>;
+  viewport: ArtboardViewport;
+  viewportTouched: boolean;
 }
 
 export interface RoomUser {
@@ -202,6 +215,8 @@ export function ArtboardProvider({ children }: { children: ReactNode }) {
   const deltaListenerRef = useRef<((delta: ArtboardDelta) => void) | null>(null);
   const activeBoardRef = useRef(activeBoardId);
   useEffect(() => { activeBoardRef.current = activeBoardId; }, [activeBoardId]);
+  const boardsRef = useRef(boards);
+  useEffect(() => { boardsRef.current = boards; }, [boards]);
 
   // Debounced persistence (only in local mode)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -413,6 +428,78 @@ export function ArtboardProvider({ children }: { children: ReactNode }) {
     setRemoteCursors(new Map());
   }, []);
 
+  const snapshotForSession = useCallback((): ArtboardSessionSnapshot => {
+    saveBoardItems(activeBoardRef.current, items);
+    const itemsByBoard: Record<string, ArtboardItem[]> = {};
+    for (const b of boardsRef.current) {
+      itemsByBoard[b.id] = b.id === activeBoardId ? items.map((i) => ({ ...i })) : loadBoardItems(b.id).map((i) => ({ ...i }));
+    }
+    return {
+      boards: boardsRef.current.map((b) => ({ ...b })),
+      activeBoardId,
+      itemsByBoard,
+      viewport: { ...viewport },
+      viewportTouched,
+    };
+  }, [activeBoardId, items, viewport, viewportTouched]);
+
+  const applySessionState = useCallback(
+    (snapshot: ArtboardSessionSnapshot | null) => {
+      leaveRoom();
+      const prevIds = boardsRef.current.map((b) => b.id);
+      if (snapshot === null) {
+        for (const id of prevIds) {
+          try { localStorage.removeItem(BOARD_PREFIX + id); } catch { /* */ }
+        }
+        setBoards([{ id: DEFAULT_BOARD_ID, name: "Art Table" }]);
+        setActiveBoardId(DEFAULT_BOARD_ID);
+        activeBoardRef.current = DEFAULT_BOARD_ID;
+        setItems([]);
+        saveBoardItems(DEFAULT_BOARD_ID, []);
+        saveIndex([{ id: DEFAULT_BOARD_ID, name: "Art Table" }]);
+        setViewport({ zoom: 1, panX: 0, panY: 0 });
+        setViewportTouched(false);
+        undoStack.current = [];
+        redoStack.current = [];
+        setCanUndo(false);
+        setCanRedo(false);
+        setSelection(new Set());
+        return;
+      }
+      const nextIds = new Set(snapshot.boards.map((b) => b.id));
+      for (const id of prevIds) {
+        if (!nextIds.has(id)) {
+          try { localStorage.removeItem(BOARD_PREFIX + id); } catch { /* */ }
+        }
+      }
+      setBoards(snapshot.boards.map((b) => ({ ...b })));
+      saveIndex(snapshot.boards.map((b) => ({ ...b })));
+      const aid = snapshot.boards.some((b) => b.id === snapshot.activeBoardId)
+        ? snapshot.activeBoardId
+        : (snapshot.boards[0]?.id ?? DEFAULT_BOARD_ID);
+      for (const b of snapshot.boards) {
+        const arr = snapshot.itemsByBoard[b.id] ?? [];
+        saveBoardItems(b.id, arr.map((i) => ({ ...i })));
+      }
+      setActiveBoardId(aid);
+      activeBoardRef.current = aid;
+      setItems((snapshot.itemsByBoard[aid] ?? []).map((i) => ({ ...i })));
+      const vp = snapshot.viewport;
+      setViewport(
+        vp && typeof vp.zoom === "number" && typeof vp.panX === "number" && typeof vp.panY === "number"
+          ? { zoom: vp.zoom, panX: vp.panX, panY: vp.panY }
+          : { zoom: 1, panX: 0, panY: 0 },
+      );
+      setViewportTouched(Boolean(snapshot.viewportTouched));
+      undoStack.current = [];
+      redoStack.current = [];
+      setCanUndo(false);
+      setCanRedo(false);
+      setSelection(new Set());
+    },
+    [leaveRoom],
+  );
+
   const setDeltaListener = useCallback((listener: ((delta: ArtboardDelta) => void) | null) => {
     deltaListenerRef.current = listener;
   }, []);
@@ -446,6 +533,7 @@ export function ArtboardProvider({ children }: { children: ReactNode }) {
       loadItemsDirectly,
       mode, roomId, remoteHost, roomUsers, remoteCursors,
       joinRoom, leaveRoom, setDeltaListener, applyRemoteDelta, setRoomUsers, setRemoteCursors,
+      snapshotForSession, applySessionState,
     }}>
       {children}
     </ArtboardCtx.Provider>

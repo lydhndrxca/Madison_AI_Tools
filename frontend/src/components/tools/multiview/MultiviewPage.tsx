@@ -76,7 +76,10 @@ export function MultiviewPage() {
   }, [gallery, imageIdx]);
 
   const handleGenerate = useCallback(async () => {
-    if (!prompt.trim()) return;
+    if (!prompt.trim()) {
+      addToast("Enter a prompt first", "error");
+      return;
+    }
     busy.start("generate");
     setGenText((p) => ({ ...p, generate: "Generating image..." }));
     try {
@@ -90,50 +93,129 @@ export function MultiviewPage() {
         setEditHistory((prev) => [{ timestamp: new Date().toLocaleTimeString(), prompt: prompt.slice(0, 60), isOriginal: prev.length === 0 }, ...prev]);
         addToast("Image generated", "success");
       } else if (resp.error) addToast(resp.error, "error");
-    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
-    busy.end("generate");
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : String(e), "error");
+    } finally {
+      busy.end("generate");
+    }
   }, [prompt, dimension, getMainB64, modelId, setTabImage, addToast, busy]);
 
-  const handleGenerateAll = useCallback(async () => {
-    if (!prompt.trim()) return;
-    busy.start("allviews");
-    setGenText((p) => ({ ...p, allviews: "Generating all views..." }));
-    try {
-      const mainB64 = getMainB64();
-      const resp = await apiFetch<{ images: Record<string, string | null>; errors: Record<string, string> }>("/gemini/multiview/generate-all", {
-        method: "POST",
-        body: JSON.stringify({ prompt, dimension, mode: "quality", base_image_b64: mainB64, model_id: modelId || undefined }),
-      });
-      for (const [viewKey, b64] of Object.entries(resp.images)) {
+  const mergeResponseIntoGallery = useCallback(
+    (resp: { images?: Record<string, string | null> | null; errors?: Record<string, string> | null }) => {
+      const images = resp.images ?? {};
+      const errs = resp.errors ?? {};
+      let got = 0;
+      for (const [viewKey, b64] of Object.entries(images)) {
         if (b64) {
           const tabName = Object.entries(VIEW_KEY_MAP).find(([, k]) => k === viewKey)?.[0] || viewKey;
           setTabImage(tabName, `data:image/png;base64,${b64}`);
+          got += 1;
         }
       }
-    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
-    busy.end("allviews");
-  }, [prompt, dimension, getMainB64, setTabImage, addToast, busy]);
+      if (errs._global) addToast(errs._global, "error");
+      for (const [k, v] of Object.entries(errs)) {
+        if (k !== "_global") addToast(`${k}: ${v}`, "error");
+      }
+      if (got > 0) addToast(`Generated ${got} view(s)`, "success");
+      else if (!errs._global && Object.keys(errs).length === 0) {
+        addToast("No images returned — check API key, Main Stage image, or prompt", "error");
+      }
+    },
+    [setTabImage, addToast],
+  );
 
-  const handleGenerateSelected = useCallback(async () => {
-    if (!prompt.trim() || activeTab === "Main Stage") return;
-    busy.start("selected");
-    setGenText((p) => ({ ...p, selected: `Generating ${activeTab}...` }));
+  const handleGenerateAll = useCallback(async () => {
+    const mainB64 = getMainB64();
+    if (!prompt.trim() && !mainB64) {
+      addToast("Load an image on Main Stage, or enter a prompt", "error");
+      return;
+    }
+    busy.start("allviews");
+    setGenText((p) => ({ ...p, allviews: "Generating all views..." }));
     try {
-      const mainB64 = getMainB64();
-      const viewKey = VIEW_KEY_MAP[activeTab] || "front";
       const resp = await apiFetch<{ images: Record<string, string | null>; errors: Record<string, string> }>("/gemini/multiview/generate-all", {
         method: "POST",
-        body: JSON.stringify({ prompt, dimension, mode: "quality", base_image_b64: mainB64, views: [viewKey], model_id: modelId || undefined }),
+        body: JSON.stringify({
+          prompt: prompt.trim(),
+          dimension,
+          mode: "quality",
+          base_image_b64: mainB64,
+          model_id: modelId || undefined,
+        }),
       });
-      for (const [key, b64] of Object.entries(resp.images)) {
-        if (b64) {
-          const tabName = Object.entries(VIEW_KEY_MAP).find(([, k]) => k === key)?.[0] || key;
-          setTabImage(tabName, `data:image/png;base64,${b64}`);
+      mergeResponseIntoGallery(resp);
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : String(e), "error");
+    } finally {
+      busy.end("allviews");
+    }
+  }, [prompt, dimension, getMainB64, modelId, mergeResponseIntoGallery, addToast, busy]);
+
+  const handleGenerateSelected = useCallback(async () => {
+    const mainB64 = getMainB64();
+    if (!prompt.trim() && !mainB64) {
+      addToast("Load an image on Main Stage, or enter a prompt", "error");
+      return;
+    }
+    if (activeTab === "Main Stage") {
+      addToast("Select a view tab (Front, Back, Side, etc.) — not Main Stage", "error");
+      return;
+    }
+    const viewKey = VIEW_KEY_MAP[activeTab] || "front";
+    const n = Math.max(1, Math.min(5, genCount));
+    busy.start("selected");
+    setGenText((p) => ({ ...p, selected: n > 1 ? `Generating ${n}× ${activeTab}...` : `Generating ${activeTab}...` }));
+    try {
+      if (n === 1) {
+        const resp = await apiFetch<{ images: Record<string, string | null>; errors: Record<string, string> }>("/gemini/multiview/generate-all", {
+          method: "POST",
+          body: JSON.stringify({
+            prompt: prompt.trim(),
+            dimension,
+            mode: "quality",
+            base_image_b64: mainB64,
+            views: [viewKey],
+            model_id: modelId || undefined,
+          }),
+        });
+        mergeResponseIntoGallery(resp);
+      } else {
+        const promises = Array.from({ length: n }, () =>
+          apiFetch<{ images: Record<string, string | null>; errors: Record<string, string> }>("/gemini/multiview/generate-all", {
+            method: "POST",
+            body: JSON.stringify({
+              prompt: prompt.trim(),
+              dimension,
+              mode: "quality",
+              base_image_b64: mainB64,
+              views: [viewKey],
+              model_id: modelId || undefined,
+            }),
+          }),
+        );
+        const all = await Promise.all(promises);
+        const blobs: string[] = [];
+        for (let i = 0; i < all.length; i++) {
+          const resp = all[i];
+          const b64 = resp.images?.[viewKey];
+          if (b64) blobs.push(`data:image/png;base64,${b64}`);
+          else {
+            const err = resp.errors?.[viewKey] || resp.errors?._global || "No image";
+            addToast(`${activeTab} #${i + 1}: ${err}`, "error");
+          }
+        }
+        if (blobs.length > 0) {
+          setGallery((prev) => ({ ...prev, [activeTab]: blobs }));
+          setImageIdx((prev) => ({ ...prev, [activeTab]: blobs.length - 1 }));
+          addToast(`Generated ${blobs.length} image(s) for ${activeTab}`, "success");
         }
       }
-    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
-    busy.end("selected");
-  }, [prompt, dimension, activeTab, getMainB64, setTabImage, addToast, busy]);
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : String(e), "error");
+    } finally {
+      busy.end("selected");
+    }
+  }, [prompt, dimension, activeTab, getMainB64, modelId, genCount, mergeResponseIntoGallery, setTabImage, addToast, busy]);
 
   const handleCancel = useCallback(async () => {
     cancelAllRequests();
@@ -269,7 +351,7 @@ export function MultiviewPage() {
             <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>Describe image:</p>
             <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={12} className="flex-1" placeholder="Describe what you want to see — e.g. A medieval sword with ornate handle..." disabled={busy.any} />
             <Button variant="primary" className="w-full" generating={busy.is("generate")} generatingText="Generating Image..." onClick={handleGenerate} title="Generate a new image from your prompt">Generate Image</Button>
-            <Button className="w-full" generating={busy.is("selected")} generatingText={genText.selected || "Generating view..."} onClick={handleGenerateSelected} title="Generate current view only">Generate Selected View</Button>
+            <Button variant="primary" className="w-full" generating={busy.is("selected")} generatingText={genText.selected || "Generating view..."} onClick={handleGenerateSelected} title="Generate current view only">Generate Selected View</Button>
             <Button variant="primary" className="w-full" generating={busy.is("allviews")} generatingText={genText.allviews || "Generating views..."} onClick={handleGenerateAll} title="Generate all views at once">Generate All Views</Button>
             {busy.any && <Button variant="danger" size="sm" className="w-full" onClick={handleCancel} title="Stop the current generation">Cancel</Button>}
             <div className="flex items-center gap-3">

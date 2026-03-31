@@ -7,6 +7,8 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
+import numpy as np
+
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
@@ -100,10 +102,112 @@ def _remove_element_background(img):
     return img
 
 
+def _is_chroma_greenish(r: float, g: float, b: float, *, strict_dist: float) -> bool:
+    """True if pixel reads as chroma / spill green (not neutral gray metal)."""
+    dist = (r - 0.0) ** 2 + (g - 255.0) ** 2 + (b - 0.0) ** 2
+    if dist < strict_dist * strict_dist:
+        return True
+    # Anti-aliased / slightly off #00FF00 lime spill
+    if g > max(r, b) + 18 and g > 58 and r < 145 and b < 145:
+        mid = (r + g + b) / 3.0
+        if abs(r - mid) < 22 and abs(g - mid) < 22 and abs(b - mid) < 22 and mid > 45:
+            return False
+        return True
+    return False
+
+
+def _flood_clear_green_from_edges_rgba(arr) -> None:
+    """BFS from image border: clear alpha for chroma-green regions connected to outside (in-place on arr RGBA uint8)."""
+    import numpy as np
+    from collections import deque
+
+    h, w = arr.shape[:2]
+    strict = 100.0
+    reachable = np.zeros((h, w), dtype=bool)
+    q: deque = deque()
+
+    def try_seed(y: int, x: int) -> None:
+        if y < 0 or y >= h or x < 0 or x >= w or reachable[y, x]:
+            return
+        r, g, b, a = float(arr[y, x, 0]), float(arr[y, x, 1]), float(arr[y, x, 2]), int(arr[y, x, 3])
+        if a < 12 or _is_chroma_greenish(r, g, b, strict_dist=strict):
+            reachable[y, x] = True
+            q.append((y, x))
+
+    for x in range(w):
+        try_seed(0, x)
+        try_seed(h - 1, x)
+    for y in range(h):
+        try_seed(y, 0)
+        try_seed(y, w - 1)
+
+    while q:
+        y, x = q.popleft()
+        for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+            if ny < 0 or ny >= h or nx < 0 or nx >= w or reachable[ny, nx]:
+                continue
+            r, g, b, a = float(arr[ny, nx, 0]), float(arr[ny, nx, 1]), float(arr[ny, nx, 2]), int(arr[ny, nx, 3])
+            if a < 12 or _is_chroma_greenish(r, g, b, strict_dist=strict):
+                reachable[ny, nx] = True
+                q.append((ny, nx))
+
+    arr[reachable, 3] = 0
+
+
+def _chroma_key_grid_pass(img, *, threshold: float, min_green: float):
+    """Slightly looser chroma for grid cells (AI rarely hits exact #00FF00)."""
+    import numpy as np
+    from PIL import Image
+
+    arr = np.array(img.convert("RGBA"), dtype=np.float32)
+    r, g, b, a = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2], arr[:, :, 3]
+    gr, gg, gb = 0.0, 255.0, 0.0
+    dist = np.sqrt((r - gr) ** 2 + (g - gg) ** 2 + (b - gb) ** 2)
+    is_green = (dist < threshold) & (g > min_green)
+    a = np.where(is_green, 0, a)
+    arr[:, :, 3] = a
+    return Image.fromarray(arr.astype(np.uint8), "RGBA")
+
+
+def _defringe_green_edges(img, neighbor_transparent_lt: int = 38, green_tint_min: int = 18):
+    """Remove thin green halos: opaque pixels that are mostly green and border transparency."""
+    import numpy as np
+    from PIL import Image
+
+    arr = np.array(img.convert("RGBA"), dtype=np.int16)
+    h, w = arr.shape[:2]
+    a = arr[:, :, 3].copy()
+    for y in range(h):
+        for x in range(w):
+            if a[y, x] < 40:
+                continue
+            r, g, b = int(arr[y, x, 0]), int(arr[y, x, 1]), int(arr[y, x, 2])
+            if g <= max(r, b) + green_tint_min:
+                continue
+            transparent_neighbors = 0
+            for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                ny, nx = y + dy, x + dx
+                if ny < 0 or ny >= h or nx < 0 or nx >= w:
+                    transparent_neighbors += 1
+                elif arr[ny, nx, 3] < neighbor_transparent_lt:
+                    transparent_neighbors += 1
+            if transparent_neighbors >= 2:
+                a[y, x] = 0
+    arr[:, :, 3] = np.clip(a, 0, 255)
+    return Image.fromarray(arr.astype(np.uint8), "RGBA")
+
+
 def _remove_grid_cell_background(img):
-    """Aggressive green removal for grid cells (wider tolerances)."""
-    img = _chroma_key_to_alpha(img, green=(0, 255, 0), threshold=70, min_green=50)
-    img = _flood_fill_transparent(img, tolerance=40)
+    """Strong chroma + edge flood + defringe so grid cells lose #00FF00 blobs and outlines."""
+    from PIL import Image
+
+    img = _chroma_key_grid_pass(img, threshold=115, min_green=35)
+    arr = np.array(img.convert("RGBA"), dtype=np.uint8)
+    _flood_clear_green_from_edges_rgba(arr)
+    img = Image.fromarray(arr, "RGBA")
+    img = _chroma_key_grid_pass(img, threshold=95, min_green=45)
+    img = _flood_fill_transparent(img, tolerance=32)
+    img = _defringe_green_edges(img)
     return img
 
 
@@ -118,6 +222,15 @@ CHROMA_BG = (
     "do NOT use any gradient or texture on the background. "
     "The entire background area must be one single flat chroma green #00FF00. "
     "Only the element itself should have detail; everything else is flat green."
+)
+
+# No extra “plaque” / picture-frame around the whole asset (common model mistake).
+NO_OUTER_SPRITE_FRAME = (
+    "NO OUTER BORDER / FRAME: Do NOT add a separate enclosing border, picture frame, thick outer stroke, "
+    "double-outline box, drop-shadow panel, or decorative rim around the entire graphic before the chroma green. "
+    "The keyed background must meet the OUTERMOST silhouette of the control or icon directly — "
+    "no halo ring sitting between the art and the green void. "
+    "Internal bevels, inset panels, and control chrome that are part of the widget shape are OK."
 )
 
 
@@ -166,6 +279,7 @@ def _build_ui_prompt(
     gen_h: int = 1024,
     component: str = "",
     reenvision: bool = False,
+    strict_adherence: bool = False,
     has_ref: bool = False,
     has_style_lib: bool = False,
     style_guidance: str = "",
@@ -208,6 +322,7 @@ def _build_ui_prompt(
             "Do NOT let the icon touch the image edges. "
             "Crisp, high-resolution, detailed artwork. "
             "No surrounding scene, no text, no extra elements — just the icon. "
+            "NO outer frame, NO square plaque, NO thick stroke boxing the icon — only the glyph or graphic. "
             "This must look like a polished, production-ready game/app UI icon.\n"
             + CHROMA_BG
         )
@@ -235,6 +350,7 @@ def _build_ui_prompt(
             f"You are a UI scrollbar designer. Generate a {desc} "
             f"at {gen_w}x{gen_h} pixels. "
             "Crisp, detailed, production-ready UI artwork. "
+            "NO separate outer picture-frame or box stroke around the whole component — green meets the widget edge. "
             "This is one component piece of a scrollbar widget.\n"
             + CHROMA_BG
         )
@@ -281,6 +397,22 @@ def _build_ui_prompt(
             "Think of it as: 'an artist saw this reference, got inspired, and drew their own version.'\n"
             "No watermark."
         )
+    elif has_ref and strict_adherence:
+        style_content_rule = (
+            "REMAKE MODE (strict — same aspect ratio & general feel, new visual flavor):\n"
+            "Treat User_reference (last image before this prompt) as the asset to REMAKE, not a loose suggestion.\n\n"
+            "LOCK IN (do not change):\n"
+            "- The EXACT same aspect ratio and overall canvas proportions as User_reference.\n"
+            "- The same general 'read': how the graphic occupies the frame, margin/padding rhythm, and layout skeleton "
+            "(bands, blocks, negative space, major shapes).\n"
+            "- The same silhouette and information hierarchy — what is foreground vs background structure.\n\n"
+            "CHANGE (visual flavor only):\n"
+            "- Re-render in the art direction from USER DIRECTION and from Style/Trained reference images: "
+            "palette, line weight, shading, texture, era, polish, and stylistic treatment.\n"
+            "- Think: 'the same icon layout and proportions, but art-directed with a new look.'\n\n"
+            "FORBIDDEN: Different aspect ratio, stretched proportions, a new composition template, or unrelated content.\n"
+            "No watermark."
+        )
     elif has_ref:
         style_content_rule = (
             "REFERENCE IMAGES — READ CAREFULLY:\n"
@@ -317,6 +449,11 @@ def _build_ui_prompt(
             "VARIETY: Each generation must be a DIFFERENT creative take on the reference subject. "
             "Change the angle, pose, proportions, details, or framing significantly."
         )
+    elif has_ref and strict_adherence:
+        variety_rule = (
+            "VARIETY: Each generation is another REMAKE — same aspect ratio and layout read as User_reference, "
+            "but USER DIRECTION (and style refs) may shift nuance of the visual flavor (e.g. crunchier, softer, flatter)."
+        )
     elif has_ref:
         variety_rule = (
             "VARIETY: Create a creative variation of the user reference element. "
@@ -344,6 +481,7 @@ def _build_ui_prompt(
         parts.append(f"STYLE GUIDANCE FROM THE ART DIRECTOR:\n{style_guidance.strip()}")
 
     parts.append(style_content_rule)
+    parts.append(NO_OUTER_SPRITE_FRAME)
 
     parts.append(
         f"ELEMENT SPEC: You are generating a {element_type}"
@@ -385,39 +523,116 @@ def _build_grid_prompt(
     cell_w: int = 256,
     cell_h: int = 256,
     reenvision: bool = False,
+    strict_adherence: bool = False,
     has_ref: bool = False,
+    has_style_lib: bool = False,
+    style_guidance: str = "",
     add_color: bool = False,
     no_color: bool = False,
 ) -> str:
-    """Build prompt for 4x4 grid sprite sheet generation."""
+    """Build prompt for 4x4 grid sprite sheet generation.
+
+    Must stay aligned with _build_ui_prompt: same reference order (ref tabs, fusion, custom,
+    then User_reference) and style-library priority so grid mode does not ignore refs/style.
+    """
     canvas_w = cell_w * 4
     canvas_h = cell_h * 4
 
     parts: list[str] = []
 
+    if has_ref or has_style_lib or (style_guidance and style_guidance.strip()):
+        parts.append(
+            "IMAGES BEFORE THIS TEXT (same order as single UI element generation):\n"
+            "1) Ref-tab images (optional, extra context)\n"
+            "2) Style Fusion slot images (optional, style)\n"
+            "3) Custom-section images (optional)\n"
+            "4) Dedicated REFERENCE IMAGE slot = User_reference (content / layout / motif — "
+            "MUST visibly inform every cell when provided)\n\n"
+            "Earlier images define STYLE when present; User_reference defines WHAT to draw "
+            "(shape language, proportions, composition, motif). Even abstract references "
+            "constrain rhythm, banding, and geometry — do not ignore them."
+        )
+
+    if has_style_lib:
+        parts.append(
+            "*** HIGHEST PRIORITY — STYLE ADHERENCE (4×4 SHEET) ***\n"
+            "Study ALL Style/Trained reference images before this prompt. "
+            "EVERY ONE of the 16 cells MUST match the same art style: rendering technique, "
+            "palette, line weight, shading, texture, and level of detail as those references. "
+            "The sprite sheet must look like it came from the same UI kit as the style references."
+        )
+
+    if style_guidance.strip():
+        parts.append(f"STYLE GUIDANCE FROM THE ART DIRECTOR:\n{style_guidance.strip()}")
+
     grid_header = (
         f"4\u00d74 sprite sheet: {canvas_w}x{canvas_h}px image, "
-        f"16 cells of {cell_w}x{cell_h}px each.\n"
-        f"Background: solid chroma green #00FF00 everywhere.\n"
-        f"Each cell: one {element_type}, centered, no overlap between cells, no grid lines."
+        f"16 cells of {cell_w}x{cell_h}px each (invisible borders — draw continuously; the model mentally tiles 4×4).\n"
+        f"Background: solid chroma green #00FF00 everywhere outside the single asset in each cell.\n"
+        f"Each cell contains EXACTLY ONE {element_type} only — one centered graphic, no grid lines drawn on the image."
     )
+
     if has_ref and reenvision:
         parts.append(
             f"{grid_header}\n"
-            f"RE-ENVISION MODE: The User_reference shows the subject. "
-            f"Each of the 16 cells must be a DIFFERENT creative reimagining of that subject "
-            f"in the chosen style — vary pose, angle, proportions, expression, and details. "
-            f"Do NOT copy the reference literally."
+            "RE-ENVISION MODE: User_reference (last image before this text) is the subject baseline. "
+            "Each of the 16 cells must be a DIFFERENT creative reimagining of that subject in the "
+            "mandatory style — vary pose, angle, proportions, and details. "
+            "Do NOT copy the reference pixel-for-pixel; stay faithful to its idea and to style references."
+        )
+    elif has_ref and strict_adherence:
+        parts.append(
+            f"{grid_header}\n"
+            "REMAKE MODE (strict): User_reference defines ONE layout template and aspect logic. "
+            "Every cell must keep the SAME aspect ratio and general feel (how the graphic sits in the cell, same skeleton).\n"
+            "Across the 16 cells, vary only the VISUAL FLAVOR per USER DIRECTION — different stylistic treatments of the "
+            "same remake idea (palette, line, texture, era), not 16 different icons with different proportions or subjects.\n"
+            "Style/Trained references + USER DIRECTION supply the new look; User_reference supplies size/layout DNA."
+        )
+    elif has_ref:
+        parts.append(
+            f"{grid_header}\n"
+            "USER_REFERENCE (last image before this text) is mandatory visual context for CONTENT. "
+            "All 16 icons must clearly descend from it: same graphic vocabulary, layout logic, "
+            "and motif family (e.g. stripes, bands, grid-of-squares, proportions). "
+            "Each cell must still be a distinct variation (different treatment, angle, or detail). "
+            "If User_reference is minimal or abstract, echo its geometry and composition — do not "
+            "replace it with unrelated subjects like crosses, pills, or hearts unless the user text explicitly asks."
         )
     else:
         parts.append(
             f"{grid_header}\n"
-            f"IMPORTANT: All 16 must be DIFFERENT — vary the shape, size, angle, detail, and design. "
-            f"No two cells should look the same."
+            "IMPORTANT: All 16 must be DIFFERENT — vary the shape, size, angle, detail, and design. "
+            "No two cells should look the same."
         )
 
+    parts.append(
+        "CRITICAL — ONE ASSET PER CELL (all 16 cells):\n"
+        f"- Each cell is {cell_w}×{cell_h} px. Draw EXACTLY ONE single {element_type} in each cell — "
+        "one unified silhouette, centered, with chroma green margin around it.\n"
+        "- FORBIDDEN: two or more separate widgets in one cell; stacked duplicate bars or buttons; "
+        "an upper bar plus a lower bar; side-by-side twins; mini before/after pairs; contact-sheet layouts inside one cell.\n"
+        "- FORBIDDEN: repeating the same element twice vertically or horizontally inside one cell.\n"
+        "- If the target is a wide button or bar, it is still ONE control: one horizontal strip, one bevel system — "
+        "not two parallel strips.\n"
+        "- Count mentally: 16 cells = 16 distinct single graphics, never 32+ sub-widgets on the sheet."
+    )
+
+    parts.append(
+        "CHROMA / KEYING: Only the EMPTY background is flat #00FF00. Do NOT put that green (or bright lime) ON the "
+        f"{element_type} — no green rims, outlines, inner glows, shadows, or anti-alias fringe in green. "
+        "Use grays, silvers, or darks at UI edges so post-processing can key out only the void behind the asset."
+    )
+    parts.append(NO_OUTER_SPRITE_FRAME)
+
     if user_prompt.strip():
-        parts.append(user_prompt.strip())
+        parts.append(f"USER DIRECTION:\n{user_prompt.strip()}")
+
+    if has_style_lib:
+        parts.append(
+            "FINAL REMINDER: Output MUST match the art style of the provided Style/Trained "
+            "reference images in every cell."
+        )
 
     if add_color:
         parts.append("Use FULL COLOR even if style references are monochrome.")
@@ -455,6 +670,7 @@ class UIGenRequest(BaseModel):
     ref_images: Optional[list[str]] = None
     reenvision: bool = False
     match_ref_dims: bool = False
+    strict_reference_adherence: bool = False
     add_color: bool = False
     no_color: bool = False
     button_shape: str = "auto"
@@ -568,6 +784,7 @@ def _do_generate_single(req: UIGenRequest) -> UIGenSingleResponse:
         gen_h=req.output_height,
         component="",
         reenvision=req.reenvision,
+        strict_adherence=req.strict_reference_adherence,
         has_ref=has_ref,
         has_style_lib=has_style,
         style_guidance=style_guidance_combined,
@@ -674,6 +891,7 @@ def _do_generate_scrollbar_component(req: UIGenRequest, component: str) -> UIGen
         gen_h=req.output_height,
         component=component,
         reenvision=req.reenvision,
+        strict_adherence=req.strict_reference_adherence,
         has_ref=has_ref,
         has_style_lib=has_style,
         style_guidance=style_guidance_combined,
@@ -756,6 +974,7 @@ def _do_generate_char(req: UIGenRequest, char: str) -> UIGenSingleResponse:
         gen_h=req.output_height,
         component=char,
         reenvision=req.reenvision,
+        strict_adherence=req.strict_reference_adherence,
         has_ref=has_ref,
         has_style_lib=has_style,
         style_guidance=style_guidance_combined,
@@ -827,6 +1046,14 @@ def _do_generate_grid(req: UIGenRequest) -> UIGenGridResponse:
     canvas_h = cell_h * 4
 
     has_ref = req.reference_image_b64 is not None
+    has_style = bool(req.style_context or req.fusion_context or req.style_guidance)
+    style_guidance_combined = ""
+    if req.style_context:
+        style_guidance_combined += req.style_context
+    if req.fusion_context:
+        style_guidance_combined += f"\n{req.fusion_context}" if style_guidance_combined else req.fusion_context
+    if req.style_guidance:
+        style_guidance_combined += f"\n{req.style_guidance}" if style_guidance_combined else req.style_guidance
 
     prompt = _build_grid_prompt(
         element_type=req.element_type,
@@ -834,7 +1061,10 @@ def _do_generate_grid(req: UIGenRequest) -> UIGenGridResponse:
         cell_w=cell_w,
         cell_h=cell_h,
         reenvision=req.reenvision,
+        strict_adherence=req.strict_reference_adherence,
         has_ref=has_ref,
+        has_style_lib=has_style,
+        style_guidance=style_guidance_combined,
         add_color=req.add_color,
         no_color=req.no_color,
     )

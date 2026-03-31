@@ -370,10 +370,10 @@ function DecalPreview({
   onDecalStateChange: (state: DecalState) => void;
   onDraggingChanged: (dragging: boolean) => void;
 }) {
-  const meshRef = useRef<THREE.Mesh>(null);
+  const groupRef = useRef<THREE.Group>(null);
   const transformRef = useRef<any>(null);
   const [mode, setMode] = useState<"translate" | "rotate" | "scale">("translate");
-  const appliedRef = useRef("");
+  const draggingRef = useRef(false);
   const stateRef = useRef(decalState);
   stateRef.current = decalState;
 
@@ -387,82 +387,91 @@ function DecalPreview({
     return () => { texture.dispose(); };
   }, [texture]);
 
-  const makeKey = (pos: number[], rot: number[], sc: number) =>
-    [...pos, ...rot, sc].map((v) => v.toFixed(3)).join(",");
-
+  // Apply state -> mesh (only when NOT being dragged by gizmo)
   useEffect(() => {
-    const mesh = meshRef.current;
-    if (!mesh) return;
-    const key = makeKey(
-      decalState.position as number[],
-      decalState.rotation as number[],
-      decalState.scale,
-    );
-    if (key === appliedRef.current) return;
-    appliedRef.current = key;
-    mesh.position.set(...decalState.position);
-    mesh.rotation.set(...decalState.rotation);
-    mesh.scale.set(decalState.scale, decalState.scale, 1);
+    const group = groupRef.current;
+    if (!group || draggingRef.current) return;
+    group.position.set(...decalState.position);
+    group.rotation.set(...decalState.rotation);
+    const s = decalState.scale;
+    group.scale.set(s, s, s);
   }, [decalState.position, decalState.rotation, decalState.scale]);
 
-  useEffect(() => {
-    const mesh = meshRef.current;
-    if (!mesh) return;
-    const mat = mesh.material as THREE.MeshBasicMaterial;
-    mat.opacity = decalState.opacity;
-    mat.needsUpdate = true;
-  }, [decalState.opacity]);
-
+  // W/E/R hotkeys (matches Model Workshop convention)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (e.key === "t" || e.key === "T") setMode("translate");
-      else if (e.key === "r" || e.key === "R") setMode("rotate");
-      else if (e.key === "s" || e.key === "S") setMode("scale");
+      if (e.key === "w" || e.key === "W") setMode("translate");
+      else if (e.key === "e" || e.key === "E") setMode("rotate");
+      else if (e.key === "r" || e.key === "R") setMode("scale");
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
+  // Sync gizmo changes back to state
   useEffect(() => {
     const tc = transformRef.current;
     if (!tc) return;
-    const handler = (event: any) => {
+
+    const onDragChange = (event: any) => {
+      draggingRef.current = event.value;
       onDraggingChanged(event.value);
+
       if (!event.value) {
-        const mesh = meshRef.current;
-        if (!mesh) return;
-        const round3 = (v: number) => Math.round(v * 1000) / 1000;
+        // Drag ended — read final transform from the group
+        const group = groupRef.current;
+        if (!group) return;
+        const r3 = (v: number) => Math.round(v * 1000) / 1000;
         const pos: [number, number, number] = [
-          round3(mesh.position.x), round3(mesh.position.y), round3(mesh.position.z),
+          r3(group.position.x), r3(group.position.y), r3(group.position.z),
         ];
         const rot: [number, number, number] = [
-          round3(mesh.rotation.x), round3(mesh.rotation.y), round3(mesh.rotation.z),
+          r3(group.rotation.x), r3(group.rotation.y), r3(group.rotation.z),
         ];
-        const sc = round3((mesh.scale.x + mesh.scale.y) / 2);
-        appliedRef.current = makeKey(pos, rot, sc);
+        // Use uniform scale from X (TransformControls may differ per axis)
+        const sc = r3(Math.max(0.01, group.scale.x));
         onDecalStateChange({ ...stateRef.current, position: pos, rotation: rot, scale: sc });
       }
     };
-    tc.addEventListener("dragging-changed", handler);
-    return () => tc.removeEventListener("dragging-changed", handler);
-  }, [onDraggingChanged, onDecalStateChange]);
+
+    const onObjChange = () => {
+      // Live update during drag so the panel readouts stay in sync
+      if (!draggingRef.current) return;
+      const group = groupRef.current;
+      if (!group) return;
+      // Enforce uniform scale
+      if (mode === "scale") {
+        const avg = (group.scale.x + group.scale.y + group.scale.z) / 3;
+        group.scale.set(avg, avg, avg);
+      }
+    };
+
+    tc.addEventListener("dragging-changed", onDragChange);
+    tc.addEventListener("objectChange", onObjChange);
+    return () => {
+      tc.removeEventListener("dragging-changed", onDragChange);
+      tc.removeEventListener("objectChange", onObjChange);
+    };
+  }, [onDraggingChanged, onDecalStateChange, mode]);
 
   return (
     <TransformControls ref={transformRef} mode={mode} size={0.6}>
-      <mesh ref={meshRef}>
-        <planeGeometry args={[1, 1]} />
-        <meshBasicMaterial
-          map={texture}
-          transparent
-          opacity={decalState.opacity}
-          depthWrite={false}
-          side={THREE.DoubleSide}
-          polygonOffset
-          polygonOffsetFactor={-1}
-        />
-      </mesh>
+      <group ref={groupRef}>
+        <mesh>
+          <planeGeometry args={[1, 1]} />
+          <meshBasicMaterial
+            map={texture}
+            transparent
+            opacity={decalState.opacity}
+            depthWrite={false}
+            side={THREE.DoubleSide}
+            polygonOffset
+            polygonOffsetFactor={-1}
+          />
+        </mesh>
+      </group>
     </TransformControls>
   );
 }

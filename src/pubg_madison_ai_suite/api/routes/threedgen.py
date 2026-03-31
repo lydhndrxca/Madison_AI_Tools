@@ -609,19 +609,29 @@ async def workshop_upload(
             input_path.unlink(missing_ok=True)
             return JSONResponse(status_code=500, content={"error": f"Blender script not found: {script_path}"})
 
-        args_json = json.dumps({"input": str(input_path), "output": str(output_path), "inputFormat": ext})
+        input_mb = input_path.stat().st_size / (1024 * 1024)
+        timeout_secs = max(120, int(input_mb * 15))
+        args_json = json.dumps({
+            "input": str(input_path),
+            "output": str(output_path),
+            "inputFormat": ext,
+            "joinMeshes": True,
+            "stripAnim": True,
+        })
         try:
             result = subprocess.run(
                 [blender_path, "--background", "--python", str(script_path), "--", args_json],
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, text=True, timeout=timeout_secs,
             )
             if result.returncode != 0:
-                return JSONResponse(status_code=500, content={"error": f"Blender conversion failed: {result.stderr[:500]}"})
+                stderr = (result.stderr or "")[-500:]
+                stdout = (result.stdout or "")[-500:]
+                return JSONResponse(status_code=500, content={"error": f"Blender conversion failed: {stderr or stdout}"})
             if not output_path.exists():
                 return JSONResponse(status_code=500, content={"error": "Blender produced no output"})
             glb_bytes = output_path.read_bytes()
         except subprocess.TimeoutExpired:
-            return JSONResponse(status_code=504, content={"error": "Blender conversion timed out (120s)"})
+            return JSONResponse(status_code=504, content={"error": f"Blender conversion timed out ({timeout_secs}s for {input_mb:.1f}MB file)"})
         except Exception as e:
             return JSONResponse(status_code=500, content={"error": str(e)})
         finally:

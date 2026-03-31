@@ -37,6 +37,27 @@ function stripImages(pageState: unknown): unknown {
   return out;
 }
 
+/** Keep layout/text; drop image payloads so templates stay small (matches lab template behavior). */
+function stripArtboardTemplateImages(state: unknown): unknown {
+  if (!state || typeof state !== "object") return state;
+  const s = state as Record<string, unknown>;
+  const raw = s.itemsByBoard;
+  if (!raw || typeof raw !== "object") return stripImages(state);
+  const itemsByBoard: Record<string, unknown[]> = {};
+  for (const [bid, arr] of Object.entries(raw)) {
+    if (!Array.isArray(arr)) continue;
+    itemsByBoard[bid] = arr.map((it) => {
+      if (!it || typeof it !== "object") return it;
+      const o = it as Record<string, unknown>;
+      if (o.type === "image" && typeof o.content === "string" && o.content.length > 0) {
+        return { ...o, content: "" };
+      }
+      return it;
+    });
+  }
+  return { ...s, itemsByBoard };
+}
+
 interface SessionContextValue {
   register: (pageId: string, getter: StateGetter, setter: StateSetter) => void;
   unregister: (pageId: string) => void;
@@ -92,22 +113,29 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
   }, []);
 
   const saveTemplate = useCallback((name: string) => {
-    const pages: Record<string, unknown> = {};
-    for (const [id, { get }] of registryRef.current) {
-      pages[id] = stripImages(get());
+    try {
+      const pages: Record<string, unknown> = {};
+      for (const [id, { get }] of registryRef.current) {
+        const raw = get();
+        pages[id] = id === "artboard" ? stripArtboardTemplateImages(raw) : stripImages(raw);
+      }
+      const tpl: SessionTemplate = {
+        name,
+        savedAt: new Date().toISOString(),
+        activePage: activePageRef.current,
+        pages,
+      };
+      JSON.stringify(tpl);
+      setTemplates((prev) => {
+        const next = [...prev, tpl];
+        saveTemplatesToStorage(next);
+        return next;
+      });
+      onToast?.(`Template "${name}" saved`, "success");
+    } catch (e) {
+      console.error("[Session] saveTemplate failed:", e);
+      onToast?.(e instanceof Error ? e.message : "Failed to save template", "error");
     }
-    const tpl: SessionTemplate = {
-      name,
-      savedAt: new Date().toISOString(),
-      activePage: activePageRef.current,
-      pages,
-    };
-    setTemplates((prev) => {
-      const next = [...prev, tpl];
-      saveTemplatesToStorage(next);
-      return next;
-    });
-    onToast?.(`Template "${name}" saved`, "success");
   }, [onToast]);
 
   const loadTemplate = useCallback((idx: number) => {

@@ -55,6 +55,7 @@ import {
   X,
 } from "lucide-react";
 import { useToastContext } from "@/hooks/ToastContext";
+import { uploadModel, getModelUrl } from "@/lib/workshopApi";
 
 interface TextureMap {
   diffuse?: string;
@@ -226,61 +227,82 @@ function applySlotTexturesToGroup(
 }
 
 function stripGroundPlanes(group: THREE.Group) {
+  const meshes: THREE.Mesh[] = [];
   const toRemove: THREE.Object3D[] = [];
   group.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) return;
-    const geo = child.geometry;
-    if (!geo) return;
+    if (child instanceof THREE.Mesh) meshes.push(child);
+  });
+  if (meshes.length <= 1) return;
+  for (const mesh of meshes) {
+    const geo = mesh.geometry;
+    if (!geo) continue;
     geo.computeBoundingBox();
     const bb = geo.boundingBox;
-    if (!bb) return;
+    if (!bb) continue;
     const s = new THREE.Vector3();
     bb.getSize(s);
     const dims = [s.x, s.y, s.z].sort((a, b) => a - b);
     const thin = dims[0];
     const wide = dims[2];
     if (wide > 0 && thin / wide < 0.005) {
-      toRemove.push(child);
+      toRemove.push(mesh);
     }
-  });
+  }
+  if (toRemove.length >= meshes.length) return;
   for (const obj of toRemove) obj.removeFromParent();
 }
 
 function autoFitModel(group: THREE.Group) {
-  stripGroundPlanes(group);
+  try {
+    stripGroundPlanes(group);
 
-  const box = new THREE.Box3().setFromObject(group);
-  if (box.isEmpty()) return;
-  const size = new THREE.Vector3();
-  box.getSize(size);
-  const maxDim = Math.max(size.x, size.y, size.z);
-  if (maxDim > 0) {
-    const TARGET = 2;
-    const s = TARGET / maxDim;
-    group.scale.multiplyScalar(s);
+    const box = new THREE.Box3().setFromObject(group);
+    if (box.isEmpty()) return;
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const maxDim = Math.max(size.x, size.y, size.z);
+    if (maxDim > 0) {
+      const TARGET = 2;
+      const s = TARGET / maxDim;
+      group.scale.multiplyScalar(s);
+    }
+    box.setFromObject(group);
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+    group.position.sub(center);
+    group.position.y -= box.min.y - center.y;
+  } catch (err) {
+    console.warn("[autoFitModel] failed, using model as-is:", err);
   }
-  box.setFromObject(group);
-  const center = new THREE.Vector3();
-  box.getCenter(center);
-  group.position.sub(center);
-  group.position.y -= box.min.y - center.y;
 }
 
 function WorkshopFBXOBJScene({ url, fmt, onScene }: { url: string; fmt: "fbx" | "obj"; onScene: (s: THREE.Group) => void }) {
   const cleanUrl = url.split("#")[0];
+  const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
+    let cancelled = false;
+    setError(null);
     const loader = fmt === "fbx" ? new FBXLoader() : new OBJLoader();
     loader.load(
       cleanUrl,
       (result) => {
+        if (cancelled) return;
         const group = result as THREE.Group;
         autoFitModel(group);
         onScene(group);
       },
       undefined,
-      () => { /* error handled by error boundary */ },
+      (err) => {
+        if (cancelled) return;
+        console.error(`[Workshop] ${fmt.toUpperCase()} load failed:`, err);
+        setError(`Failed to load ${fmt.toUpperCase()} file: ${err instanceof Error ? err.message : err}`);
+      },
     );
+    return () => { cancelled = true; };
   }, [cleanUrl, fmt, onScene]);
+
+  if (error) throw new Error(error);
   return null;
 }
 
@@ -864,7 +886,7 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
     setLoading(false);
   }, [succeededJobs, onLoadModel]);
 
-  const handleFileImport = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileImport = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = "";
@@ -873,10 +895,31 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
       addToast("Unsupported format — use FBX, GLB, GLTF, or OBJ", "error");
       return;
     }
-    const blobUrl = URL.createObjectURL(file);
-    setModelUrl(`${blobUrl}#${file.name}`);
-    setSelectedJobId(null);
-    addToast(`Loaded ${file.name}`, "success");
+    const needsConversion = ["fbx", "obj", "stl"].includes(ext);
+    if (needsConversion) {
+      setLoading(true);
+      addToast(`Converting ${file.name} via Blender — this may take a moment…`, "info");
+      try {
+        const project = await uploadModel(file);
+        const ver = project.versions?.[0];
+        if (ver?.glbFile) {
+          setModelUrl(getModelUrl(project.id, ver.glbFile));
+          setSelectedJobId(null);
+          addToast(`Imported ${file.name} (${project.name})`, "success");
+        } else {
+          throw new Error("Conversion produced no GLB");
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addToast(`Import failed: ${msg}`, "error");
+      }
+      setLoading(false);
+    } else {
+      const blobUrl = URL.createObjectURL(file);
+      setModelUrl(`${blobUrl}#${file.name}`);
+      setSelectedJobId(null);
+      addToast(`Loaded ${file.name}`, "success");
+    }
   }, [addToast]);
 
   const handleTextureSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -906,16 +949,35 @@ function ModelWorkshopInner({ succeededJobs, initialModelUrl, initialJobId, onLo
     });
   }, [selectedTexSlot]);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     for (const file of Array.from(e.dataTransfer.files)) {
       const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
       if (["fbx", "glb", "gltf", "obj"].includes(ext)) {
-        const blobUrl = URL.createObjectURL(file);
-        setModelUrl(`${blobUrl}#${file.name}`);
-        setSelectedJobId(null);
-        addToast(`Loaded ${file.name}`, "success");
+        const needsConversion = ["fbx", "obj", "stl"].includes(ext);
+        if (needsConversion) {
+          setLoading(true);
+          addToast(`Converting ${file.name} via Blender…`, "info");
+          try {
+            const project = await uploadModel(file);
+            const ver = project.versions?.[0];
+            if (ver?.glbFile) {
+              setModelUrl(getModelUrl(project.id, ver.glbFile));
+              setSelectedJobId(null);
+              addToast(`Imported ${file.name}`, "success");
+            }
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            addToast(`Import failed: ${msg}`, "error");
+          }
+          setLoading(false);
+        } else {
+          const blobUrl = URL.createObjectURL(file);
+          setModelUrl(`${blobUrl}#${file.name}`);
+          setSelectedJobId(null);
+          addToast(`Loaded ${file.name}`, "success");
+        }
       } else if (["png", "jpg", "jpeg", "tga", "bmp", "webp"].includes(ext)) {
         const url = URL.createObjectURL(file);
         const name = file.name.toLowerCase();

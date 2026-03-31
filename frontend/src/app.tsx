@@ -27,6 +27,7 @@ const ThreeDGenWrapper = lazy(() => import("./components/tools/threedgen/ThreeDG
 import { BrainstormPage } from "./components/tools/brainstorm/BrainstormPage";
 import { WritingRoomPage } from "./components/tools/writingroom/WritingRoomPage";
 import { HelpPage } from "./components/tools/help/HelpPage";
+import { ArtboardSessionRegister } from "./components/session/ArtboardSessionRegister";
 
 export type PageId = "style-library" | "prompt-builder" | "generated-images" | "favorites" | "gemini" | "multiview" | "character" | "weapon" | "prop" | "environment" | "uilab" | "3d" | "transcripts" | "brainstorm" | "writingroom" | "help";
 
@@ -45,6 +46,7 @@ function AppInner() {
   return (
     <ActivePageProvider value={activePage}>
     <SessionProvider activePage={activePage} onSetActivePage={setPage} onToast={addToast}>
+      <ArtboardSessionRegister />
       <AppShell activePage={activePage} onNavigate={setActivePage}>
         <div className="h-full" style={{ display: activePage === "style-library" ? "contents" : "none" }}><StyleLibraryPage /></div>
         <div className="h-full" style={{ display: activePage === "prompt-builder" ? "contents" : "none" }}><PromptBuilderPage /></div>

@@ -259,8 +259,8 @@ export function DecalPlacer({
               className="text-[8px] px-2 py-1 rounded"
               style={{ background: "rgba(255,255,255,0.03)", color: "var(--color-text-muted)" }}
             >
-              Gizmo: <strong>T</strong> translate &middot; <strong>R</strong> rotate &middot;{" "}
-              <strong>S</strong> scale
+              Gizmo: <strong>W</strong> move &middot; <strong>E</strong> rotate &middot;{" "}
+              <strong>R</strong> scale
             </div>
           )}
 

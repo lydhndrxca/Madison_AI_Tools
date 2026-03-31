@@ -48,16 +48,32 @@ def _composite_triangles(
     right, up_vec, fwd, center, half_w, half_h,
     depth_limit, opacity,
 ):
-    """Composite decal onto texture for a batch of triangles."""
+    """Composite decal onto texture for a batch of triangles.
+
+    Only projects onto faces that face toward the projection source
+    (normal · -fwd > 0), preventing bleed-through to back faces.
+    """
     n_tris = tri_world.shape[0]
     if n_tris == 0:
         return False
 
     modified = False
+    neg_fwd = -fwd  # direction FROM projector TO surface
 
     for i in range(n_tris):
         v = tri_world[i]   # (3, 3)
         uv = tri_uvs[i]    # (3, 2)
+
+        # Compute face normal and reject back-facing triangles
+        edge1 = v[1] - v[0]
+        edge2 = v[2] - v[0]
+        face_normal = np.cross(edge1, edge2)
+        norm_len = np.linalg.norm(face_normal)
+        if norm_len < 1e-12:
+            continue
+        face_normal /= norm_len
+        if np.dot(face_normal, neg_fwd) < 0.05:
+            continue
 
         uv_px = np.empty((3, 2), dtype=np.float64)
         uv_px[:, 0] = uv[:, 0] * tw
@@ -163,7 +179,7 @@ def main():
 
     aspect = decal_w / max(decal_h, 1)
     right, up_vec, fwd, center, half_w, half_h = _build_projection(position, normal, scale, aspect)
-    depth_limit = scale * 2.0
+    depth_limit = scale * 0.5
 
     composited_any = False
 
@@ -208,9 +224,9 @@ def main():
         v_offs = offsets @ up_vec
         d_offs = offsets @ fwd
         vert_near = (
-            (np.abs(u_offs) <= half_w * 2.0)
-            & (np.abs(v_offs) <= half_h * 2.0)
-            & (np.abs(d_offs) <= depth_limit * 1.5)
+            (np.abs(u_offs) <= half_w * 1.5)
+            & (np.abs(v_offs) <= half_h * 1.5)
+            & (np.abs(d_offs) <= depth_limit * 2.0)
         )
 
         print(f"TIMING: {obj.name}: {n_polys} polys, {np.sum(vert_near)}/{n_verts} verts near decal, prep in {time.time() - t0:.1f}s")

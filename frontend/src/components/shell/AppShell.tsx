@@ -14,6 +14,7 @@ import { useShortcuts } from "@/hooks/useShortcuts";
 import { CostCounter } from "./CostCounter";
 import type { PageId } from "@/app";
 import { DS_EVT, confettiBurst } from "@/lib/deepSearchEvents";
+import { Button } from "@/components/ui";
 
 interface AppShellProps {
   activePage: PageId;
@@ -72,9 +73,17 @@ function MenuBarDropdown({ label, items }: { label: string; items: MenuEntry[] }
   );
 }
 
+type TemplateNameModal =
+  | null
+  | { mode: "save" }
+  | { mode: "rename"; idx: number; initial: string };
+
 function TemplateDropdown() {
   const { templates, saveTemplate, loadTemplate, deleteTemplate, renameTemplate } = useSessionContext();
   const [open, setOpen] = useState(false);
+  const [nameModal, setNameModal] = useState<TemplateNameModal>(null);
+  const [nameDraft, setNameDraft] = useState("");
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -86,11 +95,38 @@ function TemplateDropdown() {
     return () => { document.removeEventListener("mousedown", dismiss); document.removeEventListener("keydown", esc); };
   }, [open]);
 
-  const handleSave = () => {
-    const name = prompt("Template name:");
-    if (!name?.trim()) return;
-    saveTemplate(name.trim());
+  useEffect(() => {
+    if (!nameModal) return;
+    setNameDraft(nameModal.mode === "rename" ? nameModal.initial : "");
+    const t = requestAnimationFrame(() => {
+      nameInputRef.current?.focus();
+      nameInputRef.current?.select();
+    });
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setNameModal(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      cancelAnimationFrame(t);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [nameModal]);
+
+  const openSaveModal = () => {
     setOpen(false);
+    setNameModal({ mode: "save" });
+  };
+
+  const commitNameModal = () => {
+    const name = nameDraft.trim();
+    if (!name || !nameModal) return;
+    if (nameModal.mode === "save") {
+      saveTemplate(name);
+      setOpen(false);
+    } else {
+      renameTemplate(nameModal.idx, name);
+    }
+    setNameModal(null);
   };
 
   return (
@@ -110,7 +146,8 @@ function TemplateDropdown() {
           onMouseDown={(e) => e.stopPropagation()}
         >
           <button
-            onClick={handleSave}
+            type="button"
+            onClick={openSaveModal}
             className="ctx-menu-item font-medium"
             style={{ borderBottom: "1px solid var(--color-border)" }}
           >+ Save Current as Template</button>
@@ -120,20 +157,20 @@ function TemplateDropdown() {
           {templates.map((tpl, i) => (
             <div key={i} className="flex items-center group" style={{ borderBottom: i < templates.length - 1 ? "1px solid var(--color-border)" : "none" }}>
               <button
+                type="button"
                 className="ctx-menu-item flex-1 text-left"
                 onClick={() => { loadTemplate(i); setOpen(false); }}
                 title={`Saved ${new Date(tpl.savedAt).toLocaleString()}`}
               >{tpl.name}</button>
               <button
-                onClick={() => {
-                  const name = prompt("Rename template:", tpl.name);
-                  if (name?.trim()) renameTemplate(i, name.trim());
-                }}
+                type="button"
+                onClick={() => { setOpen(false); setNameModal({ mode: "rename", idx: i, initial: tpl.name }); }}
                 className="px-1.5 text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-pointer shrink-0"
                 style={{ background: "transparent", border: "none", color: "var(--color-text-muted)" }}
                 title="Rename"
               >&#x270E;</button>
               <button
+                type="button"
                 onClick={() => { if (confirm(`Delete template "${tpl.name}"?`)) deleteTemplate(i); }}
                 className="px-1.5 text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-pointer shrink-0"
                 style={{ background: "transparent", border: "none", color: "var(--color-text-muted)" }}
@@ -141,6 +178,37 @@ function TemplateDropdown() {
               >&#x2715;</button>
             </div>
           ))}
+        </div>
+      )}
+
+      {nameModal && (
+        <div
+          className="fixed inset-0 z-[10050] flex items-center justify-center"
+          style={{ background: "rgba(0,0,0,0.45)" }}
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setNameModal(null); }}
+        >
+          <div
+            className="rounded-lg shadow-xl p-4 min-w-[280px]"
+            style={{ background: "var(--color-card)", border: "1px solid var(--color-border)" }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <p className="text-[12px] font-semibold mb-2" style={{ color: "var(--color-text-primary)" }}>
+              {nameModal.mode === "save" ? "Save session template" : "Rename template"}
+            </p>
+            <input
+              ref={nameInputRef}
+              className="w-full px-2 py-1.5 text-[12px] rounded mb-3"
+              style={{ background: "var(--color-input-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") commitNameModal(); }}
+              placeholder="Template name"
+            />
+            <div className="flex justify-end gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setNameModal(null)}>Cancel</Button>
+              <Button size="sm" variant="primary" onClick={commitNameModal}>Save</Button>
+            </div>
+          </div>
         </div>
       )}
     </div>
