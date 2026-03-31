@@ -19,6 +19,7 @@ import type {
   MaterialSlotInfo,
   TargetingModel,
   RetextureParams,
+  DecalState,
 } from "@/lib/workshopTypes";
 import {
   importModel,
@@ -72,6 +73,8 @@ export function MaterialWorkshop({ initialJob }: MaterialWorkshopProps) {
   const [showList, setShowList] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [centerTab, setCenterTab] = useState<"3d" | "uv">("3d");
+  const [decalState, setDecalState] = useState<DecalState | null>(null);
+  const [modelCenterOffset, setModelCenterOffset] = useState<[number, number, number]>([0, 0, 0]);
   const fileRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const retexturePromptRef = useRef<((p: string) => void) | null>(null);
@@ -470,27 +473,28 @@ export function MaterialWorkshop({ initialJob }: MaterialWorkshopProps) {
             ))}
           </div>
 
-          {centerTab === "3d" ? (
-            <div className="flex-1 min-h-0">
-              <EditorViewer
-                modelUrl={currentModelUrl}
-                compareUrl={compareModelUrl}
-                compareMode={compareMode}
-                selectedSlotIndex={targeting.scope === "material-slot" ? targeting.materialSlotIndex ?? null : null}
-                onMaterialsParsed={setMaterialSlots}
-                onSelectSlot={(idx) => setTargeting({ scope: "material-slot", materialSlotIndex: idx })}
-              />
-            </div>
-          ) : (
-            <div className="flex-1 min-h-0">
-              <UVAtlasEditor
-                projectId={project?.id ?? null}
-                versionId={project?.currentVersionId}
-                materialSlots={materialSlots}
-                onVersionCreated={handleVersionCreated}
-              />
-            </div>
-          )}
+          <div className="flex-1 min-w-0 min-h-0 flex flex-col" style={{ display: centerTab === "3d" ? "flex" : "none" }}>
+            <EditorViewer
+              modelUrl={currentModelUrl}
+              compareUrl={compareModelUrl}
+              compareMode={compareMode}
+              selectedSlotIndex={targeting.scope === "material-slot" ? targeting.materialSlotIndex ?? null : null}
+              onMaterialsParsed={setMaterialSlots}
+              onSelectSlot={(idx) => setTargeting({ scope: "material-slot", materialSlotIndex: idx })}
+              decalState={decalState}
+              onDecalStateChange={setDecalState}
+              onCenterOffset={setModelCenterOffset}
+            />
+          </div>
+          <div className="flex-1 min-w-0 min-h-0 flex flex-col" style={{ display: centerTab === "uv" ? "flex" : "none" }}>
+            <UVAtlasEditor
+              projectId={project?.id ?? null}
+              versionId={project?.currentVersionId}
+              modelUrl={currentModelUrl}
+              materialSlots={materialSlots}
+              onVersionCreated={handleVersionCreated}
+            />
+          </div>
         </div>
 
         {/* Right: Retexture + Tools Panel */}
@@ -532,6 +536,9 @@ export function MaterialWorkshop({ initialJob }: MaterialWorkshopProps) {
               projectId={project?.id ?? null}
               versionId={project?.currentVersionId}
               onVersionCreated={handleVersionCreated}
+              decalState={decalState}
+              onDecalStateChange={setDecalState}
+              modelCenterOffset={modelCenterOffset}
             />
           </div>
 

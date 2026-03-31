@@ -13,7 +13,7 @@ import {
   type ReactNode,
 } from "react";
 import { Canvas, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Environment, Grid, OrbitControls, useGLTF } from "@react-three/drei";
+import { Environment, Grid, OrbitControls, TransformControls, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import {
   Box,
@@ -26,7 +26,7 @@ import {
   Image as ImageIcon,
   ArrowLeftRight,
 } from "lucide-react";
-import type { MaterialSlotInfo } from "@/lib/workshopTypes";
+import type { MaterialSlotInfo, DecalState } from "@/lib/workshopTypes";
 
 export type ViewMode = "solid" | "wireframe" | "baseColor" | "normal" | "roughness" | "metallic";
 
@@ -38,6 +38,9 @@ export interface EditorViewerProps {
   height?: number | string;
   onMaterialsParsed?: (slots: MaterialSlotInfo[]) => void;
   onSelectSlot?: (index: number) => void;
+  decalState?: DecalState | null;
+  onDecalStateChange?: (state: DecalState | null) => void;
+  onCenterOffset?: (offset: [number, number, number]) => void;
 }
 
 /* ── Material helpers ─────────────────────────────────────── */
@@ -149,6 +152,9 @@ function LoadedModel({
   onSelectSlot,
   materialOrderRef,
   onBoundsReady,
+  onDecalPlace,
+  decalPlacementActive,
+  onCenterOffset,
 }: {
   url: string;
   viewMode: ViewMode;
@@ -157,6 +163,9 @@ function LoadedModel({
   onSelectSlot?: (index: number) => void;
   materialOrderRef: MutableRefObject<THREE.Material[]>;
   onBoundsReady?: (box: THREE.Box3) => void;
+  onDecalPlace?: (point: THREE.Vector3, normal: THREE.Vector3) => void;
+  decalPlacementActive?: boolean;
+  onCenterOffset?: (offset: [number, number, number]) => void;
 }) {
   const { scene } = useGLTF(url);
   const root = useMemo(() => scene.clone(true), [scene, url]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -192,6 +201,9 @@ function LoadedModel({
       root.position.sub(center);
       root.updateMatrixWorld(true);
       box.setFromObject(root);
+      if (onCenterOffset) onCenterOffset([center.x, center.y, center.z]);
+    } else {
+      if (onCenterOffset) onCenterOffset([0, 0, 0]);
     }
 
     const matOrder: THREE.Material[] = [];
@@ -240,6 +252,13 @@ function LoadedModel({
   const handleClick = useCallback(
     (e: ThreeEvent<MouseEvent>) => {
       e.stopPropagation();
+      if (decalPlacementActive && onDecalPlace && e.face) {
+        const worldNormal = e.face.normal.clone();
+        const mesh = e.object as THREE.Mesh;
+        worldNormal.transformDirection(mesh.matrixWorld);
+        onDecalPlace(e.point.clone(), worldNormal);
+        return;
+      }
       if (!onSelectSlot) return;
       const mesh = e.object as THREE.Mesh;
       const origMat = mesh.userData._edOrigMat ?? mesh.material;
@@ -247,7 +266,7 @@ function LoadedModel({
       const idx = materialOrderRef.current.indexOf(mats[0]);
       if (idx >= 0) onSelectSlot(idx);
     },
-    [onSelectSlot, materialOrderRef],
+    [onSelectSlot, materialOrderRef, decalPlacementActive, onDecalPlace],
   );
 
   return <primitive object={root} onClick={handleClick} />;
@@ -256,9 +275,11 @@ function LoadedModel({
 function CameraControls({
   resetRef,
   boundsBox,
+  gizmoDragging = false,
 }: {
   resetRef: MutableRefObject<(() => void) | null>;
   boundsBox: THREE.Box3 | null;
+  gizmoDragging?: boolean;
 }) {
   const { camera } = useThree();
   const controlsRef = useRef<React.ComponentRef<typeof OrbitControls>>(null);
@@ -306,6 +327,7 @@ function CameraControls({
     <OrbitControls
       ref={controlsRef}
       makeDefault
+      enabled={!gizmoDragging}
       enableDamping
       dampingFactor={0.08}
       minDistance={0.05}
@@ -337,6 +359,114 @@ function AdaptiveGrid({ boundsBox }: { boundsBox: THREE.Box3 | null }) {
   );
 }
 
+/* ── Decal Preview with TransformControls ─────────────────── */
+
+function DecalPreview({
+  decalState,
+  onDecalStateChange,
+  onDraggingChanged,
+}: {
+  decalState: DecalState;
+  onDecalStateChange: (state: DecalState) => void;
+  onDraggingChanged: (dragging: boolean) => void;
+}) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const transformRef = useRef<any>(null);
+  const [mode, setMode] = useState<"translate" | "rotate" | "scale">("translate");
+  const appliedRef = useRef("");
+  const stateRef = useRef(decalState);
+  stateRef.current = decalState;
+
+  const texture = useMemo(() => {
+    const tex = new THREE.TextureLoader().load(decalState.imageUrl);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }, [decalState.imageUrl]);
+
+  useEffect(() => {
+    return () => { texture.dispose(); };
+  }, [texture]);
+
+  const makeKey = (pos: number[], rot: number[], sc: number) =>
+    [...pos, ...rot, sc].map((v) => v.toFixed(3)).join(",");
+
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    const key = makeKey(
+      decalState.position as number[],
+      decalState.rotation as number[],
+      decalState.scale,
+    );
+    if (key === appliedRef.current) return;
+    appliedRef.current = key;
+    mesh.position.set(...decalState.position);
+    mesh.rotation.set(...decalState.rotation);
+    mesh.scale.set(decalState.scale, decalState.scale, 1);
+  }, [decalState.position, decalState.rotation, decalState.scale]);
+
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    const mat = mesh.material as THREE.MeshBasicMaterial;
+    mat.opacity = decalState.opacity;
+    mat.needsUpdate = true;
+  }, [decalState.opacity]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "t" || e.key === "T") setMode("translate");
+      else if (e.key === "r" || e.key === "R") setMode("rotate");
+      else if (e.key === "s" || e.key === "S") setMode("scale");
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  useEffect(() => {
+    const tc = transformRef.current;
+    if (!tc) return;
+    const handler = (event: any) => {
+      onDraggingChanged(event.value);
+      if (!event.value) {
+        const mesh = meshRef.current;
+        if (!mesh) return;
+        const round3 = (v: number) => Math.round(v * 1000) / 1000;
+        const pos: [number, number, number] = [
+          round3(mesh.position.x), round3(mesh.position.y), round3(mesh.position.z),
+        ];
+        const rot: [number, number, number] = [
+          round3(mesh.rotation.x), round3(mesh.rotation.y), round3(mesh.rotation.z),
+        ];
+        const sc = round3((mesh.scale.x + mesh.scale.y) / 2);
+        appliedRef.current = makeKey(pos, rot, sc);
+        onDecalStateChange({ ...stateRef.current, position: pos, rotation: rot, scale: sc });
+      }
+    };
+    tc.addEventListener("dragging-changed", handler);
+    return () => tc.removeEventListener("dragging-changed", handler);
+  }, [onDraggingChanged, onDecalStateChange]);
+
+  return (
+    <TransformControls ref={transformRef} mode={mode} size={0.6}>
+      <mesh ref={meshRef}>
+        <planeGeometry args={[1, 1]} />
+        <meshBasicMaterial
+          map={texture}
+          transparent
+          opacity={decalState.opacity}
+          depthWrite={false}
+          side={THREE.DoubleSide}
+          polygonOffset
+          polygonOffsetFactor={-1}
+        />
+      </mesh>
+    </TransformControls>
+  );
+}
+
 function ViewerScene({
   modelUrl,
   viewMode,
@@ -345,6 +475,9 @@ function ViewerScene({
   onSelectSlot,
   resetRef,
   materialOrderRef,
+  decalState,
+  onDecalStateChange,
+  onCenterOffset,
 }: {
   modelUrl: string;
   viewMode: ViewMode;
@@ -353,14 +486,38 @@ function ViewerScene({
   onSelectSlot?: (index: number) => void;
   resetRef: MutableRefObject<(() => void) | null>;
   materialOrderRef: MutableRefObject<THREE.Material[]>;
+  decalState?: DecalState | null;
+  onDecalStateChange?: (state: DecalState | null) => void;
+  onCenterOffset?: (offset: [number, number, number]) => void;
 }) {
   const [boundsBox, setBoundsBox] = useState<THREE.Box3 | null>(null);
+  const [gizmoDragging, setGizmoDragging] = useState(false);
 
   const lightScale = useMemo(() => {
     if (!boundsBox || boundsBox.isEmpty()) return 1;
     const size = boundsBox.getSize(new THREE.Vector3());
     return Math.max(1, Math.max(size.x, size.y, size.z) / 5);
   }, [boundsBox]);
+
+  const decalPlacementActive = !!(decalState?.imageUrl && onDecalStateChange);
+
+  const handleDecalPlace = useCallback(
+    (point: THREE.Vector3, normal: THREE.Vector3) => {
+      if (!decalState || !onDecalStateChange) return;
+      const lookAt = new THREE.Matrix4().lookAt(
+        point,
+        point.clone().add(normal),
+        new THREE.Vector3(0, 1, 0),
+      );
+      const euler = new THREE.Euler().setFromRotationMatrix(lookAt);
+      onDecalStateChange({
+        ...decalState,
+        position: [point.x, point.y, point.z],
+        rotation: [euler.x, euler.y, euler.z],
+      });
+    },
+    [decalState, onDecalStateChange],
+  );
 
   return (
     <>
@@ -378,8 +535,18 @@ function ViewerScene({
         onSelectSlot={onSelectSlot}
         materialOrderRef={materialOrderRef}
         onBoundsReady={setBoundsBox}
+        onDecalPlace={handleDecalPlace}
+        decalPlacementActive={decalPlacementActive}
+        onCenterOffset={onCenterOffset}
       />
-      <CameraControls resetRef={resetRef} boundsBox={boundsBox} />
+      {decalState && onDecalStateChange && decalState.position.some((v) => v !== 0) && (
+        <DecalPreview
+          decalState={decalState}
+          onDecalStateChange={onDecalStateChange}
+          onDraggingChanged={setGizmoDragging}
+        />
+      )}
+      <CameraControls resetRef={resetRef} boundsBox={boundsBox} gizmoDragging={gizmoDragging} />
     </>
   );
 }
@@ -462,6 +629,9 @@ export function EditorViewer({
   height = "100%",
   onMaterialsParsed,
   onSelectSlot,
+  decalState,
+  onDecalStateChange,
+  onCenterOffset,
 }: EditorViewerProps) {
   const [viewMode, setViewMode] = useState<ViewMode>("solid");
   const [showingCompare, setShowingCompare] = useState(false);
@@ -615,6 +785,9 @@ export function EditorViewer({
                       onSelectSlot={onSelectSlot}
                       resetRef={resetCameraRef}
                       materialOrderRef={materialOrderRef}
+                      decalState={decalState}
+                      onDecalStateChange={onDecalStateChange}
+                      onCenterOffset={onCenterOffset}
                     />
                   </Canvas>
                 </div>

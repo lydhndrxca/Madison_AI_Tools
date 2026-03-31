@@ -49,6 +49,14 @@ export interface TargetingModel {
   materialSlotIndex?: number;
 }
 
+export interface DecalState {
+  imageUrl: string;
+  position: [number, number, number];
+  rotation: [number, number, number];
+  scale: number;
+  opacity: number;
+}
+
 export type MeshyRetextureAiModel = "meshy-5" | "meshy-6" | "latest";
 
 export interface RetextureParams {

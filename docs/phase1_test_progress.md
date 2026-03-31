@@ -52,8 +52,9 @@
 - Verify Gemini edits the masked area.
 - Then click "Apply to Model" — verify a new version is created
   and the 3D viewport updates with the baked texture.
+- **Result**: Working. Quality is limited by Gemini's image generation (not a true inpainting model). Functional but rough.
 
-## 9. Decal Projection ⬅️ START HERE
+## 9. Decal Projection ⬅️ TESTING NOW
 - In the right panel under "Decal Projection", upload a PNG decal image.
 - Adjust position/normal/scale values (or click the model in the viewport
   if click-to-place is wired).

@@ -919,7 +919,7 @@ async def detect_blender():
 
 
 def _run_blender_script(script_name: str, args_dict: dict, timeout: int = 180) -> dict:
-    """Run a named Blender script and return stdout/stderr."""
+    """Run a named Blender script and return stdout/stderr. Returns {"error": ...} on failure."""
     import subprocess
 
     blender_path = _find_blender_path()
@@ -937,7 +937,12 @@ def _run_blender_script(script_name: str, args_dict: dict, timeout: int = 180) -
             [blender_path, "--background", "--python", str(script_path), "--", args_json],
             capture_output=True, text=True, timeout=timeout,
         )
-        return {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+        out = {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+        if result.returncode != 0:
+            stderr_tail = (result.stderr or "")[-500:]
+            stdout_tail = (result.stdout or "")[-500:]
+            out["error"] = f"Blender exited with code {result.returncode}. {stderr_tail or stdout_tail}"
+        return out
     except subprocess.TimeoutExpired:
         return {"error": f"Blender timed out ({timeout}s)"}
     except Exception as e:
@@ -1028,6 +1033,7 @@ class RenderUvAtlasRequest(BaseModel):
     version_id: Optional[str] = None
     material_index: int = 0
     resolution: int = 2048
+    smart_unwrap: bool = False
 
 
 @router.post("/render-uv-atlas")
@@ -1058,16 +1064,20 @@ async def render_uv_atlas(body: RenderUvAtlasRequest):
             "wireframe_output": str(wire_path),
             "material_index": body.material_index,
             "resolution": body.resolution,
-        })
+            "smart_unwrap": body.smart_unwrap,
+        }, timeout=300)
 
         if "error" in result:
             return result
+
+        stdout = result.get("stdout", "")
+        was_unwrapped = "was_unwrapped\": true" in stdout
 
         atlas_b64 = base64.b64encode(atlas_path.read_bytes()).decode() if atlas_path.exists() else None
         wire_b64 = base64.b64encode(wire_path.read_bytes()).decode() if wire_path.exists() else None
 
         if not atlas_b64:
-            return {"error": "UV atlas render produced no output"}
+            return {"error": f"UV atlas render produced no output. Blender output: {stdout[-500:]}"}
 
         return {
             "ok": True,
@@ -1075,6 +1085,7 @@ async def render_uv_atlas(body: RenderUvAtlasRequest):
             "wireframe_b64": wire_b64,
             "width": body.resolution,
             "height": body.resolution,
+            "was_unwrapped": was_unwrapped,
         }
 
     finally:

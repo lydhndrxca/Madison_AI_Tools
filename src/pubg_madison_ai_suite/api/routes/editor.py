@@ -27,10 +27,12 @@ _pool = ThreadPoolExecutor(max_workers=4)
 class InpaintRequest(BaseModel):
     image_b64: str
     mask_composite_b64: str
+    mask_b64: Optional[str] = None
     prompt: str = ""
     model_id: Optional[str] = None
     ref_images: list[str] = []
     style_context: str = ""
+    context_hint: Optional[str] = None
 
 class SmartSelectRequest(BaseModel):
     image_b64: str
@@ -134,14 +136,56 @@ async def inpaint(req: InpaintRequest):
         def _do():
             original = _decode(req.image_b64)
             composite = _decode(req.mask_composite_b64)
-            prompt = (
-                f"You are given two images. The first is the original. The second has areas painted in BRIGHT GREEN — "
-                f"these are the regions to edit. {req.prompt or 'Seamlessly fill the green-highlighted areas to match the surrounding image.'}. "
-                f"Return a single edited image that looks natural. Do not add text or labels."
-                f"{_style_suffix(req.style_context)}"
-            )
+
+            images: list = [original, composite]
+            if req.mask_b64:
+                mask = _decode(req.mask_b64)
+                images.append(mask)
+
+            user_prompt = req.prompt or "Seamlessly fill the highlighted areas to match the surrounding image."
+
+            if req.context_hint == "uv_texture":
+                prompt = (
+                    "You are editing a UV TEXTURE MAP for a 3D model.\n\n"
+                    "IMAGE 1: The original UV texture\n"
+                    "IMAGE 2: Same texture with GREEN PAINT marking the edit region\n"
+                    + ("IMAGE 3: Black/white mask — WHITE pixels = edit region\n\n" if req.mask_b64 else "\n")
+                    + f"Replace the GREEN-PAINTED areas with this texture/material: {user_prompt}\n\n"
+                    "IMPORTANT REQUIREMENTS:\n"
+                    "- Generate a DETAILED, REALISTIC surface texture with visible pattern, grain, "
+                    "roughness, and natural variation — NOT a flat solid color\n"
+                    "- The texture must tile and blend naturally with the surrounding pixels at the edges\n"
+                    "- Do NOT modify ANY pixels outside the green/white marked region\n"
+                    "- Keep the exact same image dimensions and layout\n"
+                    "- No text, labels, or watermarks"
+                    f"{_style_suffix(req.style_context)}"
+                )
+            else:
+                if req.mask_b64:
+                    mask_desc = (
+                        "IMAGE 1: The ORIGINAL image\n"
+                        "IMAGE 2: The image with BRIGHT GREEN paint on the areas to edit\n"
+                        "IMAGE 3: A BLACK AND WHITE mask — WHITE = areas to edit, BLACK = keep unchanged\n\n"
+                    )
+                else:
+                    mask_desc = (
+                        "IMAGE 1: The ORIGINAL image\n"
+                        "IMAGE 2: The image with BRIGHT GREEN paint on the areas to edit\n\n"
+                    )
+                prompt = (
+                    f"{mask_desc}"
+                    f"TASK: Edit ONLY the green/white highlighted regions. "
+                    f"The edit should be: {user_prompt}\n\n"
+                    f"CRITICAL RULES:\n"
+                    f"- Do NOT change any pixels outside the marked region\n"
+                    f"- The edited area must blend seamlessly with the surrounding pixels\n"
+                    f"- Return the COMPLETE image at the SAME resolution as the original\n"
+                    f"- Do not add text, labels, or watermarks"
+                    f"{_style_suffix(req.style_context)}"
+                )
+
             refs = _ref_images(req.ref_images)
-            contents: list = [original, composite] + refs + [prompt]
+            contents: list = images + refs + [prompt]
             return core.gemini_generate_image(api_key, contents, cancel_event=cancel, model_id=req.model_id)
         import asyncio
         loop = asyncio.get_running_loop()

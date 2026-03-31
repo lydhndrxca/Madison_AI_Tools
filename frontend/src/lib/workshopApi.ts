@@ -159,6 +159,7 @@ export interface UvAtlasResult {
   wireframe_b64: string | null;
   width: number;
   height: number;
+  was_unwrapped?: boolean;
 }
 
 export async function renderUvAtlas(
@@ -166,6 +167,7 @@ export async function renderUvAtlas(
   versionId?: string,
   materialIndex: number = 0,
   resolution: number = 2048,
+  smartUnwrap: boolean = false,
 ): Promise<UvAtlasResult> {
   const data = await apiFetch<UvAtlasResult & { ok?: boolean; error?: string }>("/3d/render-uv-atlas", {
     method: "POST",
@@ -174,6 +176,7 @@ export async function renderUvAtlas(
       version_id: versionId,
       material_index: materialIndex,
       resolution,
+      smart_unwrap: smartUnwrap,
     }),
   });
   if (data.error) throw new Error(data.error);
