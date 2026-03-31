@@ -22,12 +22,12 @@ export interface ModelVersion {
   id: string;
   label: string;
   createdAt: number;
-  type: "original" | "retexture";
+  type: "original" | "retexture" | "texture-edit" | "decal";
   meshyTaskId?: string;
   status: "ready" | "pending" | "failed";
   prompt?: string;
   imageRefB64?: string;
-  glbFile: string;
+  glbFile: string | null;
   thumbnailFile?: string;
 }
 

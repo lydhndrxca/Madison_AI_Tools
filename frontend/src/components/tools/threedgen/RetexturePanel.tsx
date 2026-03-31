@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Paintbrush,
   Upload,
@@ -12,7 +12,6 @@ import {
 import type {
   MaterialSlotInfo,
   TargetingModel,
-  MeshyRetextureAiModel,
   RetextureParams,
 } from "@/lib/workshopTypes";
 
@@ -31,6 +30,7 @@ export interface RetexturePanelProps {
   onSubmit: (params: RetextureParams) => void;
   pendingJob: RetextureJob | null;
   disabled?: boolean;
+  setPromptRef?: React.MutableRefObject<((p: string) => void) | null>;
 }
 
 export function RetexturePanel({
@@ -41,13 +41,18 @@ export function RetexturePanel({
   onSubmit,
   pendingJob,
   disabled = false,
+  setPromptRef,
 }: RetexturePanelProps) {
   const [prompt, setPrompt] = useState("");
   const [imageRefB64, setImageRefB64] = useState<string | null>(null);
-  const [aiModel, setAiModel] = useState<MeshyRetextureAiModel>("latest");
   const [preserveUV, setPreserveUV] = useState(true);
-  const [enablePBR, setEnablePBR] = useState(true);
+  const [qualityMode, setQualityMode] = useState<"fast" | "quality">("quality");
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (setPromptRef) setPromptRef.current = setPrompt;
+    return () => { if (setPromptRef) setPromptRef.current = null; };
+  }, [setPromptRef]);
 
   const targetLabel =
     targeting.scope === "full-object"
@@ -67,17 +72,19 @@ export function RetexturePanel({
 
   const handleSubmit = useCallback(() => {
     const params: RetextureParams = {
-      ai_model: aiModel,
+      ai_model: qualityMode === "fast" ? "meshy-5" : "meshy-6",
       enable_original_uv: preserveUV,
-      enable_pbr: enablePBR,
+      enable_pbr: qualityMode === "quality",
     };
     if (prompt.trim()) params.text_style_prompt = prompt.trim();
     if (imageRefB64) params.image_style_url = imageRefB64;
     if (meshyTaskId) {
       params.input_task_id = meshyTaskId;
+    } else if (currentGlbUrl) {
+      params.model_url = currentGlbUrl;
     }
     onSubmit(params);
-  }, [prompt, imageRefB64, aiModel, preserveUV, enablePBR, meshyTaskId, onSubmit]);
+  }, [prompt, imageRefB64, preserveUV, qualityMode, meshyTaskId, currentGlbUrl, onSubmit]);
 
   const canSubmit = !disabled && !pendingJob && (prompt.trim() || imageRefB64);
   const elapsed = pendingJob ? Math.floor((Date.now() - pendingJob.startedAt) / 1000) : 0;
@@ -168,30 +175,49 @@ export function RetexturePanel({
           <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
         </div>
 
-        {/* Settings */}
-        <div className="space-y-2">
-          <label className="block text-[9px] font-semibold uppercase tracking-wide" style={{ color: "var(--color-text-muted)" }}>
-            Settings
+        {/* Quality Mode */}
+        <div>
+          <label className="block text-[9px] font-semibold uppercase tracking-wide mb-1" style={{ color: "var(--color-text-muted)" }}>
+            Mode
           </label>
-
-          <div className="flex items-center gap-2">
-            <span className="text-[10px]" style={{ color: "var(--color-text-secondary)" }}>AI Model</span>
-            <select
-              value={aiModel}
-              onChange={(e) => setAiModel(e.target.value as MeshyRetextureAiModel)}
-              className="ml-auto px-1.5 py-0.5 rounded text-[10px]"
+          <div className="flex rounded overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.1)" }}>
+            <button
+              type="button"
+              onClick={() => setQualityMode("fast")}
+              className="flex-1 py-1.5 text-[10px] font-semibold transition-colors"
               style={{
-                background: "rgba(255,255,255,0.06)",
-                border: "1px solid rgba(255,255,255,0.1)",
-                color: "var(--color-text-primary)",
+                background: qualityMode === "fast" ? "rgba(234,179,8,0.2)" : "transparent",
+                color: qualityMode === "fast" ? "#eab308" : "var(--color-text-muted)",
+                border: "none",
+                borderRight: "1px solid rgba(255,255,255,0.1)",
+                cursor: "pointer",
               }}
             >
-              <option value="latest">Latest</option>
-              <option value="meshy-6">Meshy-6</option>
-              <option value="meshy-5">Meshy-5</option>
-            </select>
+              Fast Preview
+            </button>
+            <button
+              type="button"
+              onClick={() => setQualityMode("quality")}
+              className="flex-1 py-1.5 text-[10px] font-semibold transition-colors"
+              style={{
+                background: qualityMode === "quality" ? "rgba(139,92,246,0.2)" : "transparent",
+                color: qualityMode === "quality" ? "#a78bfa" : "var(--color-text-muted)",
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              High Quality
+            </button>
           </div>
+          <div className="text-[8px] mt-0.5" style={{ color: "var(--color-text-muted)" }}>
+            {qualityMode === "fast"
+              ? "Meshy-5, no PBR — faster iterations"
+              : "Meshy-6 with PBR — best quality"}
+          </div>
+        </div>
 
+        {/* Settings */}
+        <div className="space-y-2">
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
@@ -200,16 +226,6 @@ export function RetexturePanel({
               className="accent-purple-500"
             />
             <span className="text-[10px]" style={{ color: "var(--color-text-secondary)" }}>Preserve original UVs</span>
-          </label>
-
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={enablePBR}
-              onChange={(e) => setEnablePBR(e.target.checked)}
-              className="accent-purple-500"
-            />
-            <span className="text-[10px]" style={{ color: "var(--color-text-secondary)" }}>Enable PBR maps</span>
           </label>
         </div>
 

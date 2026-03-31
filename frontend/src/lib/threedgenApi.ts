@@ -317,3 +317,7 @@ export async function saveThreeDSettings(settings: ThreeDSettings): Promise<void
     body: JSON.stringify(settings),
   });
 }
+
+export async function detectBlenderPath(): Promise<{ found: boolean; path: string | null }> {
+  return apiFetch("/3d/detect-blender");
+}

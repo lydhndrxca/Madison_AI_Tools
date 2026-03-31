@@ -22,6 +22,7 @@ import type {
 } from "@/lib/workshopTypes";
 import {
   importModel,
+  uploadModel,
   listProjects,
   getProject,
   addVersion,
@@ -29,20 +30,30 @@ import {
   getModelUrl,
   pollRetexture,
   retextureModel,
-  blenderConvert,
   type ProjectSummary,
 } from "@/lib/workshopApi";
+import { useGLTF } from "@react-three/drei";
 import { EditorViewer } from "./EditorViewer";
 import { MaterialInspector } from "./MaterialInspector";
 import { RetexturePanel, type RetextureJob } from "./RetexturePanel";
 import { VersionHistory } from "./VersionHistory";
+import { PbrMapsPanel } from "./PbrMapsPanel";
+import { UVAtlasEditor } from "./UVAtlasEditor";
+import { DecalPlacer } from "./DecalPlacer";
+import { AiAnalyzePanel } from "./AiAnalyzePanel";
 
 /* ── Accepted file extensions ─────────────────────────────── */
 
-const ACCEPT = ".glb,.gltf,.obj,.fbx,.stl";
-const FORMAT_MAP: Record<string, string> = {
-  glb: "glb", gltf: "gltf", obj: "obj", fbx: "fbx", stl: "stl",
-};
+const ACCEPT = ".glb,.gltf,.obj,.fbx,.stl,.blend";
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunks: string[] = [];
+  for (let i = 0; i < bytes.length; i += 8192) {
+    chunks.push(String.fromCharCode(...bytes.subarray(i, i + 8192)));
+  }
+  return btoa(chunks.join(""));
+}
 
 export interface MaterialWorkshopProps {
   initialJob?: { taskId: string; modelUrl: string; service: string } | null;
@@ -60,8 +71,10 @@ export function MaterialWorkshop({ initialJob }: MaterialWorkshopProps) {
   const [projectList, setProjectList] = useState<ProjectSummary[]>([]);
   const [showList, setShowList] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [centerTab, setCenterTab] = useState<"3d" | "uv">("3d");
   const fileRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const retexturePromptRef = useRef<((p: string) => void) | null>(null);
 
   /* ── Derived ─────────────────────────────────────────────── */
 
@@ -110,22 +123,7 @@ export function MaterialWorkshop({ initialJob }: MaterialWorkshopProps) {
     setError(null);
     setImporting(true);
     try {
-      const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-      const fmt = FORMAT_MAP[ext];
-      if (!fmt) throw new Error(`Unsupported format: .${ext}`);
-
-      const buf = await file.arrayBuffer();
-      let glbB64: string;
-
-      if (fmt === "glb" || fmt === "gltf") {
-        glbB64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
-      } else {
-        const rawB64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
-        glbB64 = await blenderConvert(rawB64, fmt);
-        if (!glbB64) throw new Error("Blender conversion returned empty result");
-      }
-
-      const p = await importModel(glbB64, fmt, file.name);
+      const p = await uploadModel(file);
       setProject(p);
       setMaterialSlots([]);
       setTargeting({ scope: "full-object" });
@@ -169,7 +167,7 @@ export function MaterialWorkshop({ initialJob }: MaterialWorkshopProps) {
         const res = await fetch(initialJob.modelUrl);
         if (!res.ok) throw new Error(`Download failed: ${res.status}`);
         const buf = await res.arrayBuffer();
-        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        const b64 = arrayBufferToBase64(buf);
         const p = await importModel(
           b64,
           "glb",
@@ -220,7 +218,6 @@ export function MaterialWorkshop({ initialJob }: MaterialWorkshopProps) {
           status: "pending",
           prompt: params.text_style_prompt,
         });
-        await refreshProject(project.id);
 
         stopPoll();
         pollRef.current = setInterval(async () => {
@@ -263,6 +260,14 @@ export function MaterialWorkshop({ initialJob }: MaterialWorkshopProps) {
 
   useEffect(() => stopPoll, [stopPoll]);
 
+  const handleVersionCreated = useCallback(() => {
+    if (project) refreshProject(project.id);
+  }, [project, refreshProject]);
+
+  const handleApplyRetexturePrompt = useCallback((prompt: string) => {
+    retexturePromptRef.current?.(prompt);
+  }, []);
+
   /* ── Version controls ───────────────────────────────────── */
 
   const handleVersionSelect = useCallback(
@@ -289,6 +294,12 @@ export function MaterialWorkshop({ initialJob }: MaterialWorkshopProps) {
     setShowList(false);
     setError(null);
     try {
+      if (currentModelUrl) {
+        try { useGLTF.clear(currentModelUrl); } catch { /* ok */ }
+      }
+      if (compareModelUrl) {
+        try { useGLTF.clear(compareModelUrl); } catch { /* ok */ }
+      }
       const p = await getProject(id);
       setProject(p);
       setMaterialSlots([]);
@@ -298,7 +309,7 @@ export function MaterialWorkshop({ initialJob }: MaterialWorkshopProps) {
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to open project");
     }
-  }, []);
+  }, [currentModelUrl, compareModelUrl]);
 
   const removeProject = useCallback(async (id: string) => {
     try {
@@ -434,23 +445,59 @@ export function MaterialWorkshop({ initialJob }: MaterialWorkshopProps) {
           />
         </div>
 
-        {/* Center: 3D Viewport */}
-        <div className="flex-1 min-w-0 min-h-0">
-          <EditorViewer
-            modelUrl={currentModelUrl}
-            compareUrl={compareModelUrl}
-            compareMode={compareMode}
-            selectedSlotIndex={targeting.scope === "material-slot" ? targeting.materialSlotIndex ?? null : null}
-            onMaterialsParsed={setMaterialSlots}
-            onSelectSlot={(idx) => setTargeting({ scope: "material-slot", materialSlotIndex: idx })}
-          />
+        {/* Center: 3D Viewport / UV Editor */}
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
+          {/* Center tab bar */}
+          <div
+            className="shrink-0 flex items-center gap-0.5 px-3 py-1"
+            style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}
+          >
+            {(["3d", "uv"] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setCenterTab(tab)}
+                className="px-2 py-1 rounded text-[10px] font-semibold"
+                style={{
+                  background: centerTab === tab ? "rgba(139,92,246,0.15)" : "transparent",
+                  color: centerTab === tab ? "#a78bfa" : "var(--color-text-muted)",
+                  border: centerTab === tab ? "1px solid rgba(139,92,246,0.2)" : "1px solid transparent",
+                  cursor: "pointer",
+                }}
+              >
+                {tab === "3d" ? "3D Viewport" : "UV Editor"}
+              </button>
+            ))}
+          </div>
+
+          {centerTab === "3d" ? (
+            <div className="flex-1 min-h-0">
+              <EditorViewer
+                modelUrl={currentModelUrl}
+                compareUrl={compareModelUrl}
+                compareMode={compareMode}
+                selectedSlotIndex={targeting.scope === "material-slot" ? targeting.materialSlotIndex ?? null : null}
+                onMaterialsParsed={setMaterialSlots}
+                onSelectSlot={(idx) => setTargeting({ scope: "material-slot", materialSlotIndex: idx })}
+              />
+            </div>
+          ) : (
+            <div className="flex-1 min-h-0">
+              <UVAtlasEditor
+                projectId={project?.id ?? null}
+                versionId={project?.currentVersionId}
+                materialSlots={materialSlots}
+                onVersionCreated={handleVersionCreated}
+              />
+            </div>
+          )}
         </div>
 
-        {/* Right: Retexture Panel */}
+        {/* Right: Retexture + Tools Panel */}
         <div
-          className="shrink-0"
+          className="shrink-0 overflow-y-auto"
           style={{
-            width: 240,
+            width: 250,
             borderLeft: "1px solid rgba(255,255,255,0.08)",
           }}
         >
@@ -462,7 +509,43 @@ export function MaterialWorkshop({ initialJob }: MaterialWorkshopProps) {
             onSubmit={handleRetextureSubmit}
             pendingJob={pendingJob}
             disabled={!project}
+            setPromptRef={retexturePromptRef}
           />
+
+          {/* Separator */}
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }} />
+
+          {/* PBR Maps */}
+          <div className="px-3 py-2">
+            <PbrMapsPanel
+              projectId={project?.id ?? null}
+              versionId={project?.currentVersionId}
+            />
+          </div>
+
+          {/* Separator */}
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }} />
+
+          {/* Decal */}
+          <div className="px-3 py-2">
+            <DecalPlacer
+              projectId={project?.id ?? null}
+              versionId={project?.currentVersionId}
+              onVersionCreated={handleVersionCreated}
+            />
+          </div>
+
+          {/* Separator */}
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }} />
+
+          {/* AI Analyze */}
+          <div className="px-3 py-2">
+            <AiAnalyzePanel
+              projectId={project?.id ?? null}
+              versionId={project?.currentVersionId}
+              onApplyPrompt={handleApplyRetexturePrompt}
+            />
+          </div>
         </div>
       </div>
 

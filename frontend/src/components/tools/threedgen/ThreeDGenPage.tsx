@@ -10,6 +10,7 @@ import {
   exportModel,
   getThreeDSettings,
   saveThreeDSettings,
+  detectBlenderPath,
   type ThreeDJob,
   type ThreeDSettings,
 } from "@/lib/threedgenApi";
@@ -462,13 +463,34 @@ export function ThreeDGenPage({ visible = true, instanceId, projectUid }: ThreeD
             </label>
             <label className="block text-[11px] font-medium" style={{ color: "var(--color-text-muted)" }}>
               Blender Path
-              <input
-                className="w-full mt-0.5 px-2 py-1 rounded text-xs"
-                style={{ background: "var(--color-background)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
-                value={settings.blender_path ?? ""}
-                onChange={(e) => setSettings((s) => ({ ...s, blender_path: e.target.value }))}
-                placeholder="C:\Program Files\Blender Foundation\Blender 4.4\blender.exe"
-              />
+              <div className="flex gap-1 mt-0.5">
+                <input
+                  className="flex-1 min-w-0 px-2 py-1 rounded text-xs"
+                  style={{ background: "var(--color-background)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
+                  value={settings.blender_path ?? ""}
+                  onChange={(e) => setSettings((s) => ({ ...s, blender_path: e.target.value }))}
+                  placeholder="C:\Program Files\Blender Foundation\Blender 4.4\blender.exe"
+                />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={async () => {
+                    try {
+                      const res = await detectBlenderPath();
+                      if (res.found && res.path) {
+                        setSettings((s) => ({ ...s, blender_path: res.path! }));
+                        addToast(`Found Blender: ${res.path}`, "success");
+                      } else {
+                        addToast("Blender not found on this system", "error");
+                      }
+                    } catch {
+                      addToast("Auto-detect failed", "error");
+                    }
+                  }}
+                >
+                  Auto-detect
+                </Button>
+              </div>
             </label>
             <div className="flex gap-2">
               <Button

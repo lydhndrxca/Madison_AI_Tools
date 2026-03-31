@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Button, Input } from "@/components/ui";
 import { apiFetch } from "@/hooks/useApi";
-import { getThreeDSettings, saveThreeDSettings, type ThreeDSettings } from "@/lib/threedgenApi";
+import { getThreeDSettings, saveThreeDSettings, detectBlenderPath, type ThreeDSettings } from "@/lib/threedgenApi";
 import { X, RotateCcw, GripVertical, XCircle, Eye, EyeOff } from "lucide-react";
 import { useShortcuts, CATEGORY_LABELS, eventToComboString } from "@/hooks/useShortcuts";
 import type { ShortcutDef } from "@/hooks/useShortcuts";
@@ -725,7 +725,20 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-[11px] font-medium" style={{ color: "var(--color-text-secondary)" }}>Blender Path</label>
-                  <Input placeholder="C:\Program Files\Blender Foundation\Blender 4.4\blender.exe" value={threeDSettings.blender_path ?? ""} onChange={(e) => setThreeDSettings((s) => ({ ...s, blender_path: e.target.value }))} />
+                  <div className="flex gap-1">
+                    <Input className="flex-1 min-w-0" placeholder="C:\Program Files\Blender Foundation\Blender 4.4\blender.exe" value={threeDSettings.blender_path ?? ""} onChange={(e) => setThreeDSettings((s) => ({ ...s, blender_path: e.target.value }))} />
+                    <Button
+                      variant="secondary"
+                      onClick={async () => {
+                        const res = await detectBlenderPath();
+                        if (res.found && res.path) {
+                          setThreeDSettings((s) => ({ ...s, blender_path: res.path! }));
+                        }
+                      }}
+                    >
+                      Auto-detect
+                    </Button>
+                  </div>
                 </div>
                 <Button
                   onClick={async () => {

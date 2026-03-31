@@ -64,15 +64,19 @@ export function VersionHistory({
           const isCompare = v.id === compareVersionId;
           const isPending = v.status === "pending";
           const isFailed = v.status === "failed";
+          const isClickable = v.status === "ready" && !!v.glbFile;
 
           return (
             <button
               key={v.id}
               type="button"
-              onClick={() => onSelect(v.id)}
+              onClick={() => isClickable && onSelect(v.id)}
+              disabled={!isClickable}
               className="shrink-0 flex flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors"
               style={{
                 width: 130,
+                opacity: isClickable ? 1 : 0.5,
+                cursor: isClickable ? "pointer" : "default",
                 border: `1.5px solid ${isCurrent ? "rgba(139,92,246,0.5)" : isCompare ? "rgba(59,130,246,0.4)" : "rgba(255,255,255,0.06)"}`,
                 background: isCurrent
                   ? "rgba(139,92,246,0.08)"

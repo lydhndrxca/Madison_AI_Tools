@@ -1,5 +1,6 @@
 // @ts-nocheck — optional 3D deps (@react-three/fiber, drei, three) may not be installed
 import {
+  Component,
   Suspense,
   useCallback,
   useEffect,
@@ -7,10 +8,12 @@ import {
   useMemo,
   useRef,
   useState,
+  type ErrorInfo,
   type MutableRefObject,
+  type ReactNode,
 } from "react";
 import { Canvas, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Center, Environment, Grid, OrbitControls, useGLTF } from "@react-three/drei";
+import { Environment, Grid, OrbitControls, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import {
   Box,
@@ -145,6 +148,7 @@ function LoadedModel({
   onParsed,
   onSelectSlot,
   materialOrderRef,
+  onBoundsReady,
 }: {
   url: string;
   viewMode: ViewMode;
@@ -152,11 +156,44 @@ function LoadedModel({
   onParsed?: (slots: MaterialSlotInfo[]) => void;
   onSelectSlot?: (index: number) => void;
   materialOrderRef: MutableRefObject<THREE.Material[]>;
+  onBoundsReady?: (box: THREE.Box3) => void;
 }) {
   const { scene } = useGLTF(url);
   const root = useMemo(() => scene.clone(true), [scene, url]); // eslint-disable-line react-hooks/exhaustive-deps
+  const prevUrlRef = useRef(url);
+
+  useEffect(() => {
+    const prevUrl = prevUrlRef.current;
+    prevUrlRef.current = url;
+    if (prevUrl && prevUrl !== url) {
+      try { useGLTF.clear(prevUrl); } catch { /* ok */ }
+    }
+  }, [url]);
+
+  useEffect(() => {
+    return () => {
+      root.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        child.geometry?.dispose();
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        for (const m of mats) m?.dispose();
+        const wire = child.userData._edWire as THREE.Material | undefined;
+        wire?.dispose();
+      });
+    };
+  }, [root]);
 
   useLayoutEffect(() => {
+    root.updateMatrixWorld(true);
+
+    const box = new THREE.Box3().setFromObject(root);
+    if (!box.isEmpty()) {
+      const center = box.getCenter(new THREE.Vector3());
+      root.position.sub(center);
+      root.updateMatrixWorld(true);
+      box.setFromObject(root);
+    }
+
     const matOrder: THREE.Material[] = [];
     const seen = new Set<THREE.Material>();
     root.traverse((child) => {
@@ -168,6 +205,8 @@ function LoadedModel({
     });
     materialOrderRef.current = matOrder;
     if (onParsed) onParsed(parseMaterials(root));
+
+    if (!box.isEmpty() && onBoundsReady) onBoundsReady(box);
   }, [root]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectedMats = useMemo(() => {
@@ -211,26 +250,57 @@ function LoadedModel({
     [onSelectSlot, materialOrderRef],
   );
 
-  return (
-    <Center>
-      <primitive object={root} onClick={handleClick} />
-    </Center>
-  );
+  return <primitive object={root} onClick={handleClick} />;
 }
 
-function CameraControls({ resetRef }: { resetRef: MutableRefObject<(() => void) | null> }) {
+function CameraControls({
+  resetRef,
+  boundsBox,
+}: {
+  resetRef: MutableRefObject<(() => void) | null>;
+  boundsBox: THREE.Box3 | null;
+}) {
   const { camera } = useThree();
   const controlsRef = useRef<React.ComponentRef<typeof OrbitControls>>(null);
 
-  useLayoutEffect(() => {
-    resetRef.current = () => {
-      camera.position.set(0, 1.5, 3);
-      camera.updateProjectionMatrix();
+  const fitCamera = useCallback(
+    (box: THREE.Box3 | null) => {
       const c = controlsRef.current;
-      if (c) { c.target.set(0, 0, 0); c.update(); }
-    };
+      if (!box || box.isEmpty()) {
+        camera.position.set(0, 1.5, 3);
+        camera.updateProjectionMatrix();
+        if (c) { c.target.set(0, 0, 0); c.update(); }
+        return;
+      }
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      const fov = (camera as THREE.PerspectiveCamera).fov ?? 45;
+      const dist = maxDim / (2 * Math.tan((fov * Math.PI) / 360)) * 1.4;
+
+      camera.position.set(center.x + dist * 0.5, center.y + dist * 0.35, center.z + dist);
+      (camera as THREE.PerspectiveCamera).near = Math.max(0.01, maxDim * 0.0001);
+      (camera as THREE.PerspectiveCamera).far = Math.max(200, maxDim * 20);
+      camera.updateProjectionMatrix();
+      if (c) { c.target.copy(center); c.update(); }
+    },
+    [camera],
+  );
+
+  useLayoutEffect(() => {
+    resetRef.current = () => fitCamera(boundsBox);
     return () => { resetRef.current = null; };
-  }, [camera, resetRef]);
+  }, [camera, resetRef, boundsBox, fitCamera]);
+
+  useEffect(() => {
+    if (boundsBox) fitCamera(boundsBox);
+  }, [boundsBox, fitCamera]);
+
+  const maxDist = useMemo(() => {
+    if (!boundsBox || boundsBox.isEmpty()) return 80;
+    const size = boundsBox.getSize(new THREE.Vector3());
+    return Math.max(80, Math.max(size.x, size.y, size.z) * 10);
+  }, [boundsBox]);
 
   return (
     <OrbitControls
@@ -238,8 +308,31 @@ function CameraControls({ resetRef }: { resetRef: MutableRefObject<(() => void) 
       makeDefault
       enableDamping
       dampingFactor={0.08}
-      minDistance={0.4}
-      maxDistance={80}
+      minDistance={0.05}
+      maxDistance={maxDist}
+    />
+  );
+}
+
+function AdaptiveGrid({ boundsBox }: { boundsBox: THREE.Box3 | null }) {
+  const scale = useMemo(() => {
+    if (!boundsBox || boundsBox.isEmpty()) return 1;
+    const size = boundsBox.getSize(new THREE.Vector3());
+    return Math.max(1, Math.max(size.x, size.y, size.z) / 5);
+  }, [boundsBox]);
+
+  return (
+    <Grid
+      infiniteGrid
+      fadeDistance={45 * scale}
+      fadeStrength={1}
+      position={[0, -0.002, 0]}
+      cellSize={0.5 * scale}
+      cellThickness={0.6}
+      sectionSize={3 * scale}
+      sectionThickness={1}
+      sectionColor="#5a5a62"
+      cellColor="#3d3d44"
     />
   );
 }
@@ -261,25 +354,22 @@ function ViewerScene({
   resetRef: MutableRefObject<(() => void) | null>;
   materialOrderRef: MutableRefObject<THREE.Material[]>;
 }) {
+  const [boundsBox, setBoundsBox] = useState<THREE.Box3 | null>(null);
+
+  const lightScale = useMemo(() => {
+    if (!boundsBox || boundsBox.isEmpty()) return 1;
+    const size = boundsBox.getSize(new THREE.Vector3());
+    return Math.max(1, Math.max(size.x, size.y, size.z) / 5);
+  }, [boundsBox]);
+
   return (
     <>
       <color attach="background" args={["#1a1a1c"]} />
       <ambientLight intensity={0.45} />
-      <directionalLight position={[5, 10, 6]} intensity={1.15} />
-      <directionalLight position={[-4, 4, -3]} intensity={0.35} />
+      <directionalLight position={[5 * lightScale, 10 * lightScale, 6 * lightScale]} intensity={1.15} />
+      <directionalLight position={[-4 * lightScale, 4 * lightScale, -3 * lightScale]} intensity={0.35} />
       <Environment preset="studio" />
-      <Grid
-        infiniteGrid
-        fadeDistance={45}
-        fadeStrength={1}
-        position={[0, -0.002, 0]}
-        cellSize={0.5}
-        cellThickness={0.6}
-        sectionSize={3}
-        sectionThickness={1}
-        sectionColor="#5a5a62"
-        cellColor="#3d3d44"
-      />
+      <AdaptiveGrid boundsBox={boundsBox} />
       <LoadedModel
         url={modelUrl}
         viewMode={viewMode}
@@ -287,8 +377,9 @@ function ViewerScene({
         onParsed={onParsed}
         onSelectSlot={onSelectSlot}
         materialOrderRef={materialOrderRef}
+        onBoundsReady={setBoundsBox}
       />
-      <CameraControls resetRef={resetRef} />
+      <CameraControls resetRef={resetRef} boundsBox={boundsBox} />
     </>
   );
 }
@@ -330,6 +421,37 @@ function TBtn({
   );
 }
 
+/* ── Error boundary for R3F Canvas ────────────────────────── */
+
+class CanvasErrorBoundary extends Component<
+  { children: ReactNode; retryKey: number; onError?: (e: Error) => void },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error, info: ErrorInfo) { this.props.onError?.(error); }
+  componentDidUpdate(prev: { retryKey: number }) {
+    if (prev.retryKey !== this.props.retryKey) this.setState({ error: null });
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4"
+          style={{ background: "#1a1a1c", color: "var(--color-text-muted)" }}>
+          <Box className="h-8 w-8 opacity-50" />
+          <span className="text-[11px] font-medium" style={{ color: "#ef4444" }}>
+            3D Viewer Error
+          </span>
+          <span className="text-[10px] text-center max-w-[260px]" style={{ color: "var(--color-text-muted)" }}>
+            {this.state.error.message}
+          </span>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 /* ── Main component ───────────────────────────────────────── */
 
 export function EditorViewer({
@@ -343,13 +465,60 @@ export function EditorViewer({
 }: EditorViewerProps) {
   const [viewMode, setViewMode] = useState<ViewMode>("solid");
   const [showingCompare, setShowingCompare] = useState(false);
+  const [canvasError, setCanvasError] = useState<Error | null>(null);
+  const [errorRetryKey, setErrorRetryKey] = useState(0);
   const resetCameraRef = useRef<(() => void) | null>(null);
   const materialOrderRef = useRef<THREE.Material[]>([]);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const heightStyle = typeof height === "number" ? `${height}px` : height;
   const activeUrl = compareMode && showingCompare && compareUrl ? compareUrl : modelUrl;
 
   useEffect(() => { setShowingCompare(false); }, [compareMode]);
+
+  const [contextLost, setContextLost] = useState(false);
+  const [canvasKey, setCanvasKey] = useState(0);
+  const recoveryAttemptRef = useRef(0);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => window.dispatchEvent(new Event("resize")));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!contextLost) return;
+    recoveryAttemptRef.current += 1;
+    const attempt = recoveryAttemptRef.current;
+    if (attempt > 3) return;
+    const delay = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
+    const timer = setTimeout(() => {
+      if (activeUrl) {
+        try { useGLTF.clear(activeUrl); } catch { /* ok */ }
+      }
+      setContextLost(false);
+      setCanvasKey((k) => k + 1);
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [contextLost, activeUrl]);
+
+  useEffect(() => {
+    recoveryAttemptRef.current = 0;
+  }, [activeUrl]);
+
+  const handleCreated = useCallback(({ gl }: { gl: THREE.WebGLRenderer }) => {
+    const canvas = gl.domElement;
+    canvas.addEventListener("webglcontextlost", (e) => {
+      e.preventDefault();
+      setContextLost(true);
+    });
+    canvas.addEventListener("webglcontextrestored", () => {
+      setContextLost(false);
+      recoveryAttemptRef.current = 0;
+    });
+  }, []);
 
   return (
     <div
@@ -391,24 +560,65 @@ export function EditorViewer({
                 </div>
               }
             >
-              <div className="absolute inset-0">
-                <Canvas
-                  className="!block w-full h-full touch-none"
-                  camera={{ position: [0, 1.5, 3], fov: 45, near: 0.1, far: 200 }}
-                  gl={{ antialias: true, alpha: false }}
-                  dpr={[1, 2]}
+              <CanvasErrorBoundary
+                retryKey={errorRetryKey}
+                onError={(e) => setCanvasError(e)}
+              >
+                <div
+                  ref={containerRef}
+                  className="absolute inset-0"
+                  onWheel={(e) => e.stopPropagation()}
                 >
-                  <ViewerScene
-                    modelUrl={activeUrl}
-                    viewMode={viewMode}
-                    selectedSlotIndex={selectedSlotIndex}
-                    onParsed={onMaterialsParsed}
-                    onSelectSlot={onSelectSlot}
-                    resetRef={resetCameraRef}
-                    materialOrderRef={materialOrderRef}
-                  />
-                </Canvas>
-              </div>
+                  {contextLost && (
+                    <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2"
+                      style={{ background: "rgba(26,26,28,0.9)", color: "var(--color-text-muted)" }}>
+                      <Box className="h-8 w-8 opacity-50" />
+                      {recoveryAttemptRef.current > 3 ? (
+                        <>
+                          <span className="text-[11px]" style={{ color: "#ef4444" }}>WebGL context lost — GPU overloaded</span>
+                          <button
+                            type="button"
+                            className="mt-1 px-3 py-1 rounded text-[10px] font-semibold"
+                            style={{ background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.15)", color: "var(--color-text-primary)", cursor: "pointer" }}
+                            onClick={() => {
+                              if (activeUrl) { try { useGLTF.clear(activeUrl); } catch { /* ok */ } }
+                              recoveryAttemptRef.current = 0;
+                              setContextLost(false);
+                              setCanvasKey((k) => k + 1);
+                            }}
+                          >
+                            Retry
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" style={{ color: "#eab308" }} />
+                          <span className="text-[11px]" style={{ color: "#eab308" }}>WebGL context lost — recovering...</span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  <Canvas
+                    key={canvasKey}
+                    style={{ width: "100%", height: "100%", display: "block" }}
+                    camera={{ position: [0, 1.5, 3], fov: 45, near: 0.01, far: 200 }}
+                    gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
+                    dpr={[1, 2]}
+                    resize={{ scroll: false, debounce: { scroll: 0, resize: 0 } }}
+                    onCreated={handleCreated}
+                  >
+                    <ViewerScene
+                      modelUrl={activeUrl}
+                      viewMode={viewMode}
+                      selectedSlotIndex={selectedSlotIndex}
+                      onParsed={onMaterialsParsed}
+                      onSelectSlot={onSelectSlot}
+                      resetRef={resetCameraRef}
+                      materialOrderRef={materialOrderRef}
+                    />
+                  </Canvas>
+                </div>
+              </CanvasErrorBoundary>
             </Suspense>
           </div>
         </>

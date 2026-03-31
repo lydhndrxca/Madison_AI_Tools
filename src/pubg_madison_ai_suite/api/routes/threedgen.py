@@ -15,7 +15,7 @@ from fastapi import APIRouter
 import shutil
 import uuid
 
-from fastapi import UploadFile
+from fastapi import File, Form, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
@@ -204,7 +204,21 @@ async def meshy_proxy(body: MeshyCreateRequest):
         if body.input_task_id:
             payload["input_task_id"] = body.input_task_id
         elif body.model_url:
-            payload["model_url"] = body.model_url
+            resolved_url = body.model_url
+            ws_prefix = "/api/3d/workshop/projects/"
+            local_idx = resolved_url.find(ws_prefix)
+            if local_idx >= 0:
+                remainder = resolved_url[local_idx + len(ws_prefix):]
+                parts = remainder.split("/model/", 1)
+                if len(parts) == 2:
+                    pid, fname = parts[0], parts[1]
+                    fpath = _ws_dir(pid) / fname.replace("/", "").replace("\\", "").replace("..", "")
+                    if fpath.exists():
+                        glb_b64 = base64.b64encode(fpath.read_bytes()).decode()
+                        resolved_url = f"data:application/octet-stream;base64,{glb_b64}"
+                    else:
+                        return JSONResponse(status_code=404, content={"error": f"Model file not found: {fname}"})
+            payload["model_url"] = resolved_url
         else:
             return JSONResponse(status_code=400, content={"error": "Retexture requires input_task_id or model_url"})
         if body.text_style_prompt:
@@ -222,11 +236,17 @@ async def meshy_proxy(body: MeshyCreateRequest):
         if body.remove_lighting is not None:
             payload["remove_lighting"] = body.remove_lighting
         try:
-            r = requests.post(f"{MESHY_BASE}/openapi/v1/retexture", headers=headers, json=payload, timeout=120)
+            payload_size_mb = len(json.dumps(payload)) / (1024 * 1024)
+            timeout = max(120, int(payload_size_mb * 10))
+            r = requests.post(f"{MESHY_BASE}/openapi/v1/retexture", headers=headers, json=payload, timeout=timeout)
             data = r.json()
             if r.ok and isinstance(data, dict) and "result" in data:
                 _add_job({"task_id": data["result"], "service": "meshy", "type": "retexture", "status": "PENDING", "progress": 0, "created_at": time.time()})
+            if not r.ok:
+                return JSONResponse(status_code=r.status_code, content=data if isinstance(data, dict) else {"error": str(data)})
             return data
+        except requests.exceptions.Timeout:
+            return JSONResponse(status_code=504, content={"error": f"Meshy API timed out uploading model ({payload_size_mb:.1f} MB)"})
         except Exception as e:
             return JSONResponse(status_code=502, content={"error": str(e)})
 
@@ -453,7 +473,13 @@ def _write_3d_settings(data: dict) -> None:
 
 @router.get("/settings")
 async def get_3d_settings():
-    return _read_3d_settings()
+    data = _read_3d_settings()
+    if not data.get("blender_path"):
+        detected = _detect_blender()
+        if detected:
+            data["blender_path"] = detected
+            _write_3d_settings(data)
+    return data
 
 
 class ThreeDSettings(BaseModel):
@@ -541,6 +567,99 @@ async def workshop_import(body: WorkshopImportRequest):
     return project
 
 
+_GLB_FORMATS = {"glb", "gltf"}
+_CONVERTIBLE_FORMATS = {"fbx", "obj", "stl", "blend"}
+
+
+@router.post("/workshop/upload")
+async def workshop_upload(
+    file: UploadFile = File(...),
+    meshy_task_id: Optional[str] = Form(None),
+):
+    """Single multipart upload: auto-detects format, converts via Blender if needed, creates project."""
+    import subprocess
+    import tempfile
+
+    name = file.filename or "Untitled"
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext not in _GLB_FORMATS and ext not in _CONVERTIBLE_FORMATS:
+        return JSONResponse(status_code=400, content={"error": f"Unsupported format: .{ext}"})
+
+    raw_bytes = await file.read()
+
+    if ext in _GLB_FORMATS:
+        glb_bytes = raw_bytes
+    else:
+        blender_path = _find_blender_path()
+        if not blender_path:
+            return JSONResponse(status_code=400, content={"error": "Blender not found. Set the path in settings or click Auto-detect."})
+
+        work_dir = Path(tempfile.gettempdir()) / "madison_blender"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        ts = int(time.time() * 1000)
+        input_path = work_dir / f"upload_{ts}.{ext}"
+        output_path = work_dir / f"upload_{ts}.glb"
+
+        input_path.write_bytes(raw_bytes)
+        del raw_bytes
+
+        project_root = Path(__file__).resolve().parents[4]
+        script_path = project_root / "scripts" / "blender" / "convert_to_glb.py"
+        if not script_path.exists():
+            input_path.unlink(missing_ok=True)
+            return JSONResponse(status_code=500, content={"error": f"Blender script not found: {script_path}"})
+
+        args_json = json.dumps({"input": str(input_path), "output": str(output_path), "inputFormat": ext})
+        try:
+            result = subprocess.run(
+                [blender_path, "--background", "--python", str(script_path), "--", args_json],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode != 0:
+                return JSONResponse(status_code=500, content={"error": f"Blender conversion failed: {result.stderr[:500]}"})
+            if not output_path.exists():
+                return JSONResponse(status_code=500, content={"error": "Blender produced no output"})
+            glb_bytes = output_path.read_bytes()
+        except subprocess.TimeoutExpired:
+            return JSONResponse(status_code=504, content={"error": "Blender conversion timed out (120s)"})
+        except Exception as e:
+            return JSONResponse(status_code=500, content={"error": str(e)})
+        finally:
+            input_path.unlink(missing_ok=True)
+            output_path.unlink(missing_ok=True)
+
+    project_id = str(uuid.uuid4())[:12]
+    d = _ws_dir(project_id)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "original.glb").write_bytes(glb_bytes)
+
+    version_id = "v0"
+    project = {
+        "id": project_id,
+        "name": name,
+        "createdAt": time.time() * 1000,
+        "updatedAt": time.time() * 1000,
+        "source": {
+            "originalFormat": ext,
+            "meshyTaskId": meshy_task_id,
+            "fileName": name,
+        },
+        "versions": [
+            {
+                "id": version_id,
+                "label": "Original",
+                "createdAt": time.time() * 1000,
+                "type": "original",
+                "status": "ready",
+                "glbFile": "original.glb",
+            }
+        ],
+        "currentVersionId": version_id,
+    }
+    _write_ws_project(project_id, project)
+    return project
+
+
 @router.get("/workshop/projects")
 async def workshop_list():
     if not WORKSHOP_ROOT.exists():
@@ -562,6 +681,16 @@ async def workshop_get(project_id: str):
     p = _read_ws_project(project_id)
     if not p:
         return JSONResponse(status_code=404, content={"error": "Project not found"})
+    d = _ws_dir(project_id)
+    versions = p.get("versions", [])
+    p["versions"] = [
+        v for v in versions
+        if v.get("status") == "pending" or (v.get("glbFile") and (d / v["glbFile"]).exists())
+    ]
+    if p["currentVersionId"] not in [v["id"] for v in p["versions"]]:
+        ready = [v for v in p["versions"] if v.get("glbFile")]
+        if ready:
+            p["currentVersionId"] = ready[-1]["id"]
     return p
 
 
@@ -585,13 +714,16 @@ async def workshop_add_version(project_id: str, body: AddVersionRequest):
     d = _ws_dir(project_id)
     glb_file = f"{body.id}.glb"
 
+    has_glb = False
     if body.glb_b64:
         (d / glb_file).write_bytes(base64.b64decode(body.glb_b64))
+        has_glb = True
     elif body.glb_url:
         try:
             r = requests.get(body.glb_url, timeout=120)
             if r.ok:
                 (d / glb_file).write_bytes(r.content)
+                has_glb = True
             else:
                 return JSONResponse(status_code=502, content={"error": f"Download failed: {r.status_code}"})
         except Exception as e:
@@ -605,13 +737,20 @@ async def workshop_add_version(project_id: str, body: AddVersionRequest):
         "meshyTaskId": body.meshyTaskId,
         "status": body.status,
         "prompt": body.prompt,
-        "glbFile": glb_file,
+        "glbFile": glb_file if has_glb else None,
     }
-    p.setdefault("versions", []).append(version)
-    p["currentVersionId"] = body.id
+
+    existing = next((v for v in p.get("versions", []) if v["id"] == body.id), None)
+    if existing:
+        existing.update({k: v for k, v in version.items() if v is not None})
+    else:
+        p.setdefault("versions", []).append(version)
+
+    if has_glb:
+        p["currentVersionId"] = body.id
     p["updatedAt"] = time.time() * 1000
     _write_ws_project(project_id, p)
-    return version
+    return existing or version
 
 
 @router.delete("/workshop/projects/{project_id}")
@@ -647,25 +786,9 @@ async def blender_process(body: BlenderRequest):
     import subprocess
     import tempfile
 
-    settings = _read_3d_settings()
-    blender_path = settings.get("blender_path", "")
-
+    blender_path = _find_blender_path()
     if not blender_path:
-        common_paths = [
-            r"C:\Program Files\Blender Foundation\Blender 4.4\blender.exe",
-            r"C:\Program Files\Blender Foundation\Blender 4.3\blender.exe",
-            r"C:\Program Files\Blender Foundation\Blender 4.2\blender.exe",
-            r"C:\Program Files\Blender Foundation\Blender 4.1\blender.exe",
-            r"C:\Program Files\Blender Foundation\Blender 4.0\blender.exe",
-            r"C:\Program Files\Blender Foundation\Blender 3.6\blender.exe",
-        ]
-        for p in common_paths:
-            if Path(p).exists():
-                blender_path = p
-                break
-
-    if not blender_path or not Path(blender_path).exists():
-        return {"error": "Blender not found. Set the path in 3D Gen AI settings."}
+        return {"error": "Blender not found. Set the path in 3D Gen AI settings or click Auto-detect."}
 
     work_dir = Path(tempfile.gettempdir()) / "madison_blender"
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -718,3 +841,497 @@ async def blender_process(body: BlenderRequest):
     finally:
         input_path.unlink(missing_ok=True)
         output_path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Shared Blender helpers
+# ---------------------------------------------------------------------------
+
+def _detect_blender() -> str | None:
+    """Scan PATH, common install dirs (Win/Mac/Linux), return best match."""
+    import glob as _glob
+    import platform
+    import re
+
+    on_path = shutil.which("blender")
+    if on_path:
+        return str(Path(on_path).resolve())
+
+    system = platform.system()
+    candidates: list[str] = []
+
+    if system == "Windows":
+        for root in [
+            r"C:\Program Files\Blender Foundation",
+            r"C:\Program Files (x86)\Blender Foundation",
+        ]:
+            candidates.extend(
+                _glob.glob(root + r"\Blender *\blender.exe")
+            )
+        local = Path.home() / "AppData" / "Local" / "Blender Foundation"
+        if local.is_dir():
+            candidates.extend(
+                str(p) for p in local.rglob("blender.exe")
+            )
+    elif system == "Darwin":
+        candidates.extend(_glob.glob("/Applications/Blender*.app/Contents/MacOS/Blender"))
+        candidates.extend(_glob.glob(str(Path.home() / "Applications/Blender*.app/Contents/MacOS/Blender")))
+    else:  # Linux
+        for d in ["/usr/bin", "/usr/local/bin", "/snap/bin", str(Path.home() / ".local/bin")]:
+            p = Path(d) / "blender"
+            if p.exists():
+                candidates.append(str(p))
+        candidates.extend(_glob.glob("/opt/blender*/blender"))
+
+    def _version_key(path: str) -> tuple:
+        m = re.search(r"(\d+)\.(\d+)", path)
+        return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+    valid = [c for c in candidates if Path(c).is_file()]
+    valid.sort(key=_version_key, reverse=True)
+    return valid[0] if valid else None
+
+
+def _find_blender_path() -> str | None:
+    settings = _read_3d_settings()
+    blender_path = settings.get("blender_path", "")
+    if blender_path and Path(blender_path).exists():
+        return blender_path
+
+    detected = _detect_blender()
+    if detected:
+        settings["blender_path"] = detected
+        _write_3d_settings(settings)
+        return detected
+    return None
+
+
+@router.get("/detect-blender")
+async def detect_blender():
+    """Auto-detect Blender and persist path if found."""
+    detected = _detect_blender()
+    if detected:
+        settings = _read_3d_settings()
+        settings["blender_path"] = detected
+        _write_3d_settings(settings)
+        return {"found": True, "path": detected}
+    return {"found": False, "path": None}
+
+
+def _run_blender_script(script_name: str, args_dict: dict, timeout: int = 180) -> dict:
+    """Run a named Blender script and return stdout/stderr."""
+    import subprocess
+
+    blender_path = _find_blender_path()
+    if not blender_path:
+        return {"error": "Blender not found. Set the path in 3D Gen AI settings."}
+
+    project_root = Path(__file__).resolve().parents[4]
+    script_path = project_root / "scripts" / "blender" / f"{script_name}.py"
+    if not script_path.exists():
+        return {"error": f"Blender script not found: {script_path}"}
+
+    args_json = json.dumps(args_dict)
+    try:
+        result = subprocess.run(
+            [blender_path, "--background", "--python", str(script_path), "--", args_json],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        return {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+    except subprocess.TimeoutExpired:
+        return {"error": f"Blender timed out ({timeout}s)"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# P1.1: PBR Map Extraction
+# ---------------------------------------------------------------------------
+
+class ExtractPbrRequest(BaseModel):
+    project_id: str
+    version_id: Optional[str] = None
+    glb_b64: Optional[str] = None
+
+
+@router.post("/extract-pbr")
+async def extract_pbr(body: ExtractPbrRequest):
+    import tempfile
+
+    work_dir = Path(tempfile.mkdtemp(prefix="madison_pbr_"))
+
+    try:
+        if body.glb_b64:
+            input_path = work_dir / "input.glb"
+            input_path.write_bytes(base64.b64decode(body.glb_b64))
+        elif body.project_id:
+            p = _read_ws_project(body.project_id)
+            if not p:
+                return {"error": "Project not found"}
+            vid = body.version_id or p.get("currentVersionId", "v0")
+            v = next((v for v in p.get("versions", []) if v["id"] == vid), None)
+            if not v or not v.get("glbFile"):
+                return {"error": "Version has no GLB file"}
+            input_path = _ws_dir(body.project_id) / v["glbFile"]
+            if not input_path.exists():
+                return {"error": "GLB file not found on disk"}
+        else:
+            return {"error": "Provide project_id or glb_b64"}
+
+        output_dir = work_dir / "maps"
+        output_dir.mkdir()
+
+        result = _run_blender_script("extract_pbr_maps", {
+            "input": str(input_path),
+            "output_dir": str(output_dir),
+        })
+
+        if "error" in result:
+            return result
+
+        stdout = result.get("stdout", "")
+        extract_data = None
+        for line in stdout.splitlines():
+            if line.startswith("EXTRACT_RESULT:"):
+                extract_data = json.loads(line[len("EXTRACT_RESULT:"):])
+                break
+
+        if not extract_data:
+            return {"error": "PBR extraction produced no result", "stdout": stdout[:500]}
+
+        maps = {}
+        for mat_info in extract_data.get("materials", []):
+            mat_name = mat_info["name"]
+            channels = {}
+            for channel, value in mat_info.get("channels", {}).items():
+                if isinstance(value, str):
+                    fpath = output_dir / value
+                    if fpath.exists():
+                        channels[channel] = base64.b64encode(fpath.read_bytes()).decode()
+                elif isinstance(value, dict) and "constant" in value:
+                    channels[channel] = {"constant": value["constant"]}
+            maps[mat_name] = channels
+
+        return {"ok": True, "maps": maps}
+
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(work_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# P1.2: UV Atlas Render
+# ---------------------------------------------------------------------------
+
+class RenderUvAtlasRequest(BaseModel):
+    project_id: str
+    version_id: Optional[str] = None
+    material_index: int = 0
+    resolution: int = 2048
+
+
+@router.post("/render-uv-atlas")
+async def render_uv_atlas(body: RenderUvAtlasRequest):
+    import tempfile
+
+    p = _read_ws_project(body.project_id)
+    if not p:
+        return {"error": "Project not found"}
+
+    vid = body.version_id or p.get("currentVersionId", "v0")
+    v = next((v for v in p.get("versions", []) if v["id"] == vid), None)
+    if not v or not v.get("glbFile"):
+        return {"error": "Version has no GLB file"}
+
+    input_path = _ws_dir(body.project_id) / v["glbFile"]
+    if not input_path.exists():
+        return {"error": "GLB file not found on disk"}
+
+    work_dir = Path(tempfile.mkdtemp(prefix="madison_uv_"))
+    atlas_path = work_dir / "atlas.png"
+    wire_path = work_dir / "wireframe.png"
+
+    try:
+        result = _run_blender_script("render_uv_atlas", {
+            "input": str(input_path),
+            "output": str(atlas_path),
+            "wireframe_output": str(wire_path),
+            "material_index": body.material_index,
+            "resolution": body.resolution,
+        })
+
+        if "error" in result:
+            return result
+
+        atlas_b64 = base64.b64encode(atlas_path.read_bytes()).decode() if atlas_path.exists() else None
+        wire_b64 = base64.b64encode(wire_path.read_bytes()).decode() if wire_path.exists() else None
+
+        if not atlas_b64:
+            return {"error": "UV atlas render produced no output"}
+
+        return {
+            "ok": True,
+            "atlas_b64": atlas_b64,
+            "wireframe_b64": wire_b64,
+            "width": body.resolution,
+            "height": body.resolution,
+        }
+
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(work_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# P1.3: Apply Texture (Bake-Back)
+# ---------------------------------------------------------------------------
+
+class ApplyTextureRequest(BaseModel):
+    project_id: str
+    version_id: Optional[str] = None
+    material_index: int = 0
+    channel: str = "diffuse"
+    texture_b64: str
+
+
+@router.post("/apply-texture")
+async def apply_texture(body: ApplyTextureRequest):
+    import tempfile
+
+    p = _read_ws_project(body.project_id)
+    if not p:
+        return {"error": "Project not found"}
+
+    vid = body.version_id or p.get("currentVersionId", "v0")
+    v = next((v for v in p.get("versions", []) if v["id"] == vid), None)
+    if not v or not v.get("glbFile"):
+        return {"error": "Version has no GLB file"}
+
+    input_path = _ws_dir(body.project_id) / v["glbFile"]
+    if not input_path.exists():
+        return {"error": "GLB file not found on disk"}
+
+    work_dir = Path(tempfile.mkdtemp(prefix="madison_apply_tex_"))
+    texture_path = work_dir / "new_texture.png"
+    output_path = work_dir / "output.glb"
+
+    try:
+        texture_path.write_bytes(base64.b64decode(body.texture_b64))
+
+        result = _run_blender_script("apply_texture", {
+            "input": str(input_path),
+            "output": str(output_path),
+            "material_index": body.material_index,
+            "channel": body.channel,
+            "texture_path": str(texture_path),
+        })
+
+        if "error" in result:
+            return result
+        if not output_path.exists():
+            return {"error": "Blender produced no output GLB"}
+
+        new_version_id = f"v-tex-{uuid.uuid4().hex[:8]}"
+        d = _ws_dir(body.project_id)
+        glb_file = f"{new_version_id}.glb"
+        (d / glb_file).write_bytes(output_path.read_bytes())
+
+        version = {
+            "id": new_version_id,
+            "label": f"Texture Edit ({body.channel})",
+            "createdAt": time.time() * 1000,
+            "type": "texture-edit",
+            "status": "ready",
+            "prompt": f"Applied {body.channel} texture to slot {body.material_index}",
+            "glbFile": glb_file,
+        }
+        p.setdefault("versions", []).append(version)
+        p["currentVersionId"] = new_version_id
+        p["updatedAt"] = time.time() * 1000
+        _write_ws_project(body.project_id, p)
+
+        return {"ok": True, "version": version}
+
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(work_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# P1.4: Decal Projection
+# ---------------------------------------------------------------------------
+
+class ProjectDecalRequest(BaseModel):
+    project_id: str
+    version_id: Optional[str] = None
+    decal_b64: str
+    position: list[float]  # [x, y, z]
+    normal: list[float]    # [x, y, z]
+    scale: float = 0.5
+    opacity: float = 1.0
+
+
+@router.post("/project-decal")
+async def project_decal(body: ProjectDecalRequest):
+    import tempfile
+
+    p = _read_ws_project(body.project_id)
+    if not p:
+        return {"error": "Project not found"}
+
+    vid = body.version_id or p.get("currentVersionId", "v0")
+    v = next((v for v in p.get("versions", []) if v["id"] == vid), None)
+    if not v or not v.get("glbFile"):
+        return {"error": "Version has no GLB file"}
+
+    input_path = _ws_dir(body.project_id) / v["glbFile"]
+    if not input_path.exists():
+        return {"error": "GLB file not found on disk"}
+
+    work_dir = Path(tempfile.mkdtemp(prefix="madison_decal_"))
+    decal_path = work_dir / "decal.png"
+    output_path = work_dir / "output.glb"
+
+    try:
+        decal_path.write_bytes(base64.b64decode(body.decal_b64))
+
+        result = _run_blender_script("project_decal", {
+            "input": str(input_path),
+            "output": str(output_path),
+            "decal_path": str(decal_path),
+            "position": body.position,
+            "normal": body.normal,
+            "scale": body.scale,
+            "opacity": body.opacity,
+        })
+
+        if "error" in result:
+            return result
+        if not output_path.exists():
+            return {"error": "Blender produced no output GLB"}
+
+        new_version_id = f"v-decal-{uuid.uuid4().hex[:8]}"
+        d = _ws_dir(body.project_id)
+        glb_file = f"{new_version_id}.glb"
+        (d / glb_file).write_bytes(output_path.read_bytes())
+
+        version = {
+            "id": new_version_id,
+            "label": "Decal Projection",
+            "createdAt": time.time() * 1000,
+            "type": "decal",
+            "status": "ready",
+            "prompt": "Decal projected onto model",
+            "glbFile": glb_file,
+        }
+        p.setdefault("versions", []).append(version)
+        p["currentVersionId"] = new_version_id
+        p["updatedAt"] = time.time() * 1000
+        _write_ws_project(body.project_id, p)
+
+        return {"ok": True, "version": version}
+
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(work_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# P1.5: AI Material Inference (Ortho Views + Gemini Analysis)
+# ---------------------------------------------------------------------------
+
+class AnalyzeMaterialsRequest(BaseModel):
+    project_id: str
+    version_id: Optional[str] = None
+
+
+@router.post("/analyze-materials")
+async def analyze_materials(body: AnalyzeMaterialsRequest):
+    import tempfile
+    from pubg_madison_ai_suite.api.core import get_api_key, rest_generate_json
+
+    api_key = get_api_key()
+    if not api_key:
+        return {"error": "No Gemini API key configured"}
+
+    p = _read_ws_project(body.project_id)
+    if not p:
+        return {"error": "Project not found"}
+
+    vid = body.version_id or p.get("currentVersionId", "v0")
+    v = next((v for v in p.get("versions", []) if v["id"] == vid), None)
+    if not v or not v.get("glbFile"):
+        return {"error": "Version has no GLB file"}
+
+    input_path = _ws_dir(body.project_id) / v["glbFile"]
+    if not input_path.exists():
+        return {"error": "GLB file not found on disk"}
+
+    work_dir = Path(tempfile.mkdtemp(prefix="madison_analyze_"))
+
+    try:
+        output_dir = work_dir / "views"
+        output_dir.mkdir()
+
+        result = _run_blender_script("render_ortho_views", {
+            "input": str(input_path),
+            "output_dir": str(output_dir),
+            "resolution": 1024,
+            "views": ["front", "back", "left", "right", "top", "bottom"],
+        }, timeout=300)
+
+        if "error" in result:
+            return result
+
+        view_images = []
+        views_b64 = {}
+        for view_name in ["front", "back", "left", "right", "top", "bottom"]:
+            fp = output_dir / f"{view_name}.png"
+            if fp.exists():
+                b64 = base64.b64encode(fp.read_bytes()).decode()
+                views_b64[view_name] = b64
+                view_images.append({
+                    "inlineData": {
+                        "mimeType": "image/png",
+                        "data": b64,
+                    }
+                })
+
+        if not view_images:
+            return {"error": "No orthographic views were rendered"}
+
+        prompt = (
+            "You are a 3D material analysis expert. You are given orthographic renders "
+            "(front, back, left, right, top, bottom) of a 3D model.\n\n"
+            "Analyze the surface regions and respond with a JSON object containing a 'regions' array. "
+            "Each region should have:\n"
+            "- 'name': descriptive name of the region (e.g., 'main body', 'handle', 'blade')\n"
+            "- 'material_type': the material type (e.g., 'metal', 'wood', 'plastic', 'fabric', 'leather', 'glass', 'rubber', 'stone', 'paint')\n"
+            "- 'suggested_prompt': a retexturing prompt for this region (e.g., 'weathered brushed steel with scratches')\n"
+            "- 'approximate_location': where on the model this region is (e.g., 'top half', 'handle area', 'base')\n\n"
+            "Identify 2-8 distinct surface regions. Be specific in your texture prompts."
+        )
+
+        contents = view_images + [prompt]
+        analysis = rest_generate_json(
+            api_key,
+            "gemini-2.5-flash",
+            contents,
+            timeout=120,
+            cost_category="3d_analysis",
+        )
+
+        if not analysis:
+            return {"error": "Gemini analysis returned no result"}
+
+        regions = analysis.get("regions", []) if isinstance(analysis, dict) else []
+
+        return {
+            "ok": True,
+            "regions": regions,
+            "views": views_b64,
+        }
+
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(work_dir, ignore_errors=True)

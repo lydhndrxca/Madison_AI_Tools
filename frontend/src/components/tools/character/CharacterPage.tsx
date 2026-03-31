@@ -2104,16 +2104,21 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
     sendPS: handleSendToPS,
   };
 
+  const charPageElRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (!active) return;
-    regCharAction("charGenerate", () => charHandlersRef.current.generate());
-    regCharAction("charQuickGen", () => charHandlersRef.current.quickGen());
-    regCharAction("charAllViews", () => charHandlersRef.current.allViews());
-    regCharAction("charExtract", () => charHandlersRef.current.extract());
-    regCharAction("charEnhance", () => charHandlersRef.current.enhance());
-    regCharAction("charRandomize", () => charHandlersRef.current.randomize());
-    regCharAction("charShowXml", () => charHandlersRef.current.showXml());
-    regCharAction("charSendPS", () => charHandlersRef.current.sendPS());
+    const guard = (fn: () => void) => () => {
+      const el = charPageElRef.current;
+      if (el && el.offsetParent !== null) fn();
+    };
+    regCharAction("charGenerate", guard(() => charHandlersRef.current.generate()));
+    regCharAction("charQuickGen", guard(() => charHandlersRef.current.quickGen()));
+    regCharAction("charAllViews", guard(() => charHandlersRef.current.allViews()));
+    regCharAction("charExtract", guard(() => charHandlersRef.current.extract()));
+    regCharAction("charEnhance", guard(() => charHandlersRef.current.enhance()));
+    regCharAction("charRandomize", guard(() => charHandlersRef.current.randomize()));
+    regCharAction("charShowXml", guard(() => charHandlersRef.current.showXml()));
+    regCharAction("charSendPS", guard(() => charHandlersRef.current.sendPS()));
     return () => {
       for (const id of ["charGenerate", "charQuickGen", "charAllViews", "charExtract", "charEnhance", "charRandomize", "charShowXml", "charSendPS"]) {
         unregCharAction(id);
@@ -2405,7 +2410,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
   );
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden">
+    <div ref={charPageElRef} className="flex h-full min-h-0 overflow-hidden">
       <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileSelect} />
 
       {/* Left Column */}
