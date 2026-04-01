@@ -101,6 +101,13 @@ export interface ArtboardContextValue {
   setRoomUsers: React.Dispatch<React.SetStateAction<RoomUser[]>>;
   setRemoteCursors: React.Dispatch<React.SetStateAction<Map<string, RemoteCursor>>>;
 
+  // Bucket (shared image generations)
+  buckets: Record<string, BucketImage[]>;
+  addBucketImage: (img: BucketImage) => void;
+  setBuckets: React.Dispatch<React.SetStateAction<Record<string, BucketImage[]>>>;
+
+  setWsSender: (sender: ((msg: Record<string, unknown>) => void) | null) => void;
+
   snapshotForSession: () => ArtboardSessionSnapshot;
   /** Reset (null) or restore from template. Leaves shared rooms. */
   applySessionState: (snapshot: ArtboardSessionSnapshot | null) => void;
@@ -113,6 +120,17 @@ export interface ArtboardSessionSnapshot {
   itemsByBoard: Record<string, ArtboardItem[]>;
   viewport: ArtboardViewport;
   viewportTouched: boolean;
+}
+
+export interface BucketImage {
+  id: string;
+  user: string;
+  image_b64: string;
+  full_image_b64?: string;
+  tool: string;
+  prompt: string;
+  meta: Record<string, unknown>;
+  timestamp: number;
 }
 
 export interface RoomUser {
@@ -212,7 +230,10 @@ export function ArtboardProvider({ children }: { children: ReactNode }) {
   const [remoteHost, setRemoteHost] = useState<string | null>(null);
   const [roomUsers, setRoomUsers] = useState<RoomUser[]>([]);
   const [remoteCursors, setRemoteCursors] = useState<Map<string, RemoteCursor>>(new Map());
+  const [buckets, setBuckets] = useState<Record<string, BucketImage[]>>({});
   const deltaListenerRef = useRef<((delta: ArtboardDelta) => void) | null>(null);
+  const wsSenderRef = useRef<((msg: Record<string, unknown>) => void) | null>(null);
+  const setWsSender = useCallback((sender: ((msg: Record<string, unknown>) => void) | null) => { wsSenderRef.current = sender; }, []);
   const activeBoardRef = useRef(activeBoardId);
   useEffect(() => { activeBoardRef.current = activeBoardId; }, [activeBoardId]);
   const boardsRef = useRef(boards);
@@ -426,7 +447,39 @@ export function ArtboardProvider({ children }: { children: ReactNode }) {
     setRemoteHost(null);
     setRoomUsers([]);
     setRemoteCursors(new Map());
+    setBuckets({});
   }, []);
+
+  const addBucketImage = useCallback((img: BucketImage) => {
+    setBuckets((prev) => {
+      const list = prev[img.user] ? [...prev[img.user], img] : [img];
+      return { ...prev, [img.user]: list };
+    });
+  }, []);
+
+  // Listen for share-to-artboard events from tool pages
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { image_b64: string; tool: string; prompt: string; meta: Record<string, unknown> } | undefined;
+      if (!detail) return;
+      const userName = roomUsers.find(() => true)?.name || "Local";
+      const img: BucketImage = {
+        id: crypto.randomUUID(),
+        user: userName,
+        image_b64: detail.image_b64,
+        tool: detail.tool,
+        prompt: detail.prompt,
+        meta: detail.meta,
+        timestamp: Date.now(),
+      };
+      addBucketImage(img);
+      if (mode === "shared" && wsSenderRef.current) {
+        wsSenderRef.current({ op: "bucket_add", image: img });
+      }
+    };
+    window.addEventListener("share-to-artboard", handler);
+    return () => window.removeEventListener("share-to-artboard", handler);
+  }, [mode, roomUsers, addBucketImage]);
 
   const snapshotForSession = useCallback((): ArtboardSessionSnapshot => {
     saveBoardItems(activeBoardRef.current, items);
@@ -533,6 +586,8 @@ export function ArtboardProvider({ children }: { children: ReactNode }) {
       loadItemsDirectly,
       mode, roomId, remoteHost, roomUsers, remoteCursors,
       joinRoom, leaveRoom, setDeltaListener, applyRemoteDelta, setRoomUsers, setRemoteCursors,
+      buckets, addBucketImage, setBuckets,
+      setWsSender,
       snapshotForSession, applySessionState,
     }}>
       {children}

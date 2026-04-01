@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, type CSSProperties } from "react";
-import { Loader2, X, Minus, Plus, FolderPlus, Monitor, Star, ChevronLeft, ChevronRight } from "lucide-react";
+import { Loader2, X, Minus, Plus, FolderPlus, Monitor, Star, ChevronLeft, ChevronRight, Film } from "lucide-react";
 import { apiFetch } from "@/hooks/useApi";
 import { useImageEnhance } from "@/hooks/useImageEnhance";
 
@@ -22,18 +22,23 @@ export interface GridGalleryProps {
   generating?: boolean;
   emptyMessage?: string;
   toolLabel?: string;
+  /** Number of columns per row in the grid layout. Auto-detected from results if omitted. */
+  columns?: number;
   onDelete: (id: string) => void;
   onCopy: (id: string) => void;
   onEditSubmit: (id: string, editPrompt: string) => void;
   onRegenerate?: (id: string) => void;
   onUpdateImage?: (id: string, newB64: string, w: number, h: number) => void;
   onSendToMainstage?: (id: string) => void;
+  onSendToAnimation?: (id: string) => void;
   editBusy?: Record<string, boolean>;
   showStyleLibrary?: boolean;
   styleLibraryFolders?: { name: string }[];
   onRefreshStyleFolders?: () => void;
   isFavorited?: (image_b64: string) => boolean;
   onToggleFavorite?: (id: string, image_b64: string, width: number, height: number) => void;
+  /** Notification callback for internal operations (send-to-PS, enhance, trim, style lib) */
+  onNotify?: (message: string, level: "success" | "error" | "info") => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -46,18 +51,21 @@ export function GridGallery({
   generating = false,
   emptyMessage = "No results yet. Generate to see images here.",
   toolLabel = "image",
+  columns: columnsProp,
   onDelete,
   onCopy,
   onEditSubmit,
   onRegenerate,
   onUpdateImage,
   onSendToMainstage,
+  onSendToAnimation,
   editBusy = {},
   showStyleLibrary = false,
   styleLibraryFolders = [],
   onRefreshStyleFolders,
   isFavorited,
   onToggleFavorite,
+  onNotify,
 }: GridGalleryProps) {
   const [editTexts, setEditTexts] = useState<Record<string, string>>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -72,6 +80,21 @@ export function GridGallery({
   const ctxRef = useRef<HTMLDivElement>(null);
   const enhancer = useImageEnhance();
   const [enhancingId, setEnhancingId] = useState<string | null>(null);
+
+  // Auto-detect column count: exclude "Full" items, then use the prop or
+  // infer from the first row letter in the labels.
+  const effectiveCols = (() => {
+    if (columnsProp) return columnsProp;
+    const cellItems = results.filter((r) => r.label !== "Full");
+    if (cellItems.length === 0) return 4;
+    // Count how many items share the first row letter (e.g., "A")
+    const firstLetter = cellItems[0]?.label?.charAt(0);
+    if (firstLetter) {
+      const count = cellItems.filter((r) => r.label?.charAt(0) === firstLetter).length;
+      if (count >= 2 && count <= 8) return count;
+    }
+    return 4;
+  })();
 
   const handleEditChange = useCallback((id: string, text: string) => {
     setEditTexts((prev) => ({ ...prev, [id]: text }));
@@ -134,7 +157,7 @@ export function GridGallery({
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const delta = -e.deltaY * 0.002;
-      setExpandZoom((z) => Math.min(4, Math.max(0.25, z + delta)));
+      setExpandZoom((z) => Math.min(8, Math.max(0.25, z + delta)));
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
@@ -185,11 +208,16 @@ export function GridGallery({
     if (enhanced) {
       const raw = enhanced.replace(/^data:image\/[^;]+;base64,/, "");
       const img = new Image();
-      img.onload = () => onUpdateImage(id, raw, img.naturalWidth, img.naturalHeight);
+      img.onload = () => {
+        onUpdateImage(id, raw, img.naturalWidth, img.naturalHeight);
+        onNotify?.(mode === "upscale" ? "AI Upres complete" : "AI Restore complete", "success");
+      };
       img.src = enhanced;
+    } else {
+      onNotify?.(mode === "upscale" ? "AI Upres failed" : "AI Restore failed", "error");
     }
     setEnhancingId(null);
-  }, [results, onUpdateImage, enhancer]);
+  }, [results, onUpdateImage, enhancer, onNotify]);
 
   const handleTrimAlpha = useCallback(async (id: string, pixels: number) => {
     const result = results.find((r) => r.id === id);
@@ -201,9 +229,12 @@ export function GridGallery({
         { method: "POST", body: JSON.stringify({ image_b64: result.image_b64, pixels }) },
       );
       onUpdateImage(id, res.image_b64, res.width, res.height);
-    } catch { /* */ }
+      onNotify?.(pixels > 0 ? "Alpha border shrunk" : "Alpha border expanded", "success");
+    } catch {
+      onNotify?.("Alpha border adjustment failed", "error");
+    }
     setTrimBusy((prev) => ({ ...prev, [id]: false }));
-  }, [results, onUpdateImage]);
+  }, [results, onUpdateImage, onNotify]);
 
   const handleSendToPhotoshop = useCallback(async (id: string) => {
     const result = results.find((r) => r.id === id);
@@ -213,8 +244,11 @@ export function GridGallery({
         method: "POST",
         body: JSON.stringify({ images: [{ label: `${toolLabel}_${id}`, image_b64: result.image_b64 }] }),
       });
-    } catch { /* */ }
-  }, [results, toolLabel]);
+      onNotify?.("Sent to Photoshop", "success");
+    } catch {
+      onNotify?.("Failed to send to Photoshop — is the PS plugin running?", "error");
+    }
+  }, [results, toolLabel, onNotify]);
 
   const handleAddToStyleLib = useCallback(async (id: string, folderName: string) => {
     const result = results.find((r) => r.id === id);
@@ -224,8 +258,11 @@ export function GridGallery({
         method: "POST",
         body: JSON.stringify([{ filename: `${toolLabel}_${id}.png`, data_url: `data:image/png;base64,${result.image_b64}` }]),
       });
-    } catch { /* */ }
-  }, [results, toolLabel]);
+      onNotify?.(`Added to style folder "${folderName}"`, "success");
+    } catch {
+      onNotify?.("Failed to add to style library", "error");
+    }
+  }, [results, toolLabel, onNotify]);
 
   const handleCreateStyleLib = useCallback(async (id: string) => {
     const name = window.prompt("New UI style folder name:");
@@ -234,8 +271,11 @@ export function GridGallery({
       await apiFetch("/styles/folders", { method: "POST", body: JSON.stringify({ name: name.trim(), category: "ui" }) });
       await handleAddToStyleLib(id, name.trim());
       onRefreshStyleFolders?.();
-    } catch { /* */ }
-  }, [handleAddToStyleLib, onRefreshStyleFolders]);
+      onNotify?.(`Created style folder "${name.trim()}"`, "success");
+    } catch {
+      onNotify?.("Failed to create style folder", "error");
+    }
+  }, [handleAddToStyleLib, onRefreshStyleFolders, onNotify]);
 
   const previewActionBtn: CSSProperties = {
     background: "rgba(255,255,255,0.06)",
@@ -273,18 +313,22 @@ export function GridGallery({
         ) : results.length === 0 && generating ? (
           <div className="flex flex-col items-center justify-center h-full gap-3">
             <Loader2 size={28} className="animate-spin" style={{ color: "var(--color-text-muted)" }} />
-            <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>Generating 4×4 variation sheet...</p>
+            <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>Generating variation sheet...</p>
           </div>
         ) : (
-          <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+          <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${effectiveCols}, 1fr)` }}>
             {results.map((result, idx) => {
               const isBusy = editBusy[result.id] ?? false;
               const editVal = editTexts[result.id] || "";
+              const isFull = result.label === "Full";
               return (
                 <div
                   key={result.id}
                   className="rounded overflow-hidden section-card-hover"
-                  style={{ background: "var(--color-card)" }}
+                  style={{
+                    background: "var(--color-card)",
+                    ...(isFull ? { gridColumn: `1 / -1` } : {}),
+                  }}
                 >
                   {/* Thumbnail — double click to expand, right-click for AI enhance */}
                   <div
@@ -298,7 +342,7 @@ export function GridGallery({
                       className="absolute top-1 left-1 text-[9px] font-bold px-1 rounded z-[1]"
                       style={{ background: "rgba(0,0,0,0.5)", color: "rgba(255,255,255,0.7)" }}
                     >
-                      {result.label || `${String.fromCharCode(65 + Math.floor(idx / 4))}${(idx % 4) + 1}`}
+                      {result.label || `${String.fromCharCode(65 + Math.floor(idx / effectiveCols))}${(idx % effectiveCols) + 1}`}
                     </span>
                     {enhancingId === result.id && (
                       <div className="absolute inset-0 z-10 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.5)" }}>
@@ -377,6 +421,16 @@ export function GridGallery({
                           title="Send to Mainstage for editing"
                         >
                           <Monitor className="h-2.5 w-2.5" /> Stage
+                        </button>
+                      )}
+                      {onSendToAnimation && (
+                        <button
+                          onClick={() => onSendToAnimation(result.id)}
+                          className="flex-1 flex items-center justify-center gap-0.5 px-1 py-0.5 text-[9px] rounded cursor-pointer font-medium"
+                          style={{ background: "rgba(106,72,42,0.25)", color: "#e0a85e", border: "1px solid rgba(180,120,60,0.5)" }}
+                          title="Send to Animation tab"
+                        >
+                          <Film className="h-2.5 w-2.5" /> Animate
                         </button>
                       )}
                     </div>
@@ -466,8 +520,8 @@ export function GridGallery({
             </button>
 
             <div
-              className="relative flex flex-col items-center gap-3 max-h-[90vh] min-h-0"
-              style={{ width: "fit-content", maxWidth: "min(92vw, 1200px)", minWidth: 340 }}
+              className="relative flex flex-col items-center gap-3"
+              style={{ width: "min(92vw, 1200px)", height: "min(90vh, 920px)", minWidth: 340 }}
               onClick={(e) => e.stopPropagation()}
             >
               <button
@@ -494,10 +548,9 @@ export function GridGallery({
                 className="flex-1 min-h-0 w-full flex items-center justify-center rounded-lg overflow-hidden select-none"
                 style={{
                   background: "repeating-conic-gradient(rgba(128,128,128,0.2) 0% 25%, rgba(40,40,40,1) 0% 50%) 50%/20px 20px",
-                  cursor: expandZoom > 1 ? (expandPanning ? "grabbing" : "grab") : "default",
+                  cursor: expandPanning ? "grabbing" : "grab",
                 }}
                 onPointerDown={(e) => {
-                  if (expandZoom <= 1) return;
                   e.preventDefault();
                   (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
                   setExpandPanning(true);
@@ -539,9 +592,12 @@ export function GridGallery({
                   <img
                     src={`data:image/png;base64,${expandedResult.image_b64}`}
                     alt=""
-                    className="block max-w-[min(85vw,1100px)] max-h-[min(70vh,900px)] object-contain pointer-events-none"
+                    className="block pointer-events-none"
                     draggable={false}
                     style={{
+                      maxWidth: "100%",
+                      maxHeight: "100%",
+                      objectFit: "contain",
                       imageRendering: expandedResult.width <= 256 ? "pixelated" : "auto",
                     }}
                   />
@@ -607,6 +663,17 @@ export function GridGallery({
                     title="Send to Mainstage for editing"
                   >
                     <Monitor className="h-3.5 w-3.5" /> Send to Mainstage
+                  </button>
+                )}
+                {onSendToAnimation && (
+                  <button
+                    type="button"
+                    onClick={() => { onSendToAnimation(expandedResult.id); handleCollapse(); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium"
+                    style={previewActionBtn}
+                    title="Send to Animation tab"
+                  >
+                    <Film className="h-3.5 w-3.5" /> Send to Animation
                   </button>
                 )}
                 {onToggleFavorite && (
@@ -718,6 +785,9 @@ export function GridGallery({
           <button className="ctx-menu-item w-full text-left" onClick={() => { handleExpand(ctxMenu.id); setCtxMenu(null); }}>View Full Size</button>
           {onSendToMainstage && (
             <button className="ctx-menu-item w-full text-left" onClick={() => { onSendToMainstage(ctxMenu.id); setCtxMenu(null); }}>Send to Mainstage</button>
+          )}
+          {onSendToAnimation && (
+            <button className="ctx-menu-item w-full text-left" onClick={() => { onSendToAnimation(ctxMenu.id); setCtxMenu(null); }}>Send to Animation</button>
           )}
           {onUpdateImage && (
             <>

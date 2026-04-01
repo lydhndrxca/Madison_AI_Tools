@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from "react";
 import { Sidebar } from "./Sidebar";
+import { BucketSidebar } from "../tools/arttable/BucketSidebar";
 import { StatusBar } from "./StatusBar";
 import { SettingsPanel } from "./SettingsPanel";
 import { WelcomeModal } from "./WelcomeModal";
@@ -227,6 +228,7 @@ const PAGE_LABELS: Record<PageId, string> = {
   "prop": "AI Prop Lab",
   "environment": "AI Environment Lab",
   "uilab": "AI UI Lab",
+  "arttable": "Art Table",
   "3d": "3D GEN AI",
   "transcripts": "Art Direction Logs",
   "brainstorm": "Idea Brainstorming",
@@ -323,13 +325,21 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar
-        activePage={activePage}
-        onNavigate={onNavigate}
-        onSettingsClick={() => setSettingsOpen(true)}
-        collapsed={sidebarCollapsed}
-        setCollapsed={setSidebarCollapsed}
-      />
+      {activePage === "arttable" ? (
+        <BucketSidebar
+          onNavigate={onNavigate}
+          collapsed={sidebarCollapsed}
+          setCollapsed={setSidebarCollapsed}
+        />
+      ) : (
+        <Sidebar
+          activePage={activePage}
+          onNavigate={onNavigate}
+          onSettingsClick={() => setSettingsOpen(true)}
+          collapsed={sidebarCollapsed}
+          setCollapsed={setSidebarCollapsed}
+        />
+      )}
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Top menu bar: File | Edit | Session Templates */}
         <div

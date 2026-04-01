@@ -13,6 +13,7 @@ import { useSessionRegister, useSessionContext } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
 import { XmlModal } from "@/components/shared/XmlModal";
 import { ArtDirectorWidget } from "@/components/shared/ArtDirectorWidget";
+import { ShareToArtTableButton } from "@/components/shared/ShareToArtTableButton";
 import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
 import { useArtDirector } from "@/hooks/ArtDirectorContext";
 import { useActivePage } from "@/hooks/ActivePageContext";
@@ -1074,6 +1075,7 @@ export function WeaponPage({ instanceId = 0, active = true, projectUid }: Weapon
                   isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
                   onToggleFavorite={currentSrc ? () => { const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "weapon", label: activeTab || "main", source: "viewer" }); } : undefined}
                 />
+                <ShareToArtTableButton imageB64={currentSrc} tool="weapon" prompt={editPrompt} />
                 <ArtDirectorWidget onOpenConfig={() => setArtDirectorConfigOpen(true)} />
               </div>
             )}

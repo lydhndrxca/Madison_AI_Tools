@@ -10,6 +10,7 @@ import { useFavorites } from "@/hooks/FavoritesContext";
 import { useSessionRegister } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
 import { useModels, type ModelInfo } from "@/hooks/ModelsContext";
+import { ShareToArtTableButton } from "@/components/shared/ShareToArtTableButton";
 
 const DEFAULT_TABS: TabDef[] = [
   { id: "main", label: "Main Stage", group: "stage" },
@@ -419,6 +420,7 @@ export function GeminiPage() {
           isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
           onToggleFavorite={currentSrc ? () => { const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "gemini", label: "main", source: "viewer" }); } : undefined}
         />
+        <ShareToArtTableButton imageB64={currentSrc} tool="gemini" prompt={prompt} />
 
         {/* Progress / Status Bar */}
         {isGenerating && (

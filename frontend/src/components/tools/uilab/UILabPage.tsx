@@ -3,6 +3,8 @@ import { Button, Select, Textarea, NumberStepper } from "@/components/ui";
 import { ImageViewer } from "@/components/shared/ImageViewer";
 import { GridGallery } from "@/components/shared/GridGallery";
 import type { GridGalleryResult } from "@/components/shared/GridGallery";
+import { AnimationPanel } from "@/components/shared/AnimationPanel";
+import type { AnimationFrame } from "@/components/shared/AnimationPanel";
 import { GroupedTabBar } from "@/components/shared/TabBar";
 import { ArtboardCanvas } from "@/components/shared/ArtboardCanvas";
 import type { TabDef } from "@/components/shared/TabBar";
@@ -14,9 +16,8 @@ import { useSessionRegister } from "@/hooks/SessionContext";
 import { useClipboardPaste } from "@/hooks/useClipboardPaste";
 import { XmlModal } from "@/components/shared/XmlModal";
 import { ArtDirectorWidget } from "@/components/shared/ArtDirectorWidget";
+import { ShareToArtTableButton } from "@/components/shared/ShareToArtTableButton";
 import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
-import { ThreeDGenSidebar } from "@/components/shared/ThreeDGenSidebar";
-import type { ViewImage } from "@/components/shared/ThreeDGenSidebar";
 import { useArtDirector } from "@/hooks/ArtDirectorContext";
 import { useActivePage } from "@/hooks/ActivePageContext";
 import { DeepSearchPanel } from "@/components/shared/DeepSearchPanel";
@@ -38,9 +39,9 @@ import { CustomSectionRenderer } from "@/components/shared/CustomSectionRenderer
 
 const BUILTIN_TABS: TabDef[] = [
   { id: "main", label: "Mainstage", group: "stage" },
-  { id: "grid", label: "4×4 Grid", group: "stage" },
+  { id: "grid", label: "Grid", group: "stage" },
+  { id: "animation", label: "Animation", group: "stage" },
   { id: "styleLib", label: "Style Library", group: "library" },
-  { id: "userLib", label: "User Library", group: "library" },
   { id: "artboard", label: "Art Table", group: "artboard" },
   { id: "refA", label: "Ref A", group: "refs" },
   { id: "refB", label: "Ref B", group: "refs" },
@@ -52,9 +53,15 @@ const BUILTIN_TABS: TabDef[] = [
 // Domain data (mirrors backend uilab.py)
 // ---------------------------------------------------------------------------
 
+const UI_MODE_OPTIONS = [
+  { value: "create", label: "Create New" },
+  { value: "colorize", label: "Colorize" },
+  { value: "riff", label: "Explore Variations" },
+];
+
 const ELEMENT_TYPE_OPTIONS = [
-  { value: "button", label: "Button" },
   { value: "icon", label: "Icon" },
+  { value: "button", label: "Button" },
   { value: "scrollbar", label: "Scrollbar" },
   { value: "font", label: "Font Letter" },
   { value: "number", label: "Number" },
@@ -100,36 +107,30 @@ const TAKE_OPTIONS = [
 // Layout system
 // ---------------------------------------------------------------------------
 
-type SectionId = "generate" | "refImage" | "buttonLayout" | "scrollbarParts" | "charGen" | "styleFusion" | "saveOptions" | "threeDGen";
+type SectionId = "generate" | "refImage" | "scrollbarParts" | "charGen" | "saveOptions";
 
 const DEFAULT_SECTION_ORDER: SectionId[] = [
-  "generate", "refImage", "buttonLayout", "scrollbarParts", "charGen", "styleFusion", "threeDGen", "saveOptions",
+  "generate", "refImage", "scrollbarParts", "charGen", "saveOptions",
 ];
 
 const SECTION_LABELS: Record<SectionId, string> = {
   generate: "Generate UI Element",
   refImage: "Reference Image",
-  buttonLayout: "Button Layout",
   scrollbarParts: "Scrollbar Components",
   charGen: "Character Generation",
-  styleFusion: "Style Fusion",
-  threeDGen: "3D Gen AI",
   saveOptions: "Save Options",
 };
 
 const SECTION_TIPS: Record<SectionId, string> = {
   generate: "Element type, prompt, output size, color, count, and model.",
   refImage: "Reference image for style transfer or re-envisioning.",
-  buttonLayout: "Shape, border, icon, and text layout for buttons.",
   scrollbarParts: "Select which scrollbar pieces to generate.",
   charGen: "Choose characters/digits to generate as styled glyphs.",
-  styleFusion: "Blend two style references for a unique look.",
-  threeDGen: "Generate 3D models from your views using Meshy and Hitem3D.",
   saveOptions: "Export, clear, and manage generated elements.",
 };
 
 const NON_COLLAPSIBLE: Set<SectionId> = new Set(["generate"]);
-const TOGGLEABLE_SECTIONS: Set<SectionId> = new Set(["buttonLayout", "scrollbarParts", "charGen", "styleFusion", "threeDGen"]);
+const TOGGLEABLE_SECTIONS: Set<SectionId> = new Set(["scrollbarParts", "charGen"]);
 
 
 interface LayoutState { order: SectionId[]; collapsed: Partial<Record<SectionId, boolean>>; hidden?: SectionId[] }
@@ -149,7 +150,7 @@ function loadDefaultLayout(key?: string): LayoutState {
       return { order, collapsed: parsed.collapsed ?? {}, hidden: parsed.hidden };
     }
   } catch { /* */ }
-  return { order: [...DEFAULT_SECTION_ORDER], collapsed: { refImage: true, styleFusion: true, threeDGen: true, saveOptions: true } };
+  return { order: [...DEFAULT_SECTION_ORDER], collapsed: { refImage: true, saveOptions: true } };
 }
 
 function useBusySet() {
@@ -179,6 +180,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   const stableId = projectUid ?? String(instanceId);
   const layoutStorageKey = `madison-uilab-layout-${stableId}`;
   const sessionKey = `uilab-${stableId}`;
+  const sessionLoadingRef = useRef(false);
   const [tabs, setTabs] = useState<TabDef[]>(BUILTIN_TABS);
   const [activeTab, setActiveTab] = useState("main");
   const busy = useBusySet();
@@ -190,6 +192,9 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   const [galleryResults, setGalleryResults] = useState<GridGalleryResult[]>([]);
   const [gridEditBusy, setGridEditBusy] = useState<Record<string, boolean>>({});
 
+  // Animation frames
+  const [animFrames, setAnimFrames] = useState<AnimationFrame[]>([]);
+
   // Mainstage viewer state
   const [mainstageSrc, setMainstageSrc] = useState<string | null>(null);
   const [mainstageHistory, setMainstageHistory] = useState<HistoryEntry[]>([]);
@@ -197,6 +202,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   const mainstageFileInputRef = useRef<HTMLInputElement>(null);
 
   // UI Generator state
+  const [uiMode, setUiMode] = useState<"create" | "colorize" | "riff">("create");
   const [elementType, setElementType] = useState("icon");
   const [prompt, setPrompt] = useState("");
   const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
@@ -213,12 +219,35 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   const [strictRefAdherence, setStrictRefAdherence] = useState(false);
   const [addColor, setAddColor] = useState(false);
   const [noColor, setNoColor] = useState(false);
+  useEffect(() => {
+    if (sessionLoadingRef.current) return;
+    if (uiMode === "colorize") { setAddColor(true); setNoColor(false); setMatchRefDims(true); }
+    if (uiMode === "riff") { setMatchRefDims(true); }
+  }, [uiMode]);
   const [useGrid, setUseGrid] = useState(true);
+  const [gridLayout, setGridLayout] = useState<"square" | "horizontal" | "vertical">("square");
+  const [gridIntent, setGridIntent] = useState<"ideas" | "animation">("ideas");
   const [cellSize, setCellSize] = useState("");
 
   // Reference image
   const [refImageB64, setRefImageB64] = useState<string | null>(null);
+  const [refImageDims, setRefImageDims] = useState<{ w: number; h: number } | null>(null);
   const refFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Measure ref image dimensions when loaded and auto-suggest grid layout
+  useEffect(() => {
+    if (!refImageB64) { setRefImageDims(null); return; }
+    const img = new Image();
+    img.onload = () => {
+      setRefImageDims({ w: img.naturalWidth, h: img.naturalHeight });
+      if (sessionLoadingRef.current) return;
+      const aspect = img.naturalWidth / img.naturalHeight;
+      if (aspect > 1.4) setGridLayout("horizontal");
+      else if (aspect < 0.7) setGridLayout("vertical");
+      else setGridLayout("square");
+    };
+    img.src = `data:image/png;base64,${refImageB64}`;
+  }, [refImageB64]);
 
   // Button layout
   const [buttonShape, setButtonShape] = useState("auto");
@@ -239,13 +268,16 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   // Style Fusion
   const [styleFusion, setStyleFusion] = useState<StyleFusionState>({ ...EMPTY_FUSION, slots: [{ ...EMPTY_FUSION.slots[0] }, { ...EMPTY_FUSION.slots[1] }] });
 
+  // Color palette reference image (Colorize mode)
+  const [colorPaletteB64, setColorPaletteB64] = useState<string>("");
+
   // Style library
   const [styleLibraryFolder, setStyleLibraryFolder] = useState("");
   const [styleLibraryFolders, setStyleLibraryFolders] = useState<{ name: string; guidance_text: string }[]>([]);
 
   // Section ON/OFF
   const [sectionEnabled, setSectionEnabled] = useState<Partial<Record<SectionId, boolean>>>({
-    buttonLayout: true, scrollbarParts: true, charGen: true, threeDGen: true,
+    scrollbarParts: true, charGen: true,
   });
   const isSectionEnabled = useCallback((id: SectionId) => {
     if (!TOGGLEABLE_SECTIONS.has(id)) return true;
@@ -315,13 +347,38 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     if (defaultModelId && !modelId) setModelId(defaultModelId);
   }, [defaultModelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Is a section relevant to current element type?
+  // Is a section relevant to current mode + element type?
   const isSectionRelevant = useCallback((id: SectionId): boolean => {
-    if (id === "buttonLayout") return elementType === "button";
+    if (uiMode === "colorize") {
+      return id === "generate" || id === "refImage" || id === "saveOptions";
+    }
+    if (uiMode === "riff") {
+      return id === "generate" || id === "refImage" || id === "saveOptions";
+    }
+    // create mode
     if (id === "scrollbarParts") return elementType === "scrollbar";
     if (id === "charGen") return elementType === "font" || elementType === "number";
     return true;
-  }, [elementType]);
+  }, [uiMode, elementType]);
+
+  // Effective section order — adapts based on mode
+  const effectiveOrder = useMemo((): SectionId[] => {
+    const base: SectionId[] = layout.order.filter((id) => DEFAULT_SECTION_ORDER.includes(id));
+    for (const id of DEFAULT_SECTION_ORDER) { if (!base.includes(id)) base.push(id); }
+    // Source image before options (generate)
+    const ordered: SectionId[] = base.filter((id) => id !== "refImage");
+    const genIdx = ordered.indexOf("generate");
+    ordered.splice(genIdx, 0, "refImage");
+    return ordered;
+  }, [layout.order]);
+
+  // Auto-expand refImage when switching to colorize or riff
+  useEffect(() => {
+    if (sessionLoadingRef.current) return;
+    if ((uiMode === "colorize" || uiMode === "riff") && layout.collapsed.refImage) {
+      setLayout((prev) => ({ ...prev, collapsed: { ...prev.collapsed, refImage: false } }));
+    }
+  }, [uiMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSendSearchToArtboard = useCallback((images: SearchResult[]) => {
     const existing = artboard.items;
@@ -354,32 +411,6 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   }, []);
 
   const isRefTab = activeTab.startsWith("ref");
-
-  const getViewImagesForThreeD = useCallback((): ViewImage[] => {
-    const parseDataUrl = (dataUrl: string): { base64: string; mimeType: string } | null => {
-      const comma = dataUrl.indexOf(",");
-      if (comma < 0) return null;
-      const header = dataUrl.slice(0, comma);
-      const base64 = dataUrl.slice(comma + 1);
-      const mimeType = header.match(/^data:([^;]+)/)?.[1] ?? "image/png";
-      return { base64, mimeType };
-    };
-    const push = (viewKey: string, label: string, src: string | null | undefined, acc: ViewImage[]) => {
-      if (!src) return;
-      const p = parseDataUrl(src);
-      if (!p) return;
-      acc.push({ viewKey, label, base64: p.base64, mimeType: p.mimeType });
-    };
-    const out: ViewImage[] = [];
-    push("front", "Mainstage", mainstageSrc, out);
-    push("back", "Ref A", refImages.refA, out);
-    push("side", "Ref B", refImages.refB, out);
-    for (const tab of tabs) {
-      if (tab.group !== "refs" || tab.id === "refA" || tab.id === "refB") continue;
-      push(tab.id, tab.label, refImages[tab.id], out);
-    }
-    return out;
-  }, [mainstageSrc, refImages, tabs]);
 
   // Clipboard paste for ref tabs
   const clipboardPasteCb = useCallback((dataUrl: string) => {
@@ -462,8 +493,32 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       const m = cellSize.trim().match(/^(\d+)\s*[xX×]\s*(\d+)$/);
       if (m) return [parseInt(m[1]), parseInt(m[2])];
     }
+    // For riff/colorize, use cells matching the ref aspect ratio, clamped to
+    // the widest Gemini-supported ratio (21:9 ≈ 2.33) so the element fills
+    // as much of the cell as possible instead of being tiny in a square.
+    if ((uiMode === "riff" || uiMode === "colorize") && refImageDims) {
+      const aspect = refImageDims.w / refImageDims.h;
+      const maxRatio = 21 / 9; // widest Gemini-supported aspect
+      const cellLong = 256;
+      let cw: number, ch: number;
+      if (aspect > 1) {
+        // Wide element
+        const clampedAspect = Math.min(aspect, maxRatio);
+        cw = cellLong;
+        ch = Math.max(8, Math.round(cellLong / clampedAspect));
+      } else {
+        // Tall element
+        const clampedAspect = Math.max(aspect, 1 / maxRatio);
+        ch = cellLong;
+        cw = Math.max(8, Math.round(cellLong * clampedAspect));
+      }
+      // Snap to multiples of 8 for cleaner generation
+      cw = Math.round(cw / 8) * 8 || 8;
+      ch = Math.round(ch / 8) * 8 || 8;
+      return [cw, ch];
+    }
     return [256, 256];
-  }, [cellSize]);
+  }, [cellSize, uiMode, refImageDims]);
 
   // --- Mainstage callbacks ---
   const _histCounter = useRef(0);
@@ -496,6 +551,42 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     a.download = `uilab_mainstage_${Date.now()}.png`;
     a.click();
   }, [mainstageSrc]);
+
+  const handleSendToPS = useCallback(async () => {
+    if (!mainstageSrc) return;
+    try {
+      const b64 = mainstageSrc.replace(/^data:image\/\w+;base64,/, "");
+      const resp = await apiFetch<{ ok?: boolean; results?: { message?: string }[] }>(
+        "/system/send-to-ps", { method: "POST", body: JSON.stringify({ images: [{ label: "uilab_mainstage", image_b64: b64 }] }) },
+      );
+      if (resp.ok) addToast(resp.results?.[0]?.message || "Sent to Photoshop", "success");
+      else addToast(resp.results?.[0]?.message || "Failed to send", "error");
+    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
+  }, [mainstageSrc, addToast]);
+
+  const handleSendGridToPS = useCallback(async () => {
+    if (galleryResults.length === 0) return;
+    try {
+      const images = galleryResults.map((r, i) => ({
+        label: `uilab_grid_${r.label || i}`,
+        image_b64: r.image_b64,
+      }));
+      const resp = await apiFetch<{ ok?: boolean; results?: { message?: string }[] }>(
+        "/system/send-to-ps", { method: "POST", body: JSON.stringify({ images }) },
+      );
+      if (resp.ok) addToast(resp.results?.[0]?.message || `Sent ${images.length} images to Photoshop`, "success");
+      else addToast(resp.results?.[0]?.message || "Failed to send", "error");
+    } catch (e) { addToast(e instanceof Error ? e.message : String(e), "error"); }
+  }, [galleryResults, addToast]);
+
+  const handleSaveAllGrid = useCallback(() => {
+    for (const r of galleryResults) {
+      const a = document.createElement("a");
+      a.href = `data:image/png;base64,${r.image_b64}`;
+      a.download = `uilab_grid_${r.label || r.id}_${Date.now()}.png`;
+      a.click();
+    }
+  }, [galleryResults]);
 
   const handleMainstageCopy = useCallback(async () => {
     if (!mainstageSrc) return;
@@ -569,12 +660,9 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   }, [tabs, refImages]);
 
   // --- Section prompt resolution ---
-  const getDefaultSectionPrompt = useCallback((sectionId: SectionId): string => {
-    switch (sectionId) {
-      case "styleFusion": return buildFusionBrief(styleFusion);
-      default: return "";
-    }
-  }, [styleFusion]);
+  const getDefaultSectionPrompt = useCallback((_sectionId: SectionId): string => {
+    return "";
+  }, []);
 
   const resolveSection = useCallback((sectionId: SectionId): string => {
     if (!isSectionEnabled(sectionId)) return "";
@@ -600,12 +688,14 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   const handleGenerate = useCallback(async () => {
     if (busy.any) return;
 
-    const fusionContext = resolveSection("styleFusion");
+    const fusionContext = buildFusionBrief(styleFusion);
     const [outW, outH] = resolveOutputDims();
     const refImagesB64 = collectRefImagesB64();
 
+    const effectiveElementType = uiMode === "colorize" ? "colorize" : elementType;
+    const isRiffMode = uiMode === "riff";
     const baseReq = {
-      element_type: elementType,
+      element_type: effectiveElementType,
       prompt,
       count: genCount,
       output_width: outW,
@@ -613,10 +703,13 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       reference_image_b64: refImageB64 || undefined,
       ref_images: refImagesB64.length > 0 ? refImagesB64 : undefined,
       reenvision,
-      match_ref_dims: matchRefDims,
+      match_ref_dims: matchRefDims || isRiffMode,
       strict_reference_adherence: strictRefAdherence,
       add_color: addColor,
       no_color: noColor,
+      riff_mode: isRiffMode,
+      ref_original_width: refImageDims?.w || undefined,
+      ref_original_height: refImageDims?.h || undefined,
       button_shape: buttonShape,
       border_style: borderStyle,
       add_icon: addIcon,
@@ -628,44 +721,50 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       model_id: modelId || undefined,
       style_context: styleLibraryFolder || undefined,
       fusion_context: fusionContext || undefined,
-      fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+      fusion_image_1_b64: (uiMode === "colorize" && colorPaletteB64) ? colorPaletteB64 : (styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined),
       fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
+      color_palette_b64: (uiMode === "colorize" && colorPaletteB64) ? colorPaletteB64 : undefined,
       custom_sections_context: customSections.getPromptContributions() || undefined,
       custom_section_images: customSections.getImageAttachments().map((img) => img.replace(/^data:image\/\w+;base64,/, "")).filter(Boolean) || undefined,
     };
 
-    const shouldUseGrid = useGrid && elementType !== "scrollbar" && elementType !== "font" && elementType !== "number";
+    const shouldUseGrid = useGrid && effectiveElementType !== "scrollbar" && effectiveElementType !== "font" && effectiveElementType !== "number";
 
     if (shouldUseGrid) {
       busy.start("gen");
       setActiveTab("grid");
       try {
         const [cw, ch] = resolveCellDims();
-        for (let page = 0; page < genCount; page++) {
-          const res = await apiFetch<{
-            cells?: string[]; full_grid_b64?: string; error?: string;
-          }>("/uilab/generate-grid", {
-            method: "POST",
-            body: JSON.stringify({ ...baseReq, cell_width: cw, cell_height: ch, use_grid: true }),
-          });
-          if (res.error) {
-            addToast(res.error, "error");
-            break;
-          }
+        const body = JSON.stringify({ ...baseReq, cell_width: cw, cell_height: ch, use_grid: true, grid_layout: gridLayout, grid_intent: gridIntent });
+        const promises = Array.from({ length: genCount }, (_, page) =>
+          apiFetch<{ cells?: string[]; full_grid_b64?: string; error?: string; cell_width?: number; cell_height?: number; grid_cols?: number; width?: number; height?: number }>(
+            "/uilab/generate-grid", { method: "POST", body },
+          ).then((res) => ({ page, res }))
+        );
+        const results = await Promise.allSettled(promises);
+        for (const r of results) {
+          if (r.status === "rejected") { addToast(String(r.reason), "error"); continue; }
+          const { page, res } = r.value;
+          if (res.error) { addToast(res.error, "error"); continue; }
           if (res.cells) {
+            const resCw = res.cell_width || cw;
+            const resCh = res.cell_height || ch;
+            const cols = res.grid_cols || 4;
             const newResults: GridGalleryResult[] = res.cells.map((b64, i) => ({
               id: `grid_${Date.now()}_${page}_${i}`,
               image_b64: b64,
-              width: cw,
-              height: ch,
-              label: `${String.fromCharCode(65 + Math.floor(i / 4))}${(i % 4) + 1}`,
+              width: resCw,
+              height: resCh,
+              label: `${String.fromCharCode(65 + Math.floor(i / cols))}${(i % cols) + 1}`,
             }));
             if (res.full_grid_b64) {
+              const fullW = res.width || resCw * cols;
+              const fullH = res.height || resCh * Math.ceil(res.cells.length / cols);
               newResults.push({
                 id: `grid_full_${Date.now()}_${page}`,
                 image_b64: res.full_grid_b64,
-                width: cw * 4,
-                height: ch * 4,
+                width: fullW,
+                height: fullH,
                 label: "Full",
               });
             }
@@ -687,21 +786,26 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       if (sbArrows) components.push("arrows");
       if (components.length === 0) { addToast("Select at least one scrollbar component", "info"); busy.end("gen"); return; }
       try {
-        for (const comp of components) {
-          for (let i = 0; i < genCount; i++) {
-            const res = await apiFetch<{ image_b64?: string; width?: number; height?: number; error?: string }>(
+        const promises = components.flatMap((comp) =>
+          Array.from({ length: genCount }, (_, i) =>
+            apiFetch<{ image_b64?: string; width?: number; height?: number; error?: string }>(
               `/uilab/generate-scrollbar?component=${comp}`,
               { method: "POST", body: JSON.stringify(baseReq) },
-            );
-            if (res.error) { addToast(res.error, "error"); break; }
-            if (res.image_b64) {
-              setGalleryResults((prev) => [...prev, {
-                id: `sb_${comp}_${Date.now()}_${i}`,
-                image_b64: res.image_b64!,
-                width: res.width || outW,
-                height: res.height || outH,
-              }]);
-            }
+            ).then((res) => ({ comp, i, res }))
+          )
+        );
+        const results = await Promise.allSettled(promises);
+        for (const r of results) {
+          if (r.status === "rejected") { addToast(String(r.reason), "error"); continue; }
+          const { comp, i, res } = r.value;
+          if (res.error) { addToast(res.error, "error"); continue; }
+          if (res.image_b64) {
+            setGalleryResults((prev) => [...prev, {
+              id: `sb_${comp}_${Date.now()}_${i}`,
+              image_b64: res.image_b64!,
+              width: res.width || outW,
+              height: res.height || outH,
+            }]);
           }
         }
       } catch (e) {
@@ -716,21 +820,26 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       const chars = fontChars.trim() || (elementType === "font" ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ" : "0123456789");
       const uniqueChars = [...new Set(chars.toUpperCase().split(""))];
       try {
-        for (const char of uniqueChars) {
-          for (let i = 0; i < genCount; i++) {
-            const res = await apiFetch<{ image_b64?: string; width?: number; height?: number; error?: string }>(
+        const promises = uniqueChars.flatMap((char) =>
+          Array.from({ length: genCount }, (_, i) =>
+            apiFetch<{ image_b64?: string; width?: number; height?: number; error?: string }>(
               `/uilab/generate-char?char=${encodeURIComponent(char)}`,
               { method: "POST", body: JSON.stringify(baseReq) },
-            );
-            if (res.error) { addToast(res.error, "error"); break; }
-            if (res.image_b64) {
-              setGalleryResults((prev) => [...prev, {
-                id: `char_${char}_${Date.now()}_${i}`,
-                image_b64: res.image_b64!,
-                width: res.width || outW,
-                height: res.height || outH,
-              }]);
-            }
+            ).then((res) => ({ char, i, res }))
+          )
+        );
+        const results = await Promise.allSettled(promises);
+        for (const r of results) {
+          if (r.status === "rejected") { addToast(String(r.reason), "error"); continue; }
+          const { char, i, res } = r.value;
+          if (res.error) { addToast(res.error, "error"); continue; }
+          if (res.image_b64) {
+            setGalleryResults((prev) => [...prev, {
+              id: `char_${char}_${Date.now()}_${i}`,
+              image_b64: res.image_b64!,
+              width: res.width || outW,
+              height: res.height || outH,
+            }]);
           }
         }
       } catch (e) {
@@ -743,12 +852,17 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       busy.start("gen");
       setActiveTab("main");
       try {
-        for (let i = 0; i < genCount; i++) {
-          const res = await apiFetch<{ image_b64?: string; width?: number; height?: number; error?: string }>(
+        const promises = Array.from({ length: genCount }, (_, i) =>
+          apiFetch<{ image_b64?: string; width?: number; height?: number; error?: string }>(
             "/uilab/generate",
             { method: "POST", body: JSON.stringify({ ...baseReq, use_grid: false }) },
-          );
-          if (res.error) { addToast(res.error, "error"); break; }
+          ).then((res) => ({ i, res }))
+        );
+        const results = await Promise.allSettled(promises);
+        for (const r of results) {
+          if (r.status === "rejected") { addToast(String(r.reason), "error"); continue; }
+          const { i, res } = r.value;
+          if (res.error) { addToast(res.error, "error"); continue; }
           if (res.image_b64) {
             const src = `data:image/png;base64,${res.image_b64}`;
             setMainstageImage(src, `Generation ${i + 1}`);
@@ -761,9 +875,9 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
         busy.end("gen");
       }
     }
-  }, [busy, elementType, prompt, genCount, modelId, refImageB64, reenvision, matchRefDims, strictRefAdherence, addColor, noColor,
-    useGrid, buttonShape, borderStyle, addIcon, addText, textSize, sbTrack, sbThumb, sbArrows, sbOrientation,
-    fontChars, styleFusion, styleLibraryFolder, styleLibraryFolders, resolveOutputDims, resolveCellDims, collectRefImagesB64, setMainstageImage, addToast,
+  }, [busy, uiMode, elementType, prompt, genCount, modelId, refImageB64, reenvision, matchRefDims, strictRefAdherence, addColor, noColor,
+    useGrid, gridLayout, gridIntent, buttonShape, borderStyle, addIcon, addText, textSize, sbTrack, sbThumb, sbArrows, sbOrientation,
+    fontChars, styleFusion, styleLibraryFolder, styleLibraryFolders, colorPaletteB64, resolveOutputDims, resolveCellDims, collectRefImagesB64, setMainstageImage, addToast,
     resolveSection, customSections.getPromptContributions, customSections.getImageAttachments]);
 
   const handleCancel = useCallback(() => {
@@ -776,6 +890,104 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   const handleClearGallery = useCallback(() => {
     setGalleryResults([]);
   }, []);
+
+  // --- Animation handlers ---
+  const handleGenerateAnimation = useCallback(async (animPrompt: string, frameCount: number) => {
+    if (busy.any) return;
+    busy.start("gen");
+    setActiveTab("animation");
+    try {
+      const fusionContext = buildFusionBrief(styleFusion);
+      const refImagesB64 = collectRefImagesB64();
+      const body = JSON.stringify({
+        element_type: uiMode === "colorize" ? "colorize" : elementType,
+        prompt: animPrompt || prompt,
+        frame_count: frameCount,
+        source_image_b64: refImageB64 ? refImageB64.replace(/^data:image\/\w+;base64,/, "") : undefined,
+        reference_image_b64: refImageB64 ? refImageB64.replace(/^data:image\/\w+;base64,/, "") : undefined,
+        ref_images: refImagesB64.length > 0 ? refImagesB64 : undefined,
+        riff_mode: true,
+        add_color: addColor,
+        no_color: noColor,
+        model_id: modelId || undefined,
+        style_context: styleLibraryFolder || undefined,
+        style_guidance: styleLibraryFolder ? (styleLibraryFolders.find((f) => f.name === styleLibraryFolder)?.guidance_text || "") : "",
+        fusion_context: fusionContext || undefined,
+        ref_original_width: refImageDims?.w || undefined,
+        ref_original_height: refImageDims?.h || undefined,
+      });
+      const res = await apiFetch<{ frames?: string[]; frame_width?: number; frame_height?: number; error?: string }>(
+        "/uilab/generate-animation-frames", { method: "POST", body },
+      );
+      if (res.error) { addToast(res.error, "error"); return; }
+      if (res.frames) {
+        const newFrames: AnimationFrame[] = res.frames.map((b64, i) => ({
+          id: `anim_${Date.now()}_${i}`,
+          image_b64: b64,
+          width: res.frame_width || 256,
+          height: res.frame_height || 256,
+          duration_ms: 100,
+          label: `Frame ${i + 1}`,
+        }));
+        setAnimFrames(newFrames);
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.includes("abort")) return;
+      addToast(e instanceof Error ? e.message : "Animation generation failed", "error");
+    } finally {
+      busy.end("gen");
+    }
+  }, [busy, uiMode, elementType, prompt, refImageB64, addColor, noColor, modelId, styleLibraryFolder, styleLibraryFolders, styleFusion, collectRefImagesB64, addToast, refImageDims]);
+
+  const handleRegenAnimFrame = useCallback(async (frameId: string) => {
+    const idx = animFrames.findIndex((f) => f.id === frameId);
+    if (idx < 0) return;
+    busy.start("gen");
+    try {
+      const before = idx > 0 ? animFrames[idx - 1].image_b64 : undefined;
+      const after = idx < animFrames.length - 1 ? animFrames[idx + 1].image_b64 : undefined;
+      const body = JSON.stringify({
+        before_frame_b64: before,
+        after_frame_b64: after,
+        source_image_b64: refImageB64 ? refImageB64.replace(/^data:image\/\w+;base64,/, "") : undefined,
+        prompt: prompt,
+        frame_index: idx,
+        total_frames: animFrames.length,
+        model_id: modelId || undefined,
+        style_context: styleLibraryFolder || undefined,
+      });
+      const res = await apiFetch<{ frame_b64?: string; width?: number; height?: number; error?: string }>(
+        "/uilab/regenerate-animation-frame", { method: "POST", body },
+      );
+      if (res.error) { addToast(res.error, "error"); return; }
+      if (res.frame_b64) {
+        setAnimFrames((prev) => prev.map((f, i) =>
+          i === idx
+            ? { ...f, image_b64: res.frame_b64!, width: res.width || 256, height: res.height || 256 }
+            : f
+        ));
+        addToast(`Frame ${idx + 1} regenerated`, "success");
+      }
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "Frame regeneration failed", "error");
+    } finally {
+      busy.end("gen");
+    }
+  }, [animFrames, busy, refImageB64, prompt, modelId, styleLibraryFolder, addToast]);
+
+  const handleSendToAnimation = useCallback((imageB64: string) => {
+    const b64 = imageB64.replace(/^data:image\/\w+;base64,/, "");
+    setAnimFrames([{
+      id: `anim_seed_${Date.now()}`,
+      image_b64: b64,
+      width: 256,
+      height: 256,
+      duration_ms: 100,
+      label: "Source",
+    }]);
+    setActiveTab("animation");
+    addToast("Image sent to Animation tab", "info");
+  }, [addToast]);
 
   const handleDeleteResult = useCallback((id: string) => {
     setGalleryResults((prev) => prev.filter((r) => r.id !== id));
@@ -792,6 +1004,8 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     setAddColor(false);
     setNoColor(false);
     setUseGrid(true);
+    setGridLayout("square");
+    setGridIntent("ideas");
     setCellSize("");
     setRefImageB64(null);
     setButtonShape("auto");
@@ -806,6 +1020,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     setFontChars("");
     setStyleFusion({ ...EMPTY_FUSION, slots: [{ ...EMPTY_FUSION.slots[0] }, { ...EMPTY_FUSION.slots[1] }] });
     setGalleryResults([]);
+    setAnimFrames([]);
     setRefImages({});
     setStyleLibraryFolder("");
     setGalleryResults([]);
@@ -873,7 +1088,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     if (!result) return;
     setGridEditBusy((prev) => ({ ...prev, [id]: true }));
     try {
-      const fusionCtx = resolveSection("styleFusion");
+      const fusionCtx = buildFusionBrief(styleFusion);
       const res = await apiFetch<{ image_b64?: string; width?: number; height?: number; error?: string }>(
         "/uilab/generate",
         {
@@ -922,7 +1137,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
             model_id: modelId || undefined,
             style_context: styleLibraryFolder || undefined,
             style_guidance: styleLibraryFolder ? (styleLibraryFolders.find((f) => f.name === styleLibraryFolder)?.guidance_text || "") : "",
-            fusion_context: resolveSection("styleFusion") || undefined,
+            fusion_context: buildFusionBrief(styleFusion) || undefined,
             fusion_image_1_b64: styleFusion.slots[0].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
             fusion_image_2_b64: styleFusion.slots[1].image?.replace(/^data:image\/\w+;base64,/, "") || undefined,
             add_color: addColor,
@@ -944,7 +1159,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       }
     } catch (e) { addToast(e instanceof Error ? e.message : "Regeneration failed", "error"); }
     busy.end("gen");
-  }, [galleryResults, busy, elementType, prompt, modelId, styleLibraryFolder, styleLibraryFolders, styleFusion, addToast]);
+  }, [galleryResults, busy, elementType, prompt, modelId, styleLibraryFolder, styleLibraryFolders, styleFusion, addColor, noColor, customSections, addToast]);
 
   const handleGridUpdateImage = useCallback((id: string, newB64: string, w: number, h: number) => {
     setGalleryResults((prev) =>
@@ -1000,14 +1215,18 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   useSessionRegister(
     sessionKey,
     () => ({
-      elementType, prompt, genCount, outputSize, matchRefDims, reenvision, strictRefAdherence, addColor, noColor,
-      useGrid, cellSize, buttonShape, borderStyle, addIcon, addText, textSize,
+      uiMode, elementType, prompt, genCount, outputSize, matchRefDims, reenvision, strictRefAdherence, addColor, noColor,
+      useGrid, gridLayout, gridIntent, cellSize, buttonShape, borderStyle, addIcon, addText, textSize,
       sbTrack, sbThumb, sbArrows, sbOrientation, fontChars, styleFusion,
       styleLibraryFolder, sectionEnabled, layout, tabs, activeTab, modelId,
+      mainstageSrc, mainstageHistory, mainstageHistoryActiveId,
+      refImageB64, refImages, galleryResults, colorPaletteB64, animFrames,
     }),
     (s: unknown) => {
       if (s === null) { handleReset(); return; }
+      sessionLoadingRef.current = true;
       const d = s as Record<string, unknown>;
+      if (typeof d.uiMode === "string") setUiMode(d.uiMode as "create" | "colorize" | "riff");
       if (typeof d.elementType === "string") setElementType(d.elementType);
       if (typeof d.prompt === "string") setPrompt(d.prompt);
       if (typeof d.genCount === "number") setGenCount(d.genCount);
@@ -1018,6 +1237,8 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       if (typeof d.addColor === "boolean") setAddColor(d.addColor);
       if (typeof d.noColor === "boolean") setNoColor(d.noColor);
       if (typeof d.useGrid === "boolean") setUseGrid(d.useGrid);
+      if (typeof d.gridLayout === "string") setGridLayout(d.gridLayout as "square" | "horizontal" | "vertical");
+      if (typeof d.gridIntent === "string") setGridIntent(d.gridIntent as "ideas" | "animation");
       if (typeof d.cellSize === "string") setCellSize(d.cellSize);
       if (typeof d.buttonShape === "string") setButtonShape(d.buttonShape);
       if (typeof d.borderStyle === "string") setBorderStyle(d.borderStyle);
@@ -1036,6 +1257,16 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       if (Array.isArray(d.tabs)) setTabs(d.tabs as TabDef[]);
       if (typeof d.activeTab === "string") setActiveTab(d.activeTab);
       if (typeof d.modelId === "string") setModelId(d.modelId);
+      // Restore image state
+      if (typeof d.mainstageSrc === "string" || d.mainstageSrc === null) setMainstageSrc(d.mainstageSrc as string | null);
+      if (Array.isArray(d.mainstageHistory)) setMainstageHistory(d.mainstageHistory as HistoryEntry[]);
+      if (typeof d.mainstageHistoryActiveId === "string" || d.mainstageHistoryActiveId === null) setMainstageHistoryActiveId(d.mainstageHistoryActiveId as string | null);
+      if (typeof d.refImageB64 === "string" || d.refImageB64 === null) setRefImageB64(d.refImageB64 as string | null);
+      if (d.refImages && typeof d.refImages === "object") setRefImages(d.refImages as Record<string, string>);
+      if (Array.isArray(d.galleryResults)) setGalleryResults(d.galleryResults as GridGalleryResult[]);
+      if (typeof d.colorPaletteB64 === "string") setColorPaletteB64(d.colorPaletteB64);
+      if (Array.isArray(d.animFrames)) setAnimFrames(d.animFrames as AnimationFrame[]);
+      requestAnimationFrame(() => { sessionLoadingRef.current = false; });
     },
   );
 
@@ -1098,6 +1329,17 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     return () => window.removeEventListener("gallery-restore", handler);
   }, [active]);
 
+  // --- Global "send to animation" listener ---
+  useEffect(() => {
+    if (!active) return;
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.image_b64) handleSendToAnimation(detail.image_b64);
+    };
+    window.addEventListener("send-to-animation", handler);
+    return () => window.removeEventListener("send-to-animation", handler);
+  }, [active, handleSendToAnimation]);
+
   useEffect(() => {
     if (active) {
       setCurrentImage(mainstageSrc || null);
@@ -1124,134 +1366,246 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   // ---------------------------------------------------------------------------
 
   const renderGenerateSection = () => {
-    const showGridOptions = elementType !== "scrollbar" && elementType !== "font" && elementType !== "number";
+    const isCreate = uiMode === "create";
+    const isColorize = uiMode === "colorize";
+    const isRiff = uiMode === "riff";
+
+    const colorMode = addColor ? "color" : noColor ? "bw" : "natural";
+    const handleColorMode = (mode: string) => {
+      setAddColor(mode === "color");
+      setNoColor(mode === "bw");
+    };
+
     return (
       <>
-        {/* Row 1: Element type + Count */}
-        <div className="flex items-end gap-2">
-          <div className="flex-1 min-w-0">
+        {/* Element type sub-dropdown (Create / Riff only) */}
+        {(isCreate || isRiff) && (
+          <div>
             <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Element Type</label>
             <Select
-              options={ELEMENT_TYPE_OPTIONS}
+              options={isRiff ? ELEMENT_TYPE_OPTIONS.filter((o) => o.value !== "scrollbar" && o.value !== "font" && o.value !== "number") : ELEMENT_TYPE_OPTIONS}
               value={elementType}
               onChange={(e) => setElementType(e.target.value)}
               disabled={busy.any}
             />
           </div>
-          <div className="shrink-0">
-            <NumberStepper value={genCount} min={1} max={20} onChange={setGenCount} label="Count:" />
-          </div>
-        </div>
+        )}
 
-        {/* Row 2: Prompt */}
+        {/* Button shape + border (Create + Button only) */}
+        {isCreate && elementType === "button" && (
+          <div className="flex gap-2">
+            <div className="flex-1 min-w-0">
+              <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Shape</label>
+              <Select options={BUTTON_SHAPE_OPTIONS} value={buttonShape} onChange={(e) => setButtonShape(e.target.value)} disabled={busy.any} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Border</label>
+              <Select options={BORDER_STYLE_OPTIONS} value={borderStyle} onChange={(e) => setBorderStyle(e.target.value)} disabled={busy.any} />
+            </div>
+          </div>
+        )}
+
+        {/* No-ref-image hint for colorize/riff */}
+        {(isColorize || isRiff) && !refImageB64 && (
+          <div className="rounded px-2.5 py-1.5 text-[11px]" style={{ background: "rgba(255,165,0,0.1)", border: "1px solid rgba(255,165,0,0.25)", color: "rgba(255,165,0,0.9)" }}>
+            {isColorize
+              ? <>Add your sketch or image in the <strong>Source Image</strong> section above to generate color variations.</>
+              : <>Add the icon or element you want to explore in the <strong>Source Image</strong> section above.</>}
+          </div>
+        )}
+
+        {/* Prompt */}
         <Textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           rows={3}
-          placeholder='Describe the element — use "quotes" for button label text'
+          placeholder={isRiff ? "What directions should the variations explore? e.g. different art styles, materials, eras..." : isColorize ? "Optional: describe color preferences, mood, or palette direction..." : 'Describe the element — use "quotes" for button label text'}
           disabled={busy.any}
           data-voice-target="uiPrompt"
         />
         <Button size="sm" className="w-full" generating={busy.is("enhance")} generatingText="Enhancing..." onClick={handleEnhancePrompt} title="Use AI to enrich and expand your element description">Enhance Description</Button>
 
-        {/* Row 3: Output size + Color */}
-        <div className="flex items-end gap-2">
-          <div className="flex-1 min-w-0">
-            <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>
-              Output Size
-              {useGrid && showGridOptions && <span className="font-normal ml-1" style={{ color: "var(--color-text-muted)", opacity: 0.7 }}>(single only)</span>}
-            </label>
-            <input
-              className="w-full text-[11px] px-2 py-1 rounded"
-              style={inputStyle}
-              placeholder="1024×1024"
-              value={outputSize}
-              onChange={(e) => setOutputSize(e.target.value)}
-              disabled={busy.any}
-              title={useGrid && showGridOptions ? "Only applies to single image generation — 4×4 grid uses Cell Size instead" : "Output size (WxH), blank for 1024x1024"}
-            />
-          </div>
-          <div className="flex items-center gap-3 shrink-0 pb-0.5">
-            <label className="flex items-center gap-1.5 cursor-pointer">
-              <input type="checkbox" checked={addColor} onChange={(e) => { setAddColor(e.target.checked); if (e.target.checked) setNoColor(false); }} disabled={busy.any} />
-              <span className="text-[10px]" style={{ color: "var(--color-text-primary)" }}>Color</span>
-            </label>
-            <label className="flex items-center gap-1.5 cursor-pointer">
-              <input type="checkbox" checked={noColor} onChange={(e) => { setNoColor(e.target.checked); if (e.target.checked) setAddColor(false); }} disabled={busy.any} />
-              <span className="text-[10px]" style={{ color: "var(--color-text-primary)" }}>Grayscale</span>
-            </label>
-          </div>
-        </div>
-
-        {/* Row 4: Style Library + Generation View side by side */}
-        <div className="flex gap-2">
-          <div className="flex-1 min-w-0">
-            <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Style</label>
+        {/* Color mode — unified 3-way dropdown for all modes (hidden for colorize, forced to color) */}
+        {!isColorize && (
+          <div>
+            <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Color</label>
             <select
-              className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)] min-w-0 truncate"
-              style={{ ...inputStyle, maxWidth: "100%" }}
-              value={styleLibraryFolder}
-              onChange={(e) => setStyleLibraryFolder(e.target.value)}
-              title="Style folder for visual guidance"
+              className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
+              style={inputStyle}
+              value={colorMode}
+              onChange={(e) => handleColorMode(e.target.value)}
+              disabled={busy.any}
             >
-              <option value="">Default (Gemini)</option>
-              {styleLibraryFolders.map((f) => (
-                <option key={f.name} value={f.name}>{f.name}</option>
-              ))}
+              <option value="natural">Natural (AI decides)</option>
+              <option value="color">Full Color</option>
+              <option value="bw">Black & White</option>
             </select>
           </div>
-          {showGridOptions && (
+        )}
+
+        {/* Color palette upload (Colorize mode only) */}
+        {isColorize && (
+          <div>
+            <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>
+              Color Palette Reference <span className="font-normal opacity-70">(optional)</span>
+            </label>
+            {colorPaletteB64 ? (
+              <div className="flex items-center gap-2">
+                <div className="shrink-0 rounded overflow-hidden" style={{ width: 48, height: 48, border: "1px solid var(--color-border)" }}>
+                  <img src={`data:image/png;base64,${colorPaletteB64}`} alt="palette" className="w-full h-full object-cover" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>Palette loaded — colors will influence output</p>
+                  <button
+                    onClick={() => setColorPaletteB64("")}
+                    className="text-[10px] mt-0.5 cursor-pointer underline"
+                    style={{ color: "var(--color-text-secondary)" }}
+                  >Clear palette</button>
+                </div>
+              </div>
+            ) : (
+              <button
+                className="w-full px-2 py-2 text-[10px] rounded cursor-pointer transition-colors text-center"
+                style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px dashed var(--color-border)" }}
+                onClick={async () => {
+                  try {
+                    const clipItems = await navigator.clipboard.read();
+                    for (const item of clipItems) {
+                      for (const t of item.types) {
+                        if (t.startsWith("image/")) {
+                          const blob = await item.getType(t);
+                          const reader = new FileReader();
+                          reader.onload = () => {
+                            const result = (reader.result as string).replace(/^data:image\/\w+;base64,/, "");
+                            setColorPaletteB64(result);
+                          };
+                          reader.readAsDataURL(blob);
+                          return;
+                        }
+                      }
+                    }
+                  } catch { /* clipboard failed, fallback to file picker */ }
+                  const input = document.createElement("input");
+                  input.type = "file";
+                  input.accept = "image/*";
+                  input.onchange = () => {
+                    const file = input.files?.[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                      const result = (reader.result as string).replace(/^data:image\/\w+;base64,/, "");
+                      setColorPaletteB64(result);
+                    };
+                    reader.readAsDataURL(file);
+                  };
+                  input.click();
+                }}
+                title="Upload an image whose colors you want to use as palette inspiration"
+              >
+                Upload a color palette or mood image
+              </button>
+            )}
+            <p className="text-[9px] leading-snug mt-0.5" style={{ color: "var(--color-text-muted)" }}>
+              Upload a color swatch, palette, or any image whose colors you'd like to draw from.
+            </p>
+          </div>
+        )}
+
+        {/* Output size — single image only */}
+        {!useGrid && (
+          <div className="flex gap-2">
             <div className="flex-1 min-w-0">
-              <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>View</label>
+              <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>
+                {isRiff ? "Ratio (auto)" : "Image Ratio"}
+              </label>
               <select
                 className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
                 style={inputStyle}
-                value={useGrid ? "grid" : "single"}
-                onChange={(e) => setUseGrid(e.target.value === "grid")}
-                disabled={busy.any}
+                value={(() => {
+                  if (!outputSize) return "square";
+                  const m = outputSize.match(/^(\d+)x(\d+)$/);
+                  if (!m) return "square";
+                  const w = parseInt(m[1]), h = parseInt(m[2]);
+                  if (w > h) return "landscape";
+                  if (h > w) return "portrait";
+                  return "square";
+                })()}
+                onChange={(e) => {
+                  const cur = outputSize.match(/^(\d+)x(\d+)$/);
+                  const base = cur ? Math.max(parseInt(cur[1]), parseInt(cur[2])) : 1024;
+                  if (e.target.value === "landscape") setOutputSize(`${base}x${Math.round(base * 0.5625)}`);
+                  else if (e.target.value === "portrait") setOutputSize(`${Math.round(base * 0.5625)}x${base}`);
+                  else setOutputSize(base === 1024 ? "" : `${base}x${base}`);
+                }}
+                disabled={busy.any || isRiff}
+                title="Aspect ratio for single image generation"
               >
-                <option value="grid">4×4 Grid (16 Variations)</option>
-                <option value="single">Single Image</option>
+                <option value="square">Square (1:1)</option>
+                <option value="landscape">Landscape (16:9)</option>
+                <option value="portrait">Portrait (9:16)</option>
               </select>
             </div>
-          )}
-        </div>
-
-        {/* Row 5: Model selector */}
-        {models.length > 0 && (
-          <select
-            className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)] truncate"
-            style={{ ...inputStyle, maxWidth: "100%" }}
-            value={modelId}
-            onChange={(e) => setModelId(e.target.value)}
-            title="AI model for generation"
-          >
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>{m.label} — {m.resolution}</option>
-            ))}
-          </select>
+            <div className="flex-1 min-w-0">
+              <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>
+                {isRiff ? "Size (auto)" : "Size"}
+              </label>
+              <select
+                className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
+                style={inputStyle}
+                value={outputSize}
+                onChange={(e) => setOutputSize(e.target.value)}
+                disabled={busy.any || isRiff}
+                title={isRiff ? "Riff mode auto-matches the source image dimensions" : "Resolution for single image output"}
+              >
+                <optgroup label="Square">
+                  <option value="">1024×1024 (default)</option>
+                  <option value="512x512">512×512</option>
+                  <option value="256x256">256×256</option>
+                  <option value="128x128">128×128</option>
+                  <option value="64x64">64×64</option>
+                  <option value="48x48">48×48</option>
+                  <option value="32x32">32×32</option>
+                  <option value="2048x2048">2048×2048 (hi-res)</option>
+                </optgroup>
+                <optgroup label="Landscape">
+                  <option value="1024x576">1024×576 (16:9)</option>
+                  <option value="1408x768">1408×768 (16:9 hi-res)</option>
+                  <option value="512x256">512×256 (2:1)</option>
+                  <option value="1024x512">1024×512 (2:1)</option>
+                </optgroup>
+                <optgroup label="Portrait">
+                  <option value="576x1024">576×1024 (9:16)</option>
+                  <option value="768x1408">768×1408 (9:16 hi-res)</option>
+                  <option value="256x512">256×512 (1:2)</option>
+                  <option value="512x1024">512×1024 (1:2)</option>
+                </optgroup>
+              </select>
+            </div>
+          </div>
         )}
 
-        {/* Row 6: Cell size (grid mode only) */}
-        {useGrid && showGridOptions && (
+        {/* Model selector */}
+        {models.length > 0 && (
           <div>
-            <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>
-              Grid Cell Size (WxH)
-              <span className="font-normal ml-1" style={{ opacity: 0.7 }}>— each cell in the 4×4 grid</span>
-            </label>
-            <input
-              className="w-full text-[11px] px-2 py-1 rounded"
-              style={inputStyle}
-              placeholder="e.g. 256x256 (default)"
-              value={cellSize}
-              onChange={(e) => setCellSize(e.target.value)}
-              disabled={busy.any}
-              title="Size of each cell in the 4×4 grid (WxH), blank for 256x256"
-            />
-            <p className="text-[9px] mt-1 leading-snug" style={{ color: "var(--color-text-muted)" }}>
-              Each cell should contain one {elementType} only — if you see stacked duplicates, regenerate (prompt is tightened server-side).
-            </p>
+            <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Model</label>
+            <select
+              className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)] truncate"
+              style={{ ...inputStyle, maxWidth: "100%" }}
+              value={modelId}
+              onChange={(e) => setModelId(e.target.value)}
+            >
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>{m.label} — {m.resolution}</option>
+              ))}
+            </select>
           </div>
+        )}
+
+        {/* Riff info hint */}
+        {isRiff && refImageB64 && (
+          <p className="text-[9px] leading-snug" style={{ color: "var(--color-text-muted)" }}>
+            Variations will match the source image's dimensions and preserve its structure, proportions, and identity while exploring new artistic directions.
+          </p>
         )}
 
         {/* Generate button */}
@@ -1266,25 +1620,11 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
             disabled={busy.is("gen")}
             title="Generate from current settings"
           >
-            Generate Elements
+            {isColorize ? "Colorize" : isRiff ? "Explore Variations" : "Generate"}
           </Button>
         </div>
       </>
     );
-  };
-
-  const refMode = reenvision ? "reenvision" : strictRefAdherence ? "strict" : matchRefDims ? "match" : "none";
-  const handleRefModeChange = useCallback((mode: string) => {
-    setReenvision(mode === "reenvision");
-    setStrictRefAdherence(mode === "strict");
-    setMatchRefDims(mode === "match" || mode === "strict");
-  }, []);
-
-  const REF_MODE_HINTS: Record<string, string> = {
-    none: "The model can look at this picture for colors, layout, and mood. Output width and height still follow your settings above — not this image’s pixels.",
-    match: "Output is resized to match this image: same aspect ratio and pixel dimensions. The model may vary the design more freely than Strict adherence.",
-    strict: "Like “REMAKE THIS”: keep the same aspect ratio and general layout/feel as the reference. Your style library and prompt supply a new visual flavor (colors, line, texture, era) — not a new size, aspect, or composition template. Output dimensions match the reference image.",
-    reenvision: "Looser than Remake (strict): same rough idea, but the model may change framing, angle, or layout more freely while adopting your style and prompt.",
   };
 
   const renderRefImageSection = () => (
@@ -1308,15 +1648,13 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
               <img src={`data:image/png;base64,${refImageB64}`} alt="" className="w-full h-full object-cover" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-[11px] font-medium truncate" style={{ color: "var(--color-text-primary)" }}>Reference loaded</p>
+              <p className="text-[11px] font-medium truncate" style={{ color: "var(--color-text-primary)" }}>
+                {uiMode === "colorize" ? "Source image loaded" : uiMode === "riff" ? "Source element loaded" : "Reference loaded"}
+              </p>
               <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
-                {refMode === "reenvision"
-                  ? "Mode: redraw this image as your new UI"
-                  : refMode === "strict"
-                    ? "Mode: remake — same aspect & feel; new flavor from style + prompt"
-                  : refMode === "match"
-                    ? "Mode: output same size as this image"
-                    : "Mode: inspiration only; size from settings"}
+                {uiMode === "colorize" ? "Will be colorized"
+                  : uiMode === "riff" ? "Variations will match this element"
+                  : "Used as visual inspiration"}
               </p>
             </div>
           </div>
@@ -1335,56 +1673,11 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
         <button onClick={handleRefClear} className="flex-1 px-2 py-1.5 text-[10px] font-medium rounded cursor-pointer transition-colors disabled:opacity-30 disabled:cursor-not-allowed" style={{ background: "var(--color-input-bg)", color: "var(--color-text-muted)", border: "1px solid var(--color-border)" }} disabled={!refImageB64}>Clear</button>
       </div>
 
-      {/* Reference mode selector */}
-      <div>
-        <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>
-          How to use this image when you generate
-        </label>
-        <select
-          className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
-          style={inputStyle}
-          value={refMode}
-          onChange={(e) => handleRefModeChange(e.target.value)}
-          disabled={!refImageB64 || busy.any}
-          title="Remake (strict): same aspect ratio and layout feel as the reference; style library + prompt change the visual flavor only."
-        >
-          <option value="none">Inspiration only — output size from settings above</option>
-          <option value="match">Match size — same width, height, aspect (looser on likeness)</option>
-          <option value="strict">Remake (strict) — same aspect ratio & feel; new look from style + prompt</option>
-          <option value="reenvision">Re-envision — freer creative redraw, new angles/layouts</option>
-        </select>
-      </div>
-
       <p className="text-[9px] leading-snug" style={{ color: "var(--color-text-muted)" }}>
-        {REF_MODE_HINTS[refMode] ?? REF_MODE_HINTS.none}
+        {uiMode === "colorize" ? "This image will be colorized — structure and proportions are preserved."
+          : uiMode === "riff" ? "Variations will respect this image's dimensions, structure, and identity."
+          : "Used as visual inspiration alongside your prompt and style library."}
       </p>
-    </div>
-  );
-
-  const renderButtonLayoutSection = () => (
-    <div className="space-y-2">
-      <div>
-        <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Shape</label>
-        <Select options={BUTTON_SHAPE_OPTIONS} value={buttonShape} onChange={(e) => setButtonShape(e.target.value)} disabled={busy.any} />
-      </div>
-      <div>
-        <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Border</label>
-        <Select options={BORDER_STYLE_OPTIONS} value={borderStyle} onChange={(e) => setBorderStyle(e.target.value)} disabled={busy.any} />
-      </div>
-      <label className="flex items-center gap-2 cursor-pointer">
-        <input type="checkbox" checked={addIcon} onChange={(e) => setAddIcon(e.target.checked)} disabled={busy.any} />
-        <span className="text-xs" style={{ color: "var(--color-text-primary)" }}>Add Icon</span>
-      </label>
-      <label className="flex items-center gap-2 cursor-pointer">
-        <input type="checkbox" checked={addText} onChange={(e) => setAddText(e.target.checked)} disabled={busy.any} />
-        <span className="text-xs" style={{ color: "var(--color-text-primary)" }}>Add Text</span>
-      </label>
-      {addText && (
-        <div>
-          <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Text Size Hint</label>
-          <Select options={TEXT_SIZE_OPTIONS} value={textSize} onChange={(e) => setTextSize(e.target.value)} disabled={busy.any} />
-        </div>
-      )}
     </div>
   );
 
@@ -1433,17 +1726,22 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     </div>
   );
 
-  const renderStyleFusionSection = () => (
-    <StyleFusionPanel
-      fusion={styleFusion}
-      onChange={setStyleFusion}
-      takeOptions={TAKE_OPTIONS}
-      disabled={busy.any}
-    />
-  );
-
   const renderSaveSection = () => (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
+      <div>
+        <label className="text-[10px] font-medium block mb-1" style={{ color: "var(--color-text-muted)" }}>Mainstage</label>
+        <div className="grid grid-cols-2 gap-1.5">
+          <Button size="sm" className="w-full" onClick={handleMainstageSave} disabled={!mainstageSrc} title="Save mainstage image to disk">Save As</Button>
+          <Button size="sm" className="w-full" onClick={handleSendToPS} disabled={!mainstageSrc} title="Send mainstage image to Photoshop">Send to PS</Button>
+        </div>
+      </div>
+      <div>
+        <label className="text-[10px] font-medium block mb-1" style={{ color: "var(--color-text-muted)" }}>Grid Results</label>
+        <div className="grid grid-cols-2 gap-1.5">
+          <Button size="sm" className="w-full" onClick={handleSaveAllGrid} disabled={galleryResults.length === 0} title="Save all grid images to disk">Save All</Button>
+          <Button size="sm" className="w-full" onClick={handleSendGridToPS} disabled={galleryResults.length === 0} title="Send all grid images to Photoshop">Send All to PS</Button>
+        </div>
+      </div>
       <div className="grid grid-cols-3 gap-1.5">
         <Button size="sm" className="w-full" onClick={() => setXmlOpen(true)} title="View UI Lab data as XML">Show XML</Button>
         <Button size="sm" className="w-full" onClick={handleClearGallery} title="Clear gallery">Clear Gallery</Button>
@@ -1471,9 +1769,14 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
 
   const loadSlFolders = useCallback(async () => {
     try {
-      const res = await apiFetch<typeof slFolders>("/styles/folders?category=ui");
-      setSlFolders(res);
-      setStyleLibraryFolders(res.map((f) => ({ name: f.name, guidance_text: f.guidance_text })));
+      // Load both UI and general style folders so all user-created styles appear
+      const [uiRes, genRes] = await Promise.all([
+        apiFetch<typeof slFolders>("/styles/folders?category=ui"),
+        apiFetch<typeof slFolders>("/styles/folders?category=general"),
+      ]);
+      const combined = [...uiRes, ...genRes.filter((g) => !uiRes.some((u) => u.name === g.name))];
+      setSlFolders(combined);
+      setStyleLibraryFolders(combined.map((f) => ({ name: f.name, guidance_text: f.guidance_text })));
     } catch { /* */ }
   }, []);
 
@@ -1852,266 +2155,114 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   );
 
   // ---------------------------------------------------------------------------
-  // User Library tab — full folder + image browser
-  // ---------------------------------------------------------------------------
-
-  const [ulFolders, setUlFolders] = useState<{ name: string; image_count: number; thumbnail: string | null }[]>([]);
-  const [ulSelectedFolder, setUlSelectedFolder] = useState<string | null>(null);
-  const [ulImages, setUlImages] = useState<{ filename: string; data_url: string }[]>([]);
-  const [ulSelectedImage, setUlSelectedImage] = useState<string | null>(null);
-  const [ulPreview, setUlPreview] = useState<string | null>(null);
-  const ulFileInput = useRef<HTMLInputElement>(null);
-
-  const loadUlFolders = useCallback(async () => {
-    try {
-      const res = await apiFetch<typeof ulFolders>("/userlib/folders");
-      setUlFolders(res);
-    } catch { /* */ }
-  }, []);
-
-  useEffect(() => { loadUlFolders(); }, [loadUlFolders]);
-
-  const loadUlImages = useCallback(async (folder: string) => {
-    try {
-      const res = await apiFetch<{ filename: string; data_url: string }[]>(`/userlib/folders/${encodeURIComponent(folder)}/images`);
-      setUlImages(res);
-    } catch { setUlImages([]); }
-  }, []);
-
-  const handleUlSelectFolder = useCallback((name: string) => {
-    setUlSelectedFolder(name);
-    setUlSelectedImage(null);
-    loadUlImages(name);
-  }, [loadUlImages]);
-
-  const handleUlNewFolder = useCallback(async () => {
-    const name = window.prompt("New user library folder name:");
-    if (!name?.trim()) return;
-    try {
-      await apiFetch("/userlib/folders", { method: "POST", body: JSON.stringify({ name: name.trim() }) });
-      await loadUlFolders();
-      handleUlSelectFolder(name.trim());
-    } catch (e) { console.error(e); }
-  }, [loadUlFolders, handleUlSelectFolder]);
-
-  const handleUlDeleteFolder = useCallback(async () => {
-    if (!ulSelectedFolder) return;
-    if (!confirm(`Delete user folder "${ulSelectedFolder}" and all its images?`)) return;
-    try {
-      await apiFetch(`/userlib/folders/${encodeURIComponent(ulSelectedFolder)}`, { method: "DELETE" });
-      setUlSelectedFolder(null);
-      setUlImages([]);
-      await loadUlFolders();
-    } catch (e) { console.error(e); }
-  }, [ulSelectedFolder, loadUlFolders]);
-
-  const handleUlRenameFolder = useCallback(async () => {
-    if (!ulSelectedFolder) return;
-    const newName = window.prompt("Rename folder:", ulSelectedFolder);
-    if (!newName?.trim() || newName.trim() === ulSelectedFolder) return;
-    try {
-      await apiFetch(`/userlib/folders/${encodeURIComponent(ulSelectedFolder)}`, { method: "PATCH", body: JSON.stringify({ new_name: newName.trim() }) });
-      setUlSelectedFolder(newName.trim());
-      await loadUlFolders();
-    } catch (e) { console.error(e); }
-  }, [ulSelectedFolder, loadUlFolders]);
-
-  const handleUlAddImages = useCallback(() => {
-    if (!ulSelectedFolder) { addToast("Select or create a folder first.", "info"); return; }
-    ulFileInput.current?.click();
-  }, [ulSelectedFolder, addToast]);
-
-  const handleUlFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!ulSelectedFolder || !e.target.files?.length) return;
-    const items: { filename: string; data_url: string }[] = [];
-    for (const file of Array.from(e.target.files)) {
-      const dataUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader(); reader.onload = () => resolve(reader.result as string); reader.readAsDataURL(file);
-      });
-      items.push({ filename: file.name, data_url: dataUrl });
-    }
-    try {
-      await apiFetch(`/userlib/folders/${encodeURIComponent(ulSelectedFolder)}/images`, { method: "POST", body: JSON.stringify(items) });
-      loadUlImages(ulSelectedFolder);
-      loadUlFolders();
-    } catch (err) { console.error(err); }
-    e.target.value = "";
-  }, [ulSelectedFolder, loadUlImages, loadUlFolders]);
-
-  const handleUlRemoveImage = useCallback(async () => {
-    if (!ulSelectedFolder || !ulSelectedImage) return;
-    try {
-      await apiFetch(`/userlib/folders/${encodeURIComponent(ulSelectedFolder)}/images/${encodeURIComponent(ulSelectedImage)}`, { method: "DELETE" });
-      setUlSelectedImage(null);
-      loadUlImages(ulSelectedFolder);
-      loadUlFolders();
-    } catch (e) { console.error(e); }
-  }, [ulSelectedFolder, ulSelectedImage, loadUlImages, loadUlFolders]);
-
-  const handleUlPasteImage = useCallback(async () => {
-    if (!ulSelectedFolder) { addToast("Select a folder first", "info"); return; }
-    try {
-      const items = await navigator.clipboard.read();
-      for (const item of items) {
-        const imgType = item.types.find((t) => t.startsWith("image/"));
-        if (imgType) {
-          const blob = await item.getType(imgType);
-          const dataUrl = await new Promise<string>((resolve) => {
-            const reader = new FileReader(); reader.onload = () => resolve(reader.result as string); reader.readAsDataURL(blob);
-          });
-          await apiFetch(`/userlib/folders/${encodeURIComponent(ulSelectedFolder)}/images`, {
-            method: "POST", body: JSON.stringify([{ filename: `pasted_${Date.now()}.png`, data_url: dataUrl }]),
-          });
-          loadUlImages(ulSelectedFolder);
-          loadUlFolders();
-          addToast("Image pasted", "success");
-          return;
-        }
-      }
-      addToast("No image on clipboard", "info");
-    } catch { addToast("Could not read clipboard", "info"); }
-  }, [ulSelectedFolder, loadUlImages, loadUlFolders, addToast]);
-
-  const renderUserLibraryTab = () => (
-    <div className="flex h-full gap-0 overflow-hidden" style={{ background: "var(--color-background)" }}>
-      {/* Folder list */}
-      <div className="flex flex-col shrink-0" style={{ width: 210, borderRight: "1px solid var(--color-border)", background: "var(--color-card)" }}>
-        <div className="flex items-center gap-1.5 px-3 shrink-0" style={{ height: 36, borderBottom: "1px solid var(--color-border)" }}>
-          <span className="text-[11px] font-semibold uppercase tracking-wider flex-1" style={{ color: "var(--color-text-muted)" }}>User Folders</span>
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          {ulFolders.map((f) => (
-            <button key={f.name} onClick={() => handleUlSelectFolder(f.name)}
-              className="flex items-center gap-2.5 w-full px-3 py-2 text-left transition-colors cursor-pointer"
-              style={{ background: ulSelectedFolder === f.name ? "var(--color-hover)" : "transparent", color: ulSelectedFolder === f.name ? "var(--color-foreground)" : "var(--color-text-secondary)", border: "none", borderBottom: "1px solid var(--color-border)" }}>
-              {f.thumbnail ? (
-                <img src={f.thumbnail} alt="" className="shrink-0 rounded object-cover" style={{ width: 36, height: 36 }} />
-              ) : (
-                <div className="shrink-0 rounded flex items-center justify-center" style={{ width: 36, height: 36, background: "var(--color-hover)" }}>
-                  <FolderOpen className="h-4 w-4" style={{ color: "var(--color-text-muted)" }} />
-                </div>
-              )}
-              <div className="min-w-0 flex-1">
-                <div className="text-[12px] font-medium truncate">{f.name}</div>
-                <div className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>{f.image_count} image{f.image_count !== 1 ? "s" : ""}</div>
-              </div>
-            </button>
-          ))}
-          {ulFolders.length === 0 && (
-            <div className="px-3 py-6 text-center text-[11px]" style={{ color: "var(--color-text-muted)" }}>No user library folders yet</div>
-          )}
-        </div>
-        <div className="flex gap-1 px-2 py-2 shrink-0" style={{ borderTop: "1px solid var(--color-border)" }}>
-          <button onClick={handleUlNewFolder} className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-[11px] font-medium transition-colors cursor-pointer" style={{ background: "var(--color-accent)", color: "var(--color-foreground)", border: "none" }} title="New Folder">
-            <FolderPlus className="h-3.5 w-3.5" /> New
-          </button>
-          <button onClick={handleUlRenameFolder} disabled={!ulSelectedFolder} className="px-2 py-1.5 rounded text-[11px] transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed" style={{ background: "var(--color-hover)", color: "var(--color-text-secondary)", border: "none" }} title="Rename">
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
-          <button onClick={handleUlDeleteFolder} disabled={!ulSelectedFolder} className="px-2 py-1.5 rounded text-[11px] transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed" style={{ background: "var(--color-hover)", color: "var(--color-destructive, #e55)", border: "none" }} title="Delete">
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </div>
-
-      {/* Image grid */}
-      <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
-        <div className="flex items-center gap-2 px-3 shrink-0" style={{ height: 36, borderBottom: "1px solid var(--color-border)", background: "var(--color-card)" }}>
-          <span className="text-[11px] font-semibold uppercase tracking-wider shrink-0" style={{ color: "var(--color-text-muted)" }}>
-            {ulSelectedFolder ? `Images — ${ulSelectedFolder}` : "Select a folder"}
-          </span>
-          <span className="text-[10px] font-mono shrink-0" style={{ color: "var(--color-text-muted)" }}>{ulSelectedFolder ? `${ulImages.length}/50` : ""}</span>
-          <button onClick={handleUlAddImages} disabled={!ulSelectedFolder} className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shrink-0" style={{ background: "var(--color-accent)", color: "var(--color-foreground)", border: "none" }}>
-            <ImagePlus className="h-3.5 w-3.5" /> Add
-          </button>
-          <button onClick={handleUlRemoveImage} disabled={!ulSelectedImage} className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shrink-0" style={{ background: "var(--color-hover)", color: "var(--color-text-secondary)", border: "none" }}>
-            <X className="h-3.5 w-3.5" /> Remove
-          </button>
-          <div className="flex-1" />
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-3" onContextMenu={(e) => {
-          if (!ulSelectedFolder) return;
-          e.preventDefault();
-          const menuItems: CtxMenuItem[] = [
-            { label: "Add Images…", action: handleUlAddImages },
-            { label: "Paste Image", action: handleUlPasteImage },
-          ];
-          setCtxMenu({ x: e.clientX, y: e.clientY, items: menuItems });
-        }}>
-          {!ulSelectedFolder ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <FolderOpen className="mx-auto mb-3 h-12 w-12" style={{ color: "var(--color-text-muted)", opacity: 0.4 }} />
-                <p className="text-[13px]" style={{ color: "var(--color-text-muted)" }}>Select a user folder or create a new one</p>
-                <p className="text-[10px] mt-1" style={{ color: "var(--color-text-muted)" }}>Personal reference library for organizing your UI assets</p>
-              </div>
-            </div>
-          ) : ulImages.length === 0 ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <ImagePlus className="mx-auto mb-3 h-10 w-10" style={{ color: "var(--color-text-muted)", opacity: 0.4 }} />
-                <p className="text-[13px] mb-2" style={{ color: "var(--color-text-muted)" }}>No images in this folder</p>
-                <button onClick={handleUlAddImages} className="text-[12px] px-3 py-1.5 rounded cursor-pointer" style={{ background: "var(--color-accent)", color: "var(--color-foreground)", border: "none" }}>+ Add Images</button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {ulImages.map((img) => (
-                <div key={img.filename} className="relative group cursor-pointer rounded transition-all"
-                  style={{ width: 104, height: 104, border: ulSelectedImage === img.filename ? "2px solid var(--color-accent)" : "2px solid transparent" }}
-                  onClick={() => setUlSelectedImage(img.filename === ulSelectedImage ? null : img.filename)}
-                  onDoubleClick={() => setUlPreview(img.data_url)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setUlSelectedImage(img.filename);
-                    const menuItems: CtxMenuItem[] = [
-                      { label: "Preview", action: () => setUlPreview(img.data_url) },
-                      { label: "Delete Image", action: () => {
-                        apiFetch(`/userlib/folders/${encodeURIComponent(ulSelectedFolder!)}/images/${encodeURIComponent(img.filename)}`, { method: "DELETE" })
-                          .then(() => { setUlSelectedImage(null); loadUlImages(ulSelectedFolder!); loadUlFolders(); });
-                      }, danger: true },
-                    ];
-                    setCtxMenu({ x: e.clientX, y: e.clientY, items: menuItems });
-                  }}
-                  title={`${img.filename}\nDouble-click to preview`}>
-                  <img src={img.data_url} alt={img.filename} className="w-full h-full object-cover rounded" draggable={false} />
-                  <div className="absolute bottom-0 left-0 right-0 truncate text-center text-[8px] py-0.5 opacity-0 group-hover:opacity-100 transition-opacity rounded-b" style={{ background: "rgba(0,0,0,0.7)", color: "var(--color-text-muted)" }}>
-                    {img.filename}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <input ref={ulFileInput} type="file" accept="image/png,image/jpeg,image/jpg,image/bmp,image/webp" multiple className="hidden" onChange={handleUlFileChange} />
-
-      {ulPreview && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center" style={{ background: "rgba(0,0,0,0.85)" }} onClick={() => setUlPreview(null)}>
-          <img src={ulPreview} alt="Preview" className="max-w-[90vw] max-h-[90vh] object-contain rounded" onClick={(e) => e.stopPropagation()} />
-          <button onClick={() => setUlPreview(null)} className="absolute top-4 right-4 p-2 rounded-full cursor-pointer" style={{ background: "rgba(0,0,0,0.6)", color: "#fff", border: "none" }}>
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-      )}
-    </div>
-  );
-
-  // ---------------------------------------------------------------------------
-  // Main render
+  // Render
   // ---------------------------------------------------------------------------
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
-      {/* LEFT PANEL */}
       <div
         className="w-[400px] h-full shrink-0 overflow-y-auto p-3 space-y-2"
         style={{ borderRight: "1px solid var(--color-border)" }}
       >
-        {layout.order.map((sectionId) => {
+        {/* Global controls — always visible at top, same order for every mode */}
+        <div
+          className="px-3 py-2.5 rounded-[var(--radius-lg)] space-y-2"
+          style={{ background: "var(--color-card)", border: "1px solid var(--color-border)" }}
+        >
+          {/* Row 1: Mode */}
+          <div>
+            <div className="flex items-center gap-2">
+              <label className="text-[10px] font-semibold uppercase tracking-wider shrink-0 w-10" style={{ color: "var(--color-text-secondary)" }}>Mode</label>
+              <div className="flex-1 min-w-0">
+                <Select
+                  options={UI_MODE_OPTIONS}
+                  value={uiMode}
+                  onChange={(e) => setUiMode(e.target.value as "create" | "colorize" | "riff")}
+                  disabled={busy.any}
+                />
+              </div>
+            </div>
+            <p className="text-[9px] mt-0.5 pl-12 leading-snug" style={{ color: "var(--color-text-muted)" }}>
+              {uiMode === "create"
+                ? "Generate a brand-new UI element. Add a reference image for inspiration, or start from scratch."
+                : uiMode === "colorize"
+                  ? "Colorize a sketch or monochrome image — explore different color palettes and treatments."
+                  : "Take an existing icon or element and generate new ideas that respect its dimensions and structure."}
+            </p>
+          </div>
+          {/* Row 2: View + Count */}
+          <div className="flex items-center gap-2">
+            <label className="text-[10px] font-semibold uppercase tracking-wider shrink-0 w-10" style={{ color: "var(--color-text-secondary)" }}>View</label>
+            <div className="flex-1 min-w-0 flex gap-1">
+              <select
+                className="flex-1 px-2 py-1 text-xs rounded-[var(--radius-sm)]"
+                style={inputStyle}
+                value={useGrid ? "grid" : "single"}
+                onChange={(e) => setUseGrid(e.target.value === "grid")}
+                disabled={busy.any}
+              >
+                <option value="grid">Grid</option>
+                <option value="single">Single Image</option>
+              </select>
+              {useGrid && (
+                <select
+                  className="px-2 py-1 text-xs rounded-[var(--radius-sm)]"
+                  style={inputStyle}
+                  value={gridLayout}
+                  onChange={(e) => setGridLayout(e.target.value as "square" | "horizontal" | "vertical")}
+                  disabled={busy.any}
+                  title="Grid cell layout — Square (4×4), Horizontal (4×5 wide cells), Vertical (5×4 tall cells)"
+                >
+                  <option value="square">Square 4×4</option>
+                  <option value="horizontal">Wide 4×5</option>
+                  <option value="vertical">Tall 5×4</option>
+                </select>
+              )}
+            </div>
+            <div className="shrink-0">
+              <NumberStepper value={genCount} min={1} max={20} onChange={setGenCount} label="×" />
+            </div>
+          </div>
+          {/* Row 2b: Grid Intent (only when grid enabled) */}
+          {useGrid && (
+            <div className="flex items-center gap-2">
+              <label className="text-[10px] font-semibold uppercase tracking-wider shrink-0 w-10" style={{ color: "var(--color-text-secondary)" }}>Goal</label>
+              <div className="flex-1 min-w-0">
+                <select
+                  className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)]"
+                  style={inputStyle}
+                  value={gridIntent}
+                  onChange={(e) => setGridIntent(e.target.value as "ideas" | "animation")}
+                  disabled={busy.any}
+                  title="Many Ideas: generate diverse variations. Animation Sequence: generate frames of an animation."
+                >
+                  <option value="ideas">Many Ideas</option>
+                  <option value="animation">Animation Sequence</option>
+                </select>
+              </div>
+            </div>
+          )}
+          {/* Row 3: Style */}
+          <div className="flex items-center gap-2">
+            <label className="text-[10px] font-semibold uppercase tracking-wider shrink-0 w-10" style={{ color: "var(--color-text-secondary)" }}>Style</label>
+            <div className="flex-1 min-w-0">
+              <select
+                className="w-full px-2 py-1 text-xs rounded-[var(--radius-sm)] min-w-0 truncate"
+                style={{ ...inputStyle, maxWidth: "100%" }}
+                value={styleLibraryFolder}
+                onChange={(e) => setStyleLibraryFolder(e.target.value)}
+                title="Style folder for visual guidance"
+              >
+                <option value="">Default (Gemini)</option>
+                {styleLibraryFolders.map((f) => (
+                  <option key={f.name} value={f.name}>{f.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {effectiveOrder.map((sectionId) => {
           if (layout.hidden?.includes(sectionId)) return null;
           if (!isSectionRelevant(sectionId)) return null;
 
@@ -2119,7 +2270,10 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
           const canCollapse = !NON_COLLAPSIBLE.has(sectionId);
           const canToggle = TOGGLEABLE_SECTIONS.has(sectionId);
           const enabled = isSectionEnabled(sectionId);
-          const label = SECTION_LABELS[sectionId];
+          const label = sectionId === "generate"
+            ? (uiMode === "colorize" ? "Colorize Options" : uiMode === "riff" ? "Variation Options" : "Generate Options")
+            : sectionId === "refImage" && (uiMode === "colorize" || uiMode === "riff") ? "Source Image"
+            : SECTION_LABELS[sectionId];
           const sectionColor = getSectionColor("uilab", sectionId);
 
           const wrapSection = (children: ReactNode) => (
@@ -2191,10 +2345,8 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
 
           if (sectionId === "generate") return wrapSection(renderGenerateSection());
           if (sectionId === "refImage") return wrapSection(renderRefImageSection());
-          if (sectionId === "buttonLayout") return wrapSection(renderButtonLayoutSection());
           if (sectionId === "scrollbarParts") return wrapSection(renderScrollbarSection());
           if (sectionId === "charGen") return wrapSection(renderCharGenSection());
-          if (sectionId === "styleFusion") return wrapSection(renderStyleFusionSection());
           if (sectionId === "saveOptions") return wrapSection(renderSaveSection());
           return null;
         })}
@@ -2267,7 +2419,6 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
           Set Active Layout as Default
         </button>
 
-        <ThreeDGenSidebar getViewImages={getViewImagesForThreeD} toolLabel="UI" />
       </div>
 
       {/* RIGHT PANEL */}
@@ -2313,6 +2464,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
                   isFavorited={mainstageSrc ? isFavorited(mainstageSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
                   onToggleFavorite={mainstageSrc ? () => { const b64 = mainstageSrc.replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "uilab", label: "main", source: "viewer" }); } : undefined}
                 />
+                <ShareToArtTableButton imageB64={mainstageSrc} tool="uilab" prompt={prompt} />
                 <ArtDirectorWidget onOpenConfig={() => setArtDirectorConfigOpen(true)} />
               </div>
               {mainstageHistory.length > 0 && (
@@ -2342,6 +2494,10 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
               onRegenerate={handleGridRegenerate}
               onUpdateImage={handleGridUpdateImage}
               onSendToMainstage={handleSendToMainstage}
+              onSendToAnimation={(id) => {
+                const cell = galleryResults.find((r) => r.id === id);
+                if (cell) handleSendToAnimation(cell.image_b64);
+              }}
               editBusy={gridEditBusy}
               showStyleLibrary
               styleLibraryFolders={slFolders.map((f) => ({ name: f.name }))}
@@ -2355,12 +2511,23 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
                   addFavorite({ image_b64: b64, tool: "uilab", label: favLabel, prompt: "", source: "grid", width: w, height: h });
                 }
               }}
+              onNotify={addToast}
+            />
+          )}
+          {activeTab === "animation" && (
+            <AnimationPanel
+              frames={animFrames}
+              onFramesChange={setAnimFrames}
+              generating={busy.is("gen")}
+              onGenerate={handleGenerateAnimation}
+              onRegenerateFrame={handleRegenAnimFrame}
+              sourceImage={refImageB64}
+              onNotify={addToast}
             />
           )}
           {activeTab === "artboard" && <ArtboardCanvas />}
           {activeTab === "deepSearch" && <DeepSearchPanel onSendToArtboard={handleSendSearchToArtboard} isActivePage={active} />}
           {activeTab === "styleLib" && renderStyleLibraryTab()}
-          {activeTab === "userLib" && renderUserLibraryTab()}
           {isRefTab && (
             <ImageViewer
               src={refImages[activeTab] || null}

@@ -34,9 +34,14 @@ export function ArtboardCanvas() {
     joinRoom, leaveRoom,
   } = useArtboard();
   const { addToast } = useToastContext();
-  const { sendCursor, setCredentials } = useArtboardSync();
+  const { send: wsSend, sendCursor, setCredentials } = useArtboardSync();
   const enhancer = useImageEnhance();
   const { zoom, panX, panY } = viewport;
+  const worldRef = useRef<HTMLDivElement>(null);
+  const dragAccumRef = useRef({ dx: 0, dy: 0 });
+  const dragWsThrottleRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const resizeAccumRef = useRef({ w: 0, h: 0 });
+  const cursorOverlayRef = useRef<HTMLDivElement>(null);
 
   const [annotationsByBoard, setAnnotationsByBoard] = useState<Record<string, Annotation[]>>({});
   const annotations = annotationsByBoard[activeBoardId] ?? [];
@@ -91,7 +96,35 @@ export function ArtboardCanvas() {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef(viewport);
+  const zoomTextRef = useRef<HTMLSpanElement>(null);
+  const viewportCommitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => { viewportRef.current = viewport; }, [viewport]);
+
+  /** Apply viewport changes directly to the DOM — zero React re-renders. */
+  const applyViewportDOM = useCallback((v: { zoom: number; panX: number; panY: number }) => {
+    viewportRef.current = v;
+    const wEl = worldRef.current;
+    if (wEl) wEl.style.transform = `translate(-50%, -50%) translate(${v.panX}px, ${v.panY}px) scale(${v.zoom})`;
+    const cEl = containerRef.current;
+    if (cEl) {
+      const d = DOT_SPACING * v.zoom;
+      cEl.style.backgroundSize = `${d}px ${d}px`;
+      cEl.style.backgroundPosition = `${v.panX}px ${v.panY}px`;
+    }
+    const zt = zoomTextRef.current;
+    if (zt) zt.textContent = `${Math.round(v.zoom * 100)}%`;
+  }, []);
+
+  /** Sync viewportRef to React state (triggers one re-render for settled UI). */
+  const commitViewport = useCallback(() => {
+    setViewport(viewportRef.current);
+  }, [setViewport]);
+
+  /** Debounced commit for rapid-fire events like scroll wheel. */
+  const scheduleViewportCommit = useCallback(() => {
+    if (viewportCommitTimer.current) clearTimeout(viewportCommitTimer.current);
+    viewportCommitTimer.current = setTimeout(() => { commitViewport(); viewportCommitTimer.current = null; }, 150);
+  }, [commitViewport]);
 
   const [dragging, setDragging] = useState<{ ids: string[]; startX: number; startY: number; moved: boolean } | null>(null);
   const dragLastRef = useRef<{ x: number; y: number } | null>(null);
@@ -162,31 +195,31 @@ export function ArtboardCanvas() {
       const r = el.getBoundingClientRect();
       const v = viewportRef.current;
 
+      let next: { zoom: number; panX: number; panY: number };
       if (e.ctrlKey) {
-        // Pinch-to-zoom (trackpad)
         const cx = r.width / 2, cy = r.height / 2;
         const mx = e.clientX - r.left, my = e.clientY - r.top;
         const wx = (mx - cx - v.panX) / v.zoom, wy = (my - cy - v.panY) / v.zoom;
         const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
         const nz = Math.min(20, Math.max(0.05, v.zoom * f));
-        setViewport({ zoom: nz, panX: mx - cx - wx * nz, panY: my - cy - wy * nz });
+        next = { zoom: nz, panX: mx - cx - wx * nz, panY: my - cy - wy * nz };
       } else if (Math.abs(e.deltaX) > Math.abs(e.deltaY) || (e.deltaX !== 0 && !e.shiftKey)) {
-        // Trackpad two-finger swipe → pan
-        setViewport({ zoom: v.zoom, panX: v.panX - e.deltaX, panY: v.panY - e.deltaY });
+        next = { zoom: v.zoom, panX: v.panX - e.deltaX, panY: v.panY - e.deltaY };
       } else {
-        // Mouse scroll wheel → zoom-to-cursor
         const cx = r.width / 2, cy = r.height / 2;
         const mx = e.clientX - r.left, my = e.clientY - r.top;
         const wx = (mx - cx - v.panX) / v.zoom, wy = (my - cy - v.panY) / v.zoom;
         const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
         const nz = Math.min(20, Math.max(0.05, v.zoom * f));
-        setViewport({ zoom: nz, panX: mx - cx - wx * nz, panY: my - cy - wy * nz });
+        next = { zoom: nz, panX: mx - cx - wx * nz, panY: my - cy - wy * nz };
       }
+      applyViewportDOM(next);
+      scheduleViewportCommit();
       markViewportTouched();
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [setViewport, markViewportTouched]);
+  }, [applyViewportDOM, scheduleViewportCommit, markViewportTouched]);
 
   // ---------------------------------------------------------------------------
   // Middle-mouse pan
@@ -210,7 +243,7 @@ export function ArtboardCanvas() {
       middlePanRef.current = { lastX: lx, lastY: ly };
       if (dx === 0 && dy === 0) return;
       const v = viewportRef.current;
-      setViewport({ zoom: v.zoom, panX: v.panX + dx, panY: v.panY + dy });
+      applyViewportDOM({ zoom: v.zoom, panX: v.panX + dx, panY: v.panY + dy });
       markViewportTouched();
     };
 
@@ -253,6 +286,7 @@ export function ArtboardCanvas() {
         if (!middlePanActiveRef.current) return;
         middlePanActiveRef.current = false;
         setIsMiddlePanning(false);
+        commitViewport();
         cleanup();
       };
 
@@ -276,7 +310,7 @@ export function ArtboardCanvas() {
       el.removeEventListener("pointerdown", onPointerDown);
       el.removeEventListener("mousedown", onMouseDown);
     };
-  }, [setViewport, markViewportTouched]);
+  }, [applyViewportDOM, commitViewport, markViewportTouched]);
 
   // ---------------------------------------------------------------------------
   // Space + drag pan (hold Space, then left-click drag to pan)
@@ -306,15 +340,15 @@ export function ArtboardCanvas() {
     const onMove = (e: MouseEvent) => {
       const last = spacePanRef.current;
       const v = viewportRef.current;
-      setViewport({ zoom: v.zoom, panX: v.panX + e.clientX - last.lastX, panY: v.panY + e.clientY - last.lastY });
+      applyViewportDOM({ zoom: v.zoom, panX: v.panX + e.clientX - last.lastX, panY: v.panY + e.clientY - last.lastY });
       spacePanRef.current = { lastX: e.clientX, lastY: e.clientY };
       markViewportTouched();
     };
-    const onUp = () => setSpacePanning(false);
+    const onUp = () => { commitViewport(); setSpacePanning(false); };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-  }, [spacePanning, setViewport, markViewportTouched]);
+  }, [spacePanning, applyViewportDOM, commitViewport, markViewportTouched]);
 
   // ---------------------------------------------------------------------------
   // Fit viewport to show all items
@@ -324,7 +358,7 @@ export function ArtboardCanvas() {
 
   const fitToExtents = useCallback(() => {
     const cur = itemsRef.current;
-    if (cur.length === 0) { setViewport({ zoom: 1, panX: 0, panY: 0 }); return; }
+    if (cur.length === 0) { const v = { zoom: 1, panX: 0, panY: 0 }; applyViewportDOM(v); setViewport(v); return; }
     const el = containerRef.current; if (!el) return;
     const r = el.getBoundingClientRect();
     if (r.width === 0 || r.height === 0) return;
@@ -346,8 +380,10 @@ export function ArtboardCanvas() {
     const nz = Math.min(scaleX, scaleY, 2);
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
-    setViewport({ zoom: nz, panX: -cx * nz, panY: -cy * nz });
-  }, [setViewport]);
+    const v = { zoom: nz, panX: -cx * nz, panY: -cy * nz };
+    applyViewportDOM(v);
+    setViewport(v);
+  }, [applyViewportDOM, setViewport]);
 
   // Auto-fit only on first visit; subsequent visits restore the previous viewport
   useEffect(() => {
@@ -361,14 +397,17 @@ export function ArtboardCanvas() {
   const screenToWorld = useCallback((cX: number, cY: number) => {
     const el = containerRef.current; if (!el) return { wx: 0, wy: 0 };
     const r = el.getBoundingClientRect();
-    return { wx: (cX - r.left - r.width / 2 - panX) / zoom, wy: (cY - r.top - r.height / 2 - panY) / zoom };
-  }, [panX, panY, zoom]);
+    const v = viewportRef.current;
+    return { wx: (cX - r.left - r.width / 2 - v.panX) / v.zoom, wy: (cY - r.top - r.height / 2 - v.panY) / v.zoom };
+  }, []);
+
+  const sortedItemsDesc = useMemo(() => [...items].sort((a, b) => b.zIndex - a.zIndex), [items]);
 
   const hitTest = useCallback((wx: number, wy: number): ArtboardItem | null => {
-    for (const it of [...items].sort((a, b) => b.zIndex - a.zIndex))
+    for (const it of sortedItemsDesc)
       if (wx >= it.x && wx <= it.x + it.w && wy >= it.y && wy <= it.y + it.h) return it;
     return null;
-  }, [items]);
+  }, [sortedItemsDesc]);
 
   // ---------------------------------------------------------------------------
   // Mouse handlers (drag items / marquee select)
@@ -436,6 +475,7 @@ export function ArtboardCanvas() {
       else if (!next.has(hit.id)) { next = new Set([hit.id]); setSelection(next); }
       setDragging({ ids: [...next], startX: e.clientX, startY: e.clientY, moved: false });
       dragLastRef.current = { x: e.clientX, y: e.clientY };
+      dragAccumRef.current = { dx: 0, dy: 0 };
     } else {
       if (!e.shiftKey) clearSelection();
       setMarquee({ sx: e.clientX, sy: e.clientY, cx: e.clientX, cy: e.clientY });
@@ -451,17 +491,77 @@ export function ArtboardCanvas() {
     if (dragging) {
       const last = dragLastRef.current; if (!last) return;
       if (Math.hypot(e.clientX - dragging.startX, e.clientY - dragging.startY) <= DRAG_THRESHOLD) return;
-      if (!dragging.moved) { setDragging((d) => d ? { ...d, moved: true } : null); dragLastRef.current = { x: e.clientX, y: e.clientY }; return; }
-      moveItems(dragging.ids, (e.clientX - last.x) / zoom, (e.clientY - last.y) / zoom);
+      if (!dragging.moved) {
+        setDragging((d) => d ? { ...d, moved: true } : null);
+        dragLastRef.current = { x: e.clientX, y: e.clientY };
+        if (!dragWsThrottleRef.current && mode === "shared") {
+          const ids = dragging.ids;
+          let sentDx = 0, sentDy = 0;
+          dragWsThrottleRef.current = setInterval(() => {
+            const { dx, dy } = dragAccumRef.current;
+            const ddx = dx - sentDx, ddy = dy - sentDy;
+            if (ddx !== 0 || ddy !== 0) {
+              wsSend({ op: "delta", type: "move", ids, dx: ddx, dy: ddy });
+              sentDx = dx; sentDy = dy;
+            }
+          }, 33);
+        }
+        return;
+      }
+      const z = viewportRef.current.zoom;
+      const ddx = (e.clientX - last.x) / z;
+      const ddy = (e.clientY - last.y) / z;
+      dragAccumRef.current.dx += ddx;
+      dragAccumRef.current.dy += ddy;
+      const wEl = worldRef.current;
+      if (wEl) {
+        for (const id of dragging.ids) {
+          const el = wEl.querySelector(`[data-item-id="${id}"]`) as HTMLElement | null;
+          if (el) el.style.translate = `${dragAccumRef.current.dx}px ${dragAccumRef.current.dy}px`;
+        }
+      }
       dragLastRef.current = { x: e.clientX, y: e.clientY };
     } else if (marquee) { setMarquee((m) => m ? { ...m, cx: e.clientX, cy: e.clientY } : null); }
-    else if (resizing) { resizeItem(resizing.id, Math.max(20, resizing.origW + (e.clientX - resizing.startX) / zoom), Math.max(20, resizing.origH + (e.clientY - resizing.startY) / zoom)); }
-  }, [dragging, marquee, resizing, cropMode, cropDrawing, cropRect, moveItems, resizeItem, zoom, screenToWorld]);
+    else if (resizing) {
+      const z = viewportRef.current.zoom;
+      const nw = Math.max(20, resizing.origW + (e.clientX - resizing.startX) / z);
+      const nh = Math.max(20, resizing.origH + (e.clientY - resizing.startY) / z);
+      resizeAccumRef.current = { w: nw, h: nh };
+      const wEl = worldRef.current;
+      if (wEl) {
+        const el = wEl.querySelector(`[data-item-id="${resizing.id}"]`) as HTMLElement | null;
+        if (el) { el.style.width = `${nw}px`; el.style.height = `${nh}px`; }
+      }
+    }
+  }, [dragging, marquee, resizing, cropMode, cropDrawing, cropRect, screenToWorld, mode, wsSend]);
 
   const handleMouseUp = useCallback((e: RME | MouseEvent) => {
     if (e.button !== 0) return;
     if (cropDrawing) { setCropDrawing(false); return; }
-    if (dragging && !dragging.moved && dragging.ids.length === 1) setSelection(new Set([dragging.ids[0]]));
+    if (dragging) {
+      if (dragWsThrottleRef.current) { clearInterval(dragWsThrottleRef.current); dragWsThrottleRef.current = null; }
+      if (!dragging.moved && dragging.ids.length === 1) setSelection(new Set([dragging.ids[0]]));
+      const { dx, dy } = dragAccumRef.current;
+      if (dx !== 0 || dy !== 0) moveItems(dragging.ids, dx, dy);
+      const wEl = worldRef.current;
+      if (wEl) {
+        for (const id of dragging.ids) {
+          const el = wEl.querySelector(`[data-item-id="${id}"]`) as HTMLElement | null;
+          if (el) el.style.translate = "";
+        }
+      }
+      dragAccumRef.current = { dx: 0, dy: 0 };
+    }
+    if (resizing) {
+      const { w, h } = resizeAccumRef.current;
+      if (w > 0 && h > 0) resizeItem(resizing.id, w, h);
+      const wEl = worldRef.current;
+      if (wEl) {
+        const el = wEl.querySelector(`[data-item-id="${resizing.id}"]`) as HTMLElement | null;
+        if (el) { el.style.width = ""; el.style.height = ""; }
+      }
+      resizeAccumRef.current = { w: 0, h: 0 };
+    }
     if (marquee) {
       const w1 = screenToWorld(Math.min(marquee.sx, marquee.cx), Math.min(marquee.sy, marquee.cy));
       const w2 = screenToWorld(Math.max(marquee.sx, marquee.cx), Math.max(marquee.sy, marquee.cy));
@@ -473,7 +573,7 @@ export function ArtboardCanvas() {
       setMarquee(null);
     }
     setDragging(null); dragLastRef.current = null; setResizing(null);
-  }, [cropDrawing, dragging, marquee, items, selection, screenToWorld, setSelection]);
+  }, [cropDrawing, dragging, marquee, resizing, items, selection, screenToWorld, setSelection, moveItems, resizeItem]);
 
   useEffect(() => {
     if (!dragging && !marquee && !resizing && !cropDrawing) return;
@@ -486,6 +586,7 @@ export function ArtboardCanvas() {
   const handleResizeStart = useCallback((e: RME, item: ArtboardItem) => {
     e.stopPropagation(); e.preventDefault();
     setResizing({ id: item.id, startX: e.clientX, startY: e.clientY, origW: item.w, origH: item.h });
+    resizeAccumRef.current = { w: item.w, h: item.h };
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -760,9 +861,8 @@ export function ArtboardCanvas() {
   const sortedItems = useMemo(() => [...items].sort((a, b) => a.zIndex - b.zIndex), [items]);
   const grabbing = Boolean(dragging?.moved || isMiddlePanning || spacePanning);
 
-  // Remote cursors -- smooth interpolation via requestAnimationFrame
+  // Remote cursors -- smooth interpolation via requestAnimationFrame (DOM-only, no React state)
   const smoothCursorsRef = useRef<Map<string, { x: number; y: number; tx: number; ty: number; color: string; name: string; lastUpdate: number }>>(new Map());
-  const [smoothCursors, setSmoothCursors] = useState<{ name: string; color: string; x: number; y: number; opacity: number }[]>([]);
 
   // Sync target positions from incoming cursor data
   useEffect(() => {
@@ -775,7 +875,7 @@ export function ArtboardCanvas() {
     smoothCursorsRef.current.forEach((_, key) => { if (!remoteCursors.has(key)) smoothCursorsRef.current.delete(key); });
   }, [remoteCursors]);
 
-  // Animation loop for smooth cursor movement
+  // Animation loop for smooth cursor movement — direct DOM manipulation (no React setState)
   useEffect(() => {
     if (mode !== "shared") return;
     let prevTime = performance.now();
@@ -784,17 +884,37 @@ export function ArtboardCanvas() {
       const dt = Math.min((time - prevTime) / 1000, 0.1);
       prevTime = time;
       const now = Date.now();
-      const arr: { name: string; color: string; x: number; y: number; opacity: number }[] = [];
-      smoothCursorsRef.current.forEach((c) => {
-        c.x = expDecay(c.x, c.tx, CURSOR_SMOOTH_HALFLIFE, dt);
-        c.y = expDecay(c.y, c.ty, CURSOR_SMOOTH_HALFLIFE, dt);
-        const age = now - c.lastUpdate;
-        if (age < CURSOR_FADE_MS) {
-          const opacity = age > CURSOR_FADE_MS - 1000 ? (CURSOR_FADE_MS - age) / 1000 : 1;
-          arr.push({ name: c.name, color: c.color, x: c.x, y: c.y, opacity });
+      const overlay = cursorOverlayRef.current;
+      if (overlay) {
+        let idx = 0;
+        smoothCursorsRef.current.forEach((c) => {
+          c.x = expDecay(c.x, c.tx, CURSOR_SMOOTH_HALFLIFE, dt);
+          c.y = expDecay(c.y, c.ty, CURSOR_SMOOTH_HALFLIFE, dt);
+          const age = now - c.lastUpdate;
+          if (age < CURSOR_FADE_MS) {
+            const opacity = age > CURSOR_FADE_MS - 1000 ? (CURSOR_FADE_MS - age) / 1000 : 1;
+            let el = overlay.children[idx] as HTMLDivElement | undefined;
+            if (!el) {
+              el = document.createElement("div");
+              el.style.cssText = "position:absolute;pointer-events:none;z-index:999999;";
+              el.innerHTML = '<svg width="16" height="20" viewBox="0 0 16 20" fill="none" style="filter:drop-shadow(0 1px 2px rgba(0,0,0,0.5))"><path d="M0 0L16 12L8 12L4 20L0 0Z"/></svg><span style="position:absolute;left:14px;top:12px;font-size:9px;font-weight:500;padding:0 4px 1px;border-radius:3px;white-space:nowrap;color:#fff"></span>';
+              overlay.appendChild(el);
+            }
+            el.style.left = c.x + "px";
+            el.style.top = c.y + "px";
+            el.style.opacity = String(opacity);
+            el.style.display = "";
+            const path = el.querySelector("path");
+            if (path) path.setAttribute("fill", c.color);
+            const span = el.querySelector("span") as HTMLElement | null;
+            if (span) { span.style.background = c.color; span.textContent = c.name; }
+            idx++;
+          }
+        });
+        for (let i = idx; i < overlay.children.length; i++) {
+          (overlay.children[i] as HTMLElement).style.display = "none";
         }
-      });
-      setSmoothCursors(arr);
+      }
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
@@ -921,11 +1041,11 @@ export function ArtboardCanvas() {
       {/* Canvas */}
       <div ref={containerRef} className="flex-1 relative overflow-hidden select-none outline-none" style={{ backgroundImage: "radial-gradient(circle, rgba(255,255,255,0.1) 1px, transparent 1px)", backgroundSize: `${ds}px ${ds}px`, backgroundPosition: `${panX}px ${panY}px`, cursor: spacePanning || isMiddlePanning ? "grabbing" : spaceHeld ? "grab" : grabbing ? "grabbing" : cropMode ? "crosshair" : annotationTool && annotationVisible ? "crosshair" : "default" }} onMouseDown={(e) => handleMouseDown(e)} onContextMenu={handleContextMenu} tabIndex={0} onMouseMove={mode === "shared" ? (e) => { const w = screenToWorld(e.clientX, e.clientY); sendCursor(w.wx, w.wy); } : undefined}>
         {/* World-space container */}
-        <div style={{ position: "absolute", left: "50%", top: "50%", transform: `translate(-50%, -50%) translate(${panX}px, ${panY}px) scale(${zoom})`, pointerEvents: "none" }}>
+        <div ref={worldRef} style={{ position: "absolute", left: "50%", top: "50%", transform: `translate(-50%, -50%) translate(${panX}px, ${panY}px) scale(${zoom})`, pointerEvents: "none" }}>
           {sortedItems.map((item) => {
             const isSel = selection.has(item.id);
             return (
-              <div key={item.id} style={{ position: "absolute", left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: "auto", outline: isSel ? "2px dashed rgba(80,160,255,0.9)" : "none", outlineOffset: 2, boxShadow: isSel ? "0 0 12px rgba(80,160,255,0.25)" : "none", cursor: grabbing ? "grabbing" : "grab" }}
+              <div key={item.id} data-item-id={item.id} style={{ position: "absolute", left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: "auto", outline: isSel ? "2px dashed rgba(80,160,255,0.9)" : "none", outlineOffset: 2, boxShadow: isSel ? "0 0 12px rgba(80,160,255,0.25)" : "none", cursor: grabbing ? "grabbing" : "grab" }}
                 onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, item); }}
                 onDoubleClick={() => { if (item.type === "text") setEditingText(item.id); }}>
                 {item.type === "image" && (
@@ -961,15 +1081,8 @@ export function ArtboardCanvas() {
             lineWidth={annotationLineWidth}
           />
 
-          {/* Remote cursors (smoothly interpolated via expDecay) */}
-          {smoothCursors.map((c) => (
-            <div key={c.name} style={{ position: "absolute", left: c.x, top: c.y, pointerEvents: "none", opacity: c.opacity, zIndex: 999999 }}>
-              <svg width="16" height="20" viewBox="0 0 16 20" fill="none" style={{ filter: `drop-shadow(0 1px 2px rgba(0,0,0,0.5))` }}>
-                <path d="M0 0L16 12L8 12L4 20L0 0Z" fill={c.color} />
-              </svg>
-              <span className="text-[9px] font-medium px-1 py-0.5 rounded whitespace-nowrap" style={{ position: "absolute", left: 14, top: 12, background: c.color, color: "#fff" }}>{c.name}</span>
-            </div>
-          ))}
+          {/* Remote cursors — DOM-managed by RAF loop via cursorOverlayRef */}
+          <div ref={cursorOverlayRef} />
         </div>
 
         {/* Marquee selection rectangle */}
@@ -1017,7 +1130,7 @@ export function ArtboardCanvas() {
 
         {/* Info bar */}
         <div className="absolute bottom-2 left-3 flex items-center gap-2 px-2.5 py-1 rounded-md" style={{ background: "rgba(0,0,0,0.5)", zIndex: 10 }}>
-          <span className="text-[10px] font-mono" style={{ color: "rgba(255,255,255,0.5)" }}>{Math.round(zoom * 100)}%</span>
+          <span ref={zoomTextRef} className="text-[10px] font-mono" style={{ color: "rgba(255,255,255,0.5)" }}>{Math.round(zoom * 100)}%</span>
           <span className="text-[10px] font-mono" style={{ color: "rgba(255,255,255,0.35)" }}>{items.length} item{items.length !== 1 ? "s" : ""}{selection.size > 0 ? ` \u00b7 ${selection.size} selected` : ""}</span>
           {items.length > 0 && (
             <button

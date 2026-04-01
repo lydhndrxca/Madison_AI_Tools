@@ -28,13 +28,14 @@ import { BrainstormPage } from "./components/tools/brainstorm/BrainstormPage";
 import { WritingRoomPage } from "./components/tools/writingroom/WritingRoomPage";
 import { HelpPage } from "./components/tools/help/HelpPage";
 import { ArtboardSessionRegister } from "./components/session/ArtboardSessionRegister";
+import { ArtTablePage } from "./components/tools/arttable/ArtTablePage";
 
-export type PageId = "style-library" | "prompt-builder" | "generated-images" | "favorites" | "gemini" | "multiview" | "character" | "weapon" | "prop" | "environment" | "uilab" | "3d" | "transcripts" | "brainstorm" | "writingroom" | "help";
+export type PageId = "style-library" | "prompt-builder" | "generated-images" | "favorites" | "gemini" | "multiview" | "character" | "weapon" | "prop" | "environment" | "uilab" | "arttable" | "3d" | "transcripts" | "brainstorm" | "writingroom" | "help";
 
 function AppInner() {
   const [activePage, setActivePage] = useState<PageId>("character");
   const { addToast } = useToastContext();
-  const VALID_PAGES = new Set<string>(["style-library", "prompt-builder", "generated-images", "favorites", "gemini", "multiview", "character", "weapon", "prop", "environment", "uilab", "3d", "transcripts", "brainstorm", "writingroom", "help"]);
+  const VALID_PAGES = new Set<string>(["style-library", "prompt-builder", "generated-images", "favorites", "gemini", "multiview", "character", "weapon", "prop", "environment", "uilab", "arttable", "3d", "transcripts", "brainstorm", "writingroom", "help"]);
   const setPage = useCallback((p: string) => { if (VALID_PAGES.has(p)) setActivePage(p as PageId); }, []);
 
   useEffect(() => {
@@ -58,6 +59,7 @@ function AppInner() {
         <div className="h-full" style={{ display: activePage === "prop" ? "contents" : "none" }}><PropLabWrapper /></div>
         <div className="h-full" style={{ display: activePage === "environment" ? "contents" : "none" }}><EnvironmentLabWrapper /></div>
         <div className="h-full" style={{ display: activePage === "uilab" ? "contents" : "none" }}><UILabWrapper /></div>
+        <div className="h-full" style={{ display: activePage === "arttable" ? "contents" : "none" }}><ArtTablePage /></div>
         <div className="h-full" style={{ display: activePage === "transcripts" ? "contents" : "none" }}><TranscriptsPage /></div>
         <div className="h-full" style={{ display: activePage === "3d" ? "contents" : "none" }}><Suspense fallback={<div className="flex items-center justify-center h-full text-neutral-500">Loading 3D tools...</div>}><ThreeDGenWrapper visible={activePage === "3d"} /></Suspense></div>
         <div className="h-full" style={{ display: activePage === "brainstorm" ? "contents" : "none" }}><BrainstormPage /></div>

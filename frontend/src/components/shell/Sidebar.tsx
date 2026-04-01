@@ -43,6 +43,7 @@ const TOOL_ITEMS: NavItem[] = [
   { id: "prop", label: "AI Prop Lab", icon: Package },
   { id: "weapon", label: "AI Weapon Lab", icon: Crosshair },
   { id: "environment", label: "AI Environment Lab", icon: Mountain },
+  { id: "arttable", label: "Art Table", icon: PenTool },
   { id: "3d", label: "3D GEN AI", icon: Box },
   { id: "gemini", label: "Default Gemini", icon: Sparkles },
   { id: "multiview", label: "Multiview", icon: Image },

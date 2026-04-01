@@ -183,8 +183,20 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
     }
     try {
       const json = JSON.stringify(session);
-      const saved = await window.electronAPI?.saveSession(json);
-      if (saved) onToast?.("Session saved", "success");
+      if (window.electronAPI?.saveSession) {
+        const saved = await window.electronAPI.saveSession(json);
+        if (saved) onToast?.("Session saved", "success");
+      } else {
+        // Browser fallback: download as a JSON file
+        const blob = new Blob([json], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `madison-session-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        onToast?.("Session saved (downloaded)", "success");
+      }
     } catch (err) {
       console.error("[Session] Save failed:", err);
       onToast?.("Failed to save session", "error");
@@ -193,9 +205,78 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
 
   const triggerSave = useCallback(() => { doSaveSession(); }, [doSaveSession]);
 
+  const applySession = useCallback((data: string) => {
+    try {
+      const session = JSON.parse(data) as Record<string, unknown>;
+      if (typeof session.activePage === "string") {
+        onSetActivePage(session.activePage);
+      }
+
+      // Build a map of saved session keys grouped by tool prefix
+      // (e.g., "uilab-abc123" → prefix "uilab").  This lets us match
+      // saved data even when project UIDs differ between save & load.
+      const savedByPrefix = new Map<string, { key: string; data: unknown }[]>();
+      for (const key of Object.keys(session)) {
+        if (key.startsWith("_") || key === "activePage") continue;
+        const dash = key.indexOf("-");
+        const prefix = dash > 0 ? key.slice(0, dash) : key;
+        if (!savedByPrefix.has(prefix)) savedByPrefix.set(prefix, []);
+        savedByPrefix.get(prefix)!.push({ key, data: session[key] });
+      }
+
+      // Group current registry entries by the same prefix
+      const registeredByPrefix = new Map<string, { id: string; set: StateSetter }[]>();
+      for (const [id, { set }] of registryRef.current) {
+        const dash = id.indexOf("-");
+        const prefix = dash > 0 ? id.slice(0, dash) : id;
+        if (!registeredByPrefix.has(prefix)) registeredByPrefix.set(prefix, []);
+        registeredByPrefix.get(prefix)!.push({ id, set });
+      }
+
+      // Match saved entries to registered entries by prefix + position
+      for (const [prefix, registered] of registeredByPrefix) {
+        const saved = savedByPrefix.get(prefix);
+        if (!saved) continue;
+        for (let i = 0; i < registered.length && i < saved.length; i++) {
+          registered[i].set(saved[i].data);
+        }
+      }
+
+      onToast?.("Session loaded", "success");
+    } catch (err) {
+      console.error("[Session] Load failed:", err);
+      onToast?.("Failed to load session", "error");
+    }
+  }, [onSetActivePage, onToast]);
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   const triggerOpen = useCallback(() => {
-    window.electronAPI?.menuOpenSession();
-  }, []);
+    if (window.electronAPI?.menuOpenSession) {
+      window.electronAPI.menuOpenSession();
+    } else {
+      // Browser fallback: file picker
+      if (!fileInputRef.current) {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".json";
+        input.style.display = "none";
+        input.addEventListener("change", () => {
+          const file = input.files?.[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = () => {
+            if (typeof reader.result === "string") applySession(reader.result);
+          };
+          reader.readAsText(file);
+          input.value = "";
+        });
+        document.body.appendChild(input);
+        fileInputRef.current = input;
+      }
+      fileInputRef.current.click();
+    }
+  }, [applySession]);
 
   useEffect(() => {
     if (!window.electronAPI?.onRequestSave) return;
@@ -207,23 +288,9 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
 
   useEffect(() => {
     if (!window.electronAPI?.onSessionLoaded) return;
-    const unsub = window.electronAPI.onSessionLoaded((data: string) => {
-      try {
-        const session = JSON.parse(data) as Record<string, unknown>;
-        if (typeof session.activePage === "string") {
-          onSetActivePage(session.activePage);
-        }
-        for (const [id, { set }] of registryRef.current) {
-          if (session[id] !== undefined) set(session[id]);
-        }
-        onToast?.("Session loaded", "success");
-      } catch (err) {
-        console.error("[Session] Load failed:", err);
-        onToast?.("Failed to load session", "error");
-      }
-    });
+    const unsub = window.electronAPI.onSessionLoaded((data: string) => applySession(data));
     return unsub;
-  }, [onSetActivePage, onToast]);
+  }, [applySession]);
 
   return (
     <SessionContext.Provider value={{ register, unregister, clearAll, triggerSave, triggerOpen, templates, saveTemplate, loadTemplate, deleteTemplate, renameTemplate }}>

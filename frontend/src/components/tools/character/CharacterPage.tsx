@@ -20,6 +20,7 @@ import { createHistoryEntry, pushHistory, clearHistory as clearHist, createImage
 import type { HistoryEntry, ImageRecord, HistorySettings } from "@/lib/imageHistory";
 import { XmlModal } from "@/components/shared/XmlModal";
 import { ArtDirectorWidget } from "@/components/shared/ArtDirectorWidget";
+import { ShareToArtTableButton } from "@/components/shared/ShareToArtTableButton";
 import { ThreeDGenSidebar } from "@/components/shared/ThreeDGenSidebar";
 import type { ViewImage } from "@/components/shared/ThreeDGenSidebar";
 import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
@@ -550,6 +551,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
   const stableId = projectUid ?? String(instanceId);
   const layoutStorageKey = `madison-character-layout-${stableId}`;
   const sessionKey = `character-${stableId}`;
+  const sessionLoadingRef = useRef(false);
   const [tabs, setTabs] = useState<TabDef[]>(BUILTIN_TABS);
   const [activeTab, setActiveTab] = useState("main");
   const busy = useBusySet();
@@ -850,6 +852,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
   }, [instanceId, clearAllState, tabs, activeTab, description, editPrompt, age, race, gender, build, attributes, bible, costume, prodStylePresets, tonePresets, costumeStylePresets, materialPresets, hwDetailPresets, originPresets, sectionsOpen, lockedSections, sectionEnabled, extractTargets, extractMode, styleFusion, envPlacement, styleLibraryFolder, genCount, viewGenCount, modelId, editModel, multiviewModel, addToast]);
 
   useEffect(() => {
+    if (sessionLoadingRef.current) return;
     if (defaultModelId && !modelId) setModelId(defaultModelId);
   }, [defaultModelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -860,6 +863,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
   }, []);
 
   useEffect(() => {
+    if (sessionLoadingRef.current) return;
     if (models.length === 0) return;
     setEditModel((em) => {
       if (em && models.some((m) => m.id === em)) return em;
@@ -869,6 +873,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
   }, [models, modelId]);
 
   useEffect(() => {
+    if (sessionLoadingRef.current) return;
     if (models.length === 0) return;
     setMultiviewModel((mm) => {
       if (mm && models.some((m) => m.id === mm)) return mm;
@@ -2346,7 +2351,8 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
   useSessionRegister(
     sessionKey,
     () => ({
-      tabs, activeTab, gallery, imageIdx, description, editPrompt,
+      tabs, activeTab, gallery, imageIdx, imageRecords, activeHistoryId, gridResults,
+      description, editPrompt,
       age, race, gender, build, attributes, bible, costume,
       prodStylePresets, tonePresets, costumeStylePresets, materialPresets, hwDetailPresets, originPresets,
       sectionsOpen, lockedSections, sectionEnabled, extractTargets, extractMode, styleFusion, envPlacement, styleLibraryFolder, genCount, viewGenCount, modelId, editModel, multiviewModel, urMode, urScale, urContext, urModelId,
@@ -2354,7 +2360,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
     (s: unknown) => {
       if (s === null) {
         setGallery({}); setImageIdx({}); setImageRecords({}); setDescription(""); setEditPrompt("");
-        setAge(""); setRace(""); setGender(""); setBuild("");
+        setAge(""); setRace(""); setGender(""); setBuild(""); sessionLoadingRef.current = false;
         setAttributes(Object.fromEntries(ATTRIBUTE_FIELDS.map((f) => [f, { dropdown: f === "Pose" ? "Relaxed standing, arms at sides" : "", custom: "" }])));
         setBible({ ...EMPTY_BIBLE }); setCostume({ ...EMPTY_COSTUME });
         setSectionsOpen({ attributes: true, bible: false, costume: false });
@@ -2369,6 +2375,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
         setGenCount(1); setViewGenCount(1);
         return;
       }
+      sessionLoadingRef.current = true;
       const d = s as Record<string, unknown>;
       if (d.tabs) setTabs(d.tabs as TabDef[]);
       if (typeof d.activeTab === "string") setActiveTab(d.activeTab);
@@ -2406,6 +2413,11 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
       if (typeof d.urScale === "string") setUrScale(d.urScale as "x2" | "x3" | "x4");
       if (typeof d.urContext === "string") setUrContext(d.urContext);
       if (typeof d.urModelId === "string") setUrModelId(d.urModelId);
+      // Restore image state
+      if (d.imageRecords) setImageRecords(d.imageRecords as Record<string, ImageRecord>);
+      if (typeof d.activeHistoryId === "string" || d.activeHistoryId === null) setActiveHistoryId(d.activeHistoryId as string | null);
+      if (Array.isArray(d.gridResults)) setGridResults(d.gridResults as GridGalleryResult[]);
+      requestAnimationFrame(() => { sessionLoadingRef.current = false; });
     },
   );
 
@@ -3467,7 +3479,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
             onSendToMainstage={handleGridSendToMainstage}
             editBusy={gridEditBusy}
             isFavorited={(b64) => isFavorited(b64)}
-            onToggleFavorite={(id, b64, w, h) => {
+              onToggleFavorite={(id, b64, w, h) => {
               if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); }
               else {
                 const cell = gridResults.find((r) => r.id === id);
@@ -3475,6 +3487,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
                 addFavorite({ image_b64: b64, tool: "character", label: favLabel, prompt: "", source: "grid", width: w, height: h });
               }
             }}
+              onNotify={addToast}
           />
         ) : (
           <div className="relative flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
@@ -3503,6 +3516,7 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
                 else addFavorite({ image_b64: b64, tool: "character", label: activeTab || "main", source: "viewer" });
               } : undefined}
             />
+            <ShareToArtTableButton imageB64={currentSrc} tool="character" prompt={description} />
             <ArtDirectorWidget onOpenConfig={() => setArtDirectorConfigOpen(true)} />
           </div>
         )}

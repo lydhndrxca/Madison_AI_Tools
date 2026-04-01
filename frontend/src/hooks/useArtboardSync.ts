@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from "react";
-import { useArtboard, type ArtboardDelta, type RoomUser, type RemoteCursor } from "./ArtboardContext";
+import { useArtboard, type ArtboardDelta, type RoomUser, type RemoteCursor, type BucketImage } from "./ArtboardContext";
 
 function getWsBase(remoteHost?: string | null): string {
   if (remoteHost) {
@@ -22,6 +22,7 @@ const MAX_RECONNECT_ATTEMPTS = 20;
 export function useArtboardSync() {
   const {
     mode, roomId, remoteHost, applyRemoteDelta, setDeltaListener, setRoomUsers, setRemoteCursors, leaveRoom,
+    addBucketImage, setBuckets, setWsSender,
   } = useArtboard();
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -73,6 +74,7 @@ export function useArtboardSync() {
       setDeltaListener((delta: ArtboardDelta) => {
         send({ op: "delta", ...delta });
       });
+      setWsSender(send);
     };
 
     ws.onmessage = (ev) => {
@@ -85,6 +87,12 @@ export function useArtboardSync() {
           if (msg.users) {
             setRoomUsers(msg.users as RoomUser[]);
           }
+          if (msg.buckets && typeof msg.buckets === "object") {
+            setBuckets(msg.buckets as Record<string, BucketImage[]>);
+          }
+        } else if (op === "bucket_add") {
+          const img = msg.image as BucketImage | undefined;
+          if (img) addBucketImage(img);
         } else if (op === "delta") {
           const actions = msg.actions as ArtboardDelta[];
           if (actions) {
@@ -115,6 +123,7 @@ export function useArtboardSync() {
     ws.onclose = (ev) => {
       wsRef.current = null;
       setDeltaListener(null);
+      setWsSender(null);
 
       if (ev.code === 4003 || ev.code === 4004) {
         leaveRoom();

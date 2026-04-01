@@ -1,5 +1,6 @@
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, shell, ipcMain, dialog, clipboard, nativeImage } = require("electron");
 const path = require("path");
+const fs = require("fs");
 const { spawn, execSync } = require("child_process");
 const http = require("http");
 
@@ -102,6 +103,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
     },
   });
 
@@ -120,8 +122,86 @@ function createWindow() {
   mainWindow.on("closed", () => { mainWindow = null; });
 }
 
+// ---------------------------------------------------------------------------
+// IPC handlers
+// ---------------------------------------------------------------------------
+
+ipcMain.handle("clipboard:readImage", () => {
+  const img = clipboard.readImage();
+  if (img.isEmpty()) return null;
+  return { dataUrl: img.toDataURL() };
+});
+
+ipcMain.handle("session:save", async (_event, jsonStr) => {
+  if (!mainWindow) return false;
+  const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, {
+    title: "Save Session",
+    defaultPath: path.join(app.getPath("documents"), "madison-session.json"),
+    filters: [{ name: "Madison Session", extensions: ["json"] }],
+  });
+  if (canceled || !filePath) return false;
+  fs.writeFileSync(filePath, jsonStr, "utf8");
+  return true;
+});
+
+ipcMain.handle("menu:open-session", async () => {
+  if (!mainWindow) return;
+  const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
+    title: "Open Session",
+    filters: [{ name: "Madison Session", extensions: ["json"] }],
+    properties: ["openFile"],
+  });
+  if (canceled || filePaths.length === 0) return;
+  try {
+    const data = fs.readFileSync(filePaths[0], "utf8");
+    JSON.parse(data);
+    mainWindow.webContents.send("session:loaded", data);
+  } catch (err) {
+    console.error("[main] Failed to read session file:", err.message);
+  }
+});
+
+ipcMain.handle("menu:show-console", () => {
+  if (mainWindow) mainWindow.webContents.openDevTools();
+});
+
+ipcMain.handle("menu:set-save-folder", async () => {
+  if (!mainWindow) return;
+  const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
+    title: "Set Save Folder",
+    properties: ["openDirectory"],
+  });
+  if (canceled || filePaths.length === 0) return;
+  return filePaths[0];
+});
+
+ipcMain.handle("menu:reset-save-folder", () => {
+  return true;
+});
+
+ipcMain.handle("menu:reset-app", () => {
+  if (mainWindow) {
+    mainWindow.webContents.session.clearStorageData();
+    mainWindow.reload();
+  }
+});
+
+// Forward Ctrl+V clipboard images to renderer
+function setupClipboardPaste() {
+  if (!mainWindow) return;
+  mainWindow.webContents.on("before-input-event", (_event, input) => {
+    if (input.type === "keyDown" && input.key === "v" && input.control && !input.alt && !input.shift) {
+      const img = clipboard.readImage();
+      if (!img.isEmpty()) {
+        mainWindow.webContents.send("clipboard:paste-image", { dataUrl: img.toDataURL() });
+      }
+    }
+  });
+}
+
 app.on("ready", async () => {
   createWindow();
+  setupClipboardPaste();
   mainWindow.loadURL("data:text/html,<html style='background:#1a1a2e;color:#ccc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'><div style='text-align:center'><h2>Madison AI Suite</h2><p>Starting servers\u2026</p></div></html>");
 
   killPortProcess(API_PORT);

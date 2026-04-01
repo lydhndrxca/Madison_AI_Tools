@@ -15,6 +15,7 @@ import { createHistoryEntry, pushHistory, createImageRecord } from "@/lib/imageH
 import type { HistoryEntry, ImageRecord, HistorySettings } from "@/lib/imageHistory";
 import { XmlModal } from "@/components/shared/XmlModal";
 import { ArtDirectorWidget } from "@/components/shared/ArtDirectorWidget";
+import { ShareToArtTableButton } from "@/components/shared/ShareToArtTableButton";
 import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
 import { ThreeDGenSidebar } from "@/components/shared/ThreeDGenSidebar";
 import type { ViewImage } from "@/components/shared/ThreeDGenSidebar";
@@ -231,6 +232,7 @@ export function PropPage({ instanceId = 0, active = true, projectUid }: PropPage
   const stableId = projectUid ?? String(instanceId);
   const layoutStorageKey = `madison-prop-layout-${stableId}`;
   const sessionKey = `prop-${stableId}`;
+  const sessionLoadingRef = useRef(false);
   const [tabs, setTabs] = useState<TabDef[]>(BUILTIN_TABS);
   const [activeTab, setActiveTab] = useState("main");
   const busy = useBusySet();
@@ -367,6 +369,7 @@ export function PropPage({ instanceId = 0, active = true, projectUid }: PropPage
   const refCounter = useRef(0);
 
   useEffect(() => {
+    if (sessionLoadingRef.current) return;
     if (defaultModelId && !modelId) setModelId(defaultModelId);
   }, [defaultModelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1031,9 +1034,11 @@ export function PropPage({ instanceId = 0, active = true, projectUid }: PropPage
       description, propName, propType, setting, condition, scale, attributes,
       lockedAttrs, lockedSections, styleFusion, preservation, sectionEnabled,
       extractTargets, extractMode, modelId, genCount, layout, tabs, activeTab,
+      gallery, imageIdx, imageRecords, activeHistoryId, gridResults,
     }),
     (s: unknown) => {
       if (s === null) { handleReset(); return; }
+      sessionLoadingRef.current = true;
       const data = s as Record<string, unknown>;
       if (typeof data.description === "string") setDescription(data.description);
       if (typeof data.propName === "string") setPropName(data.propName);
@@ -1054,6 +1059,13 @@ export function PropPage({ instanceId = 0, active = true, projectUid }: PropPage
       if (data.layout) setLayout(data.layout as LayoutState);
       if (Array.isArray(data.tabs)) setTabs(data.tabs as TabDef[]);
       if (typeof data.activeTab === "string") setActiveTab(data.activeTab);
+      // Restore image state
+      if (data.gallery) setGallery(data.gallery as Record<string, string[]>);
+      if (data.imageIdx) setImageIdx(data.imageIdx as Record<string, number>);
+      if (data.imageRecords) setImageRecords(data.imageRecords as Record<string, ImageRecord>);
+      if (typeof data.activeHistoryId === "string" || data.activeHistoryId === null) setActiveHistoryId(data.activeHistoryId as string | null);
+      if (Array.isArray(data.gridResults)) setGridResults(data.gridResults as GridGalleryResult[]);
+      requestAnimationFrame(() => { sessionLoadingRef.current = false; });
     },
   );
 
@@ -2117,6 +2129,7 @@ export function PropPage({ instanceId = 0, active = true, projectUid }: PropPage
               editBusy={gridEditBusy}
               isFavorited={(b64) => isFavorited(b64)}
               onToggleFavorite={(id, b64, w, h) => { if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "prop", label: `grid-${id}`, prompt: "", source: "grid", width: w, height: h }); }}
+              onNotify={addToast}
             />
           ) : (
             <div className="flex-1 min-w-0 relative">
@@ -2135,6 +2148,7 @@ export function PropPage({ instanceId = 0, active = true, projectUid }: PropPage
                 isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
                 onToggleFavorite={currentSrc ? () => { const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "prop", label: activeTab || "main", source: "viewer" }); } : undefined}
               />
+              <ShareToArtTableButton imageB64={currentSrc} tool="prop" prompt={description} />
               <ArtDirectorWidget onOpenConfig={() => setArtDirectorConfigOpen(true)} />
             </div>
           )}

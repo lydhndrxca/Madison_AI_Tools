@@ -119,50 +119,13 @@ export function EditorToolbar({
 
   const showToolSpecificOptions = activeTool !== "select" && !annotationActive;
   const showInpaintBar = activeTool === "brush" || activeTool === "marquee" || activeTool === "lasso";
+  const isAiTool = activeTool !== "select";
+  const showModelRow = isAiTool || annotationActive;
 
   return (
     <div className="shrink-0" style={{ borderBottom: "1px solid var(--color-border)", background: "var(--color-card)" }}>
-      {/* Model + generation count row */}
-      <div className="flex items-center gap-2 px-2 py-1 flex-wrap" style={{ borderBottom: "1px solid var(--color-border)" }}>
-        <span className="text-[10px] font-medium" style={{ color: "var(--color-text-secondary)" }}>Model</span>
-        <select
-          className="px-1.5 py-0.5 text-[10px] rounded"
-          style={inputStyle}
-          disabled={locked || busy}
-          value={selectedModelId}
-          onChange={(e) => onModelChange?.(e.target.value)}
-          title="Gemini model for editor tools"
-        >
-          {models.length === 0 && <option value="">Loading…</option>}
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>{m.label} ({m.resolution})</option>
-          ))}
-        </select>
-        <div className="w-px h-4" style={{ background: "var(--color-border)" }} />
-        <span className="text-[10px] font-medium" style={{ color: "var(--color-text-secondary)" }}>Generations</span>
-        <div className="flex items-center gap-1">
-          {[1, 2, 3, 4].map((n) => (
-            <button
-              key={n}
-              disabled={locked || busy}
-              onClick={() => onGenerationCountChange?.(n)}
-              className="px-1.5 py-0.5 text-[10px] rounded cursor-pointer transition-colors font-medium disabled:opacity-40"
-              style={{
-                background: generationCount === n ? "var(--color-accent)" : "var(--color-input-bg)",
-                color: generationCount === n ? "var(--color-foreground)" : "var(--color-text-secondary)",
-                border: generationCount === n ? "1px solid var(--color-accent)" : "1px solid var(--color-border)",
-              }}
-            >
-              {n}
-            </button>
-          ))}
-        </div>
-        <span className="text-[9px]" style={{ color: "var(--color-text-muted)" }}>
-          {generationCount > 1 ? `${generationCount} images in parallel` : "single image"}
-        </span>
-      </div>
       {/* Tool buttons row */}
-      <div className="flex items-center gap-1 px-2 py-1 flex-wrap">
+      <div className="flex items-center gap-1 px-2 py-1 flex-wrap" style={{ borderBottom: "1px solid var(--color-border)" }}>
         {TOOLS.map((t) => {
           const Icon = t.Icon;
           return (
@@ -191,7 +154,6 @@ export function EditorToolbar({
         ><Trash2 className="h-3 w-3 shrink-0" />Clear Mask</button>
       </div>
 
-      {/* Options row — hidden when in pointer/select mode or annotation is active */}
       {/* Inpaint prompt bar — visible during brush/marquee/lasso AND annotation mode */}
       {showInpaintBar && (
         <div className="flex items-center gap-1 px-2 py-1 flex-1 min-w-0" style={{ borderTop: "1px solid var(--color-border)" }}>
@@ -204,6 +166,7 @@ export function EditorToolbar({
         </div>
       )}
 
+      {/* Tool-specific options row */}
       {showToolSpecificOptions && <div className="flex items-center gap-2 px-2 py-1 flex-wrap" style={{ borderTop: "1px solid var(--color-border)" }}>
 
         {activeTool === "smartSelect" && (
@@ -263,6 +226,48 @@ export function EditorToolbar({
           </div>
         )}
       </div>}
+
+      {/* Model + generation count row — only for AI tools and annotation */}
+      {showModelRow && (
+        <div className="flex items-center gap-2 px-2 py-1 flex-wrap" style={{ borderTop: "1px solid var(--color-border)" }}>
+          <span className="text-[10px] font-medium" style={{ color: "var(--color-text-secondary)" }}>Model</span>
+          <select
+            className="px-1.5 py-0.5 text-[10px] rounded"
+            style={inputStyle}
+            disabled={locked || busy}
+            value={selectedModelId}
+            onChange={(e) => onModelChange?.(e.target.value)}
+            title="Gemini model for editor tools"
+          >
+            {models.length === 0 && <option value="">Loading…</option>}
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>{m.label} ({m.resolution})</option>
+            ))}
+          </select>
+          <div className="w-px h-4" style={{ background: "var(--color-border)" }} />
+          <span className="text-[10px] font-medium" style={{ color: "var(--color-text-secondary)" }}>Generations</span>
+          <div className="flex items-center gap-1">
+            {[1, 2, 3, 4].map((n) => (
+              <button
+                key={n}
+                disabled={locked || busy}
+                onClick={() => onGenerationCountChange?.(n)}
+                className="px-1.5 py-0.5 text-[10px] rounded cursor-pointer transition-colors font-medium disabled:opacity-40"
+                style={{
+                  background: generationCount === n ? "var(--color-accent)" : "var(--color-input-bg)",
+                  color: generationCount === n ? "var(--color-foreground)" : "var(--color-text-secondary)",
+                  border: generationCount === n ? "1px solid var(--color-accent)" : "1px solid var(--color-border)",
+                }}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+          <span className="text-[9px]" style={{ color: "var(--color-text-muted)" }}>
+            {generationCount > 1 ? `${generationCount} images in parallel` : "single image"}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

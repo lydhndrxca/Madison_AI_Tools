@@ -223,6 +223,7 @@ class Room:
         self.password = password
         self.items: list[dict] = items
         self.users: dict[int, UserMeta] = {}
+        self.buckets: Dict[str, list] = {}
         self._color_idx = 0
         self.created_at = time.time()
 
@@ -382,11 +383,12 @@ async def ws_artboard(ws: WebSocket, room_code: str, user: str = "Guest", passwo
     meta = UserMeta(user, color, ws)
     room.users[uid] = meta
 
-    # Send full sync to joiner
+    # Send full sync to joiner (includes bucket state)
     await room.send_to(ws, {
         "op": "full_sync",
         "items": room.items,
         "users": [u.to_dict() for u in room.users.values()],
+        "buckets": room.buckets,
     })
 
     # Notify others
@@ -418,8 +420,15 @@ async def ws_artboard(ws: WebSocket, room_code: str, user: str = "Guest", passwo
                 meta.last_cursor = time.time()
                 await room.broadcast({"op": "cursor", "user": user, "x": meta.cursor_x, "y": meta.cursor_y, "color": color}, exclude_ws=ws)
 
+            elif op == "bucket_add":
+                img_data = msg.get("image")
+                if img_data and isinstance(img_data, dict):
+                    img_data["user"] = user
+                    room.buckets.setdefault(user, []).append(img_data)
+                    await room.broadcast({"op": "bucket_add", "user": user, "image": img_data}, exclude_ws=ws)
+
             elif op == "full_sync_request":
-                await room.send_to(ws, {"op": "full_sync", "items": room.items, "users": [u.to_dict() for u in room.users.values()]})
+                await room.send_to(ws, {"op": "full_sync", "items": room.items, "users": [u.to_dict() for u in room.users.values()], "buckets": room.buckets})
 
     except WebSocketDisconnect:
         pass
