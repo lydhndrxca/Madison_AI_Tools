@@ -115,8 +115,23 @@ if !ERRORLEVEL! neq 0 (
     )
 )
 
+rem --- Kill stale processes on our ports ---
+echo Cleaning up stale processes...
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8420 " ^| findstr "LISTENING" 2^>nul') do (
+    taskkill /F /PID %%a >nul 2>&1
+)
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":5173 " ^| findstr "LISTENING" 2^>nul') do (
+    taskkill /F /PID %%a >nul 2>&1
+)
+
 rem --- Launch ---
 echo Starting Madison AI Suite...
 echo.
 cd /d "%~dp0frontend"
 call npx electron ../electron/main.js
+
+if !ERRORLEVEL! neq 0 (
+    echo.
+    echo [ERROR] Madison AI Suite exited with error code !ERRORLEVEL!
+    pause
+)
