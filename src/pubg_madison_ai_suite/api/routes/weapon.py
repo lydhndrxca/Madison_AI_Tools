@@ -13,7 +13,7 @@ from pubg_madison_ai_suite.api import core
 from pubg_madison_ai_suite.api.ws import manager
 
 router = APIRouter()
-_pool = ThreadPoolExecutor(max_workers=4)
+_pool = ThreadPoolExecutor(max_workers=16)
 
 
 # ---------------------------------------------------------------------------

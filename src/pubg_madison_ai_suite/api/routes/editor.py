@@ -17,7 +17,7 @@ from pubg_madison_ai_suite.api import core
 from pubg_madison_ai_suite.api.cancel import reset_cancel_event, release_cancel_event
 
 router = APIRouter()
-_pool = ThreadPoolExecutor(max_workers=4)
+_pool = ThreadPoolExecutor(max_workers=16)
 
 
 # ---------------------------------------------------------------------------

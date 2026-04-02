@@ -22,6 +22,7 @@ import { useSettingsBackup } from "./hooks/useSettingsBackup";
 import { ArtDirectorProvider } from "./hooks/ArtDirectorContext";
 import { ModelsProvider } from "./hooks/ModelsContext";
 import { ActivePageProvider } from "./hooks/ActivePageContext";
+import { GenerationStatusProvider } from "./hooks/GenerationStatusContext";
 import { TranscriptsPage } from "./components/tools/transcripts/TranscriptsPage";
 const ThreeDGenWrapper = lazy(() => import("./components/tools/threedgen/ThreeDGenWrapper").then(m => ({ default: m.ThreeDGenWrapper })));
 import { BrainstormPage } from "./components/tools/brainstorm/BrainstormPage";
@@ -110,9 +111,11 @@ export function App() {
               <CustomSectionsProvider>
                 <ModelsProvider>
                   <ArtDirectorProvider>
-                    <AppErrorBoundary>
-                      <AppInner />
-                    </AppErrorBoundary>
+                    <GenerationStatusProvider>
+                      <AppErrorBoundary>
+                        <AppInner />
+                      </AppErrorBoundary>
+                    </GenerationStatusProvider>
                   </ArtDirectorProvider>
                 </ModelsProvider>
               </CustomSectionsProvider>

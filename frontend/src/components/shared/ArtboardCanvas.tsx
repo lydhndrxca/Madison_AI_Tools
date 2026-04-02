@@ -316,7 +316,9 @@ export function ArtboardCanvas() {
   // Space + drag pan (hold Space, then left-click drag to pan)
   // ---------------------------------------------------------------------------
   useEffect(() => {
+    const isVisible = () => containerRef.current?.offsetParent !== null;
     const onKeyDown = (e: KeyboardEvent) => {
+      if (!isVisible()) return;
       if (e.code === "Space" && !e.repeat && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLTextAreaElement) && !(e.target instanceof HTMLSelectElement) && !(e.target as HTMLElement)?.isContentEditable) {
         e.preventDefault();
         spaceHeldRef.current = true;
@@ -818,6 +820,8 @@ export function ArtboardCanvas() {
   // ---------------------------------------------------------------------------
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
+      const el = containerRef.current;
+      if (!el || el.offsetParent === null) return;
       const t = e.target as HTMLElement;
       if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable) return;
       if ((e.key === "Delete" || e.key === "Backspace") && selection.size > 0) { e.preventDefault(); e.stopPropagation(); removeItems([...selection]); }
@@ -832,17 +836,20 @@ export function ArtboardCanvas() {
     return () => window.removeEventListener("keydown", h);
   }, [selection, removeItems, undo, redo, selectAll, clearSelection, doCopy, fitToExtents]);
 
-  // Native paste event for direct image paste from clipboard
+  // Native paste event for direct image paste from clipboard.
+  // Multiple ArtboardCanvas instances may be mounted (hidden via display:none).
+  // Only the visible instance should handle the paste.
   useEffect(() => {
     const h = (e: ClipboardEvent) => {
+      const el = containerRef.current;
+      if (!el || el.offsetParent === null) return;
       const t = e.target as HTMLElement;
       if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable || !e.clipboardData) return;
       for (const it of Array.from(e.clipboardData.items)) {
         if (it.type.startsWith("image/")) {
           e.preventDefault(); const f = it.getAsFile(); if (!f) continue;
           let tx = 0, ty = 0;
-          const el = containerRef.current;
-          if (el) { const rect = el.getBoundingClientRect(); const c = screenToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2); tx = c.wx; ty = c.wy; }
+          const rect = el.getBoundingClientRect(); const c = screenToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2); tx = c.wx; ty = c.wy;
           const r = new FileReader();
           r.onload = () => ingestImage(String(r.result), tx, ty);
           r.readAsDataURL(f); return;

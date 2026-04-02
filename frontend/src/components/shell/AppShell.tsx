@@ -17,6 +17,7 @@ import { CostCounter } from "./CostCounter";
 import type { PageId } from "@/app";
 import { DS_EVT, confettiBurst } from "@/lib/deepSearchEvents";
 import { Button } from "@/components/ui";
+import { BugReportOverlay } from "@/components/shared/BugReportOverlay";
 
 interface AppShellProps {
   activePage: PageId;
@@ -247,6 +248,7 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
   const voice = useVoiceToText();
   const [voiceCtxMenu, setVoiceCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [voiceRestartPending, setVoiceRestartPending] = useState(false);
+  const [debugMode, setDebugMode] = useState(false);
 
   // Deep Search visual states
   const [dsState, setDsState] = useState<"idle" | "searching" | "results">("idle");
@@ -504,6 +506,18 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
             { label: "Paste", shortcut: "Ctrl+V", onClick: () => document.execCommand("paste") },
             { label: "Select All", shortcut: "Ctrl+A", onClick: () => document.execCommand("selectAll") },
           ]} />
+          <button
+            onClick={() => setDebugMode((v) => !v)}
+            className="px-2.5 py-1 text-[11px] rounded cursor-pointer font-medium"
+            style={{
+              background: debugMode ? "rgba(220,60,60,0.15)" : "transparent",
+              color: debugMode ? "#e05050" : "var(--color-text-secondary)",
+              border: debugMode ? "1px solid rgba(220,60,60,0.3)" : "1px solid transparent",
+            }}
+            title={debugMode ? "Debug Mode ON — right-click anything to file a bug" : "Enable Debug Mode"}
+          >
+            {debugMode ? "🐛 Debug Mode ON" : "Debug Mode"}
+          </button>
           <TemplateDropdown />
 
           {/* Voice-to-text button — onMouseDown preventDefault keeps focus in the active text field */}
@@ -611,6 +625,8 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
       <AudioSettingsModal open={audioSettingsOpen} onClose={() => setAudioSettingsOpen(false)} />
       <WelcomeModal onNavigate={onNavigate as (page: string) => void} />
       <input ref={profileFileRef} type="file" accept=".madison-profile,.zip" className="hidden" onChange={handleProfileFileSelect} />
+
+      <BugReportOverlay enabled={debugMode} activePage={activePage} onNotify={addToast} />
 
       {/* Voice engine right-click context menu */}
       {voiceCtxMenu && (

@@ -17,6 +17,7 @@ import { ShareToArtTableButton } from "@/components/shared/ShareToArtTableButton
 import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
 import { useArtDirector } from "@/hooks/ArtDirectorContext";
 import { useActivePage } from "@/hooks/ActivePageContext";
+import { useGenerationStatus } from "@/hooks/GenerationStatusContext";
 import { DeepSearchPanel } from "@/components/shared/DeepSearchPanel";
 import type { SearchResult } from "@/components/shared/DeepSearchPanel";
 import { ThreeDGenSidebar } from "@/components/shared/ThreeDGenSidebar";
@@ -327,6 +328,13 @@ export function WeaponPage({ instanceId = 0, active = true, projectUid }: Weapon
   const [tabs, setTabs] = useState<TabDef[]>(BUILTIN_TABS);
   const [activeTab, setActiveTab] = useState("main");
   const busy = useBusySet();
+  const genStatus = useGenerationStatus();
+  const prevBusyRef = useRef(false);
+  useEffect(() => {
+    if (busy.any && !prevBusyRef.current) genStatus.startPage("weapon");
+    else if (!busy.any && prevBusyRef.current) genStatus.endPage("weapon");
+    prevBusyRef.current = busy.any;
+  }, [busy.any, genStatus]);
   const [genText, setGenText] = useState<Record<string, string>>({});
   const textBusy = busy.is("extract") || busy.is("enhance");
 

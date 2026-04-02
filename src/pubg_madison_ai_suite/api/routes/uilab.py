@@ -18,7 +18,7 @@ from pubg_madison_ai_suite.api import core
 from pubg_madison_ai_suite.api.ws import manager
 
 router = APIRouter()
-_pool = ThreadPoolExecutor(max_workers=4)
+_pool = ThreadPoolExecutor(max_workers=16)
 log = logging.getLogger("uilab")
 
 
@@ -1150,6 +1150,34 @@ class UIAnimRegenResponse(BaseModel):
     error: Optional[str] = None
 
 
+class HealthBarAnimRequest(BaseModel):
+    source_image_b64: str
+    frame_count: int = 8
+    prompt: str = ""
+    model_id: Optional[str] = None
+    style_context: Optional[str] = None
+
+
+class HealthBarAnimResponse(BaseModel):
+    frames: Optional[list[str]] = None
+    frame_width: int = 256
+    frame_height: int = 64
+    error: Optional[str] = None
+
+
+class ParseSpriteSheetRequest(BaseModel):
+    image_b64: str
+    cols: Optional[int] = None
+    rows: Optional[int] = None
+
+
+class ParseSpriteSheetResponse(BaseModel):
+    frames: Optional[list[str]] = None
+    frame_width: int = 256
+    frame_height: int = 256
+    error: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Sync workers
 # ---------------------------------------------------------------------------
@@ -2262,6 +2290,188 @@ def _do_regenerate_animation_frame(req: UIAnimRegenRequest) -> UIAnimRegenRespon
     return UIAnimRegenResponse(frame_b64=core.image_to_b64(result), width=256, height=256)
 
 
+def _do_generate_healthbar_anim(req: HealthBarAnimRequest) -> HealthBarAnimResponse:
+    """Generate health bar animation frames from a single source image."""
+    from PIL import Image
+
+    api_key = core.get_api_key()
+    if not api_key:
+        return HealthBarAnimResponse(error="No API key configured")
+
+    from pubg_madison_ai_suite.api.cancel import reset_cancel_event, release_cancel_event
+    cancel = reset_cancel_event()
+
+    source_img = core.b64_to_image(req.source_image_b64)
+    src_w, src_h = source_img.size
+    src_aspect = src_w / max(src_h, 1)
+
+    frame_count = max(2, min(req.frame_count, 32))
+
+    # Health bars are typically laid out as a vertical stack (one per row)
+    grid_cols = 1
+    grid_rows = frame_count
+
+    # Target cell proportions match the source
+    cell_w = max(64, min(src_w, 512))
+    cell_h = max(16, min(src_h, 128))
+    # Normalise to keep proportions but fit within reasonable canvas
+    if cell_w > 512:
+        ratio = 512 / cell_w
+        cell_w = 512
+        cell_h = max(16, int(cell_h * ratio))
+    if cell_h < 16:
+        cell_h = 16
+
+    canvas_w = cell_w
+    canvas_h = cell_h * grid_rows
+
+    # Build state labels
+    state_labels = []
+    for i in range(frame_count):
+        pct = round(100 * (1 - i / max(frame_count - 1, 1)))
+        state_labels.append(f"Frame {i+1}: {pct}% health")
+
+    states_str = ", ".join(state_labels)
+
+    prompt_text = (
+        f"Generate a sprite sheet with EXACTLY {frame_count} rows stacked vertically, "
+        f"each row showing a single health bar state.\n"
+        f"States (top to bottom): {states_str}.\n\n"
+        "CRITICAL RULES:\n"
+        "- Each row must show the EXACT SAME health bar design as the source image.\n"
+        f"- Each cell is {cell_w}×{cell_h} pixels — maintain this ultra-wide aspect ratio.\n"
+        "- The health bar DEPLETES progressively from full (top) to empty (bottom).\n"
+        "- The bar shape, border, frame, and background must remain IDENTICAL across all states.\n"
+        "- Only the filled portion changes — it shrinks from left to right (or the fill color changes).\n"
+        "- Use a pure bright green #00FF00 background behind the health bars.\n"
+        "- NO extra decorations, labels, numbers, or text.\n"
+        f"- Canvas size: {canvas_w}×{canvas_h} pixels total ({grid_cols} col × {grid_rows} rows).\n"
+    )
+    if req.prompt:
+        prompt_text += f"\nAdditional instructions: {req.prompt}\n"
+
+    contents: list = []
+    if req.style_context:
+        contents.extend(_load_style_library_images(req.style_context))
+
+    contents.append(
+        "=== SOURCE HEALTH BAR (preserve this EXACTLY) ===\n"
+        "This is the health bar you must replicate in every frame. "
+        "Keep its exact shape, border, proportions, colors, and art style:"
+    )
+    contents.append(source_img)
+    contents.append(prompt_text)
+
+    grid_ar = core.detect_aspect_ratio(canvas_w, canvas_h)
+    log.info("=== generate-healthbar-anim: frames=%d cell=%dx%d canvas=%dx%d ar=%s ===",
+             frame_count, cell_w, cell_h, canvas_w, canvas_h, grid_ar)
+
+    try:
+        result = core.gemini_generate_image(
+            api_key, contents, aspect_ratio=grid_ar, image_size="4K",
+            cancel_event=cancel, model_id=req.model_id,
+        )
+    except RuntimeError as e:
+        log.error("=== generate-healthbar-anim error: %s ===", e)
+        return HealthBarAnimResponse(error=str(e))
+    finally:
+        release_cancel_event(cancel)
+
+    if result is None:
+        return HealthBarAnimResponse(error="Generation failed — no image returned")
+
+    # Normalize muted green backgrounds to pure chroma green before splitting
+    result = _normalize_bg_to_chroma_green(result)
+    bg_color = _detect_background_color(result)
+
+    # Split into rows — each row is one health bar state
+    rw, rh = result.size
+    row_h = rh / frame_count
+    out_cell_w = rw
+    out_cell_h = max(1, round(row_h))
+
+    frames_b64: list[str] = []
+    for i in range(frame_count):
+        y1 = round(i * row_h)
+        y2 = round((i + 1) * row_h)
+        cell = result.crop((0, y1, rw, y2)).copy()
+
+        # Robust adaptive background removal (handles muted/dark greens)
+        cell = _remove_bg_adaptive(cell, bg_color)
+
+        frames_b64.append(core.image_to_b64(cell))
+
+    log.info("=== generate-healthbar-anim done: %d frames, cell=%dx%d ===",
+             len(frames_b64), out_cell_w, out_cell_h)
+    return HealthBarAnimResponse(
+        frames=frames_b64,
+        frame_width=out_cell_w,
+        frame_height=out_cell_h,
+    )
+
+
+def _do_parse_sprite_sheet(req: ParseSpriteSheetRequest) -> ParseSpriteSheetResponse:
+    """Parse an existing sprite sheet into individual frames."""
+    from PIL import Image
+
+    try:
+        img = core.b64_to_image(req.image_b64)
+    except Exception as e:
+        return ParseSpriteSheetResponse(error=f"Failed to decode image: {e}")
+
+    img_w, img_h = img.size
+
+    if req.cols and req.rows:
+        # Manual grid: uniform slicing
+        cols, rows = req.cols, req.rows
+        cell_w = img_w // cols
+        cell_h = img_h // rows
+        frames_b64: list[str] = []
+        for r in range(rows):
+            for c in range(cols):
+                x1, y1 = c * cell_w, r * cell_h
+                cell = img.crop((x1, y1, x1 + cell_w, y1 + cell_h)).copy()
+                frames_b64.append(core.image_to_b64(cell))
+        log.info("=== parse-sprite-sheet (manual %dx%d): %d frames, cell=%dx%d ===",
+                 cols, rows, len(frames_b64), cell_w, cell_h)
+        return ParseSpriteSheetResponse(frames=frames_b64, frame_width=cell_w, frame_height=cell_h)
+
+    # Auto-detect using projection
+    detected_cells, det_cols, det_rows, bg_color = _detect_cells_by_projection(img)
+
+    if detected_cells and len(detected_cells) >= 2:
+        cell_w = detected_cells[0].width
+        cell_h = detected_cells[0].height
+        frames_b64 = [core.image_to_b64(cell) for cell in detected_cells]
+        log.info("=== parse-sprite-sheet (auto %dx%d): %d frames, cell=%dx%d ===",
+                 det_cols, det_rows, len(frames_b64), cell_w, cell_h)
+        return ParseSpriteSheetResponse(frames=frames_b64, frame_width=cell_w, frame_height=cell_h)
+
+    # Fallback: assume it's a single-row horizontal strip or single-column vertical strip
+    if img_w > img_h * 2:
+        # Horizontal strip — split by width=height (square cells)
+        cell_size = img_h
+        count = max(1, img_w // cell_size)
+        frames_b64 = []
+        for i in range(count):
+            x1 = i * cell_size
+            cell = img.crop((x1, 0, x1 + cell_size, img_h)).copy()
+            frames_b64.append(core.image_to_b64(cell))
+        return ParseSpriteSheetResponse(frames=frames_b64, frame_width=cell_size, frame_height=img_h)
+    elif img_h > img_w * 2:
+        # Vertical strip — split by height=width (square cells)
+        cell_size = img_w
+        count = max(1, img_h // cell_size)
+        frames_b64 = []
+        for i in range(count):
+            y1 = i * cell_size
+            cell = img.crop((0, y1, img_w, y1 + cell_size)).copy()
+            frames_b64.append(core.image_to_b64(cell))
+        return ParseSpriteSheetResponse(frames=frames_b64, frame_width=img_w, frame_height=cell_size)
+
+    return ParseSpriteSheetResponse(error="Could not detect grid cells. Try specifying cols and rows manually.")
+
+
 # ---------------------------------------------------------------------------
 # API endpoints
 # ---------------------------------------------------------------------------
@@ -2306,6 +2516,20 @@ async def regenerate_animation_frame(req: UIAnimRegenRequest):
     """Regenerate a single animation frame with context from neighboring frames."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(_pool, _do_regenerate_animation_frame, req)
+
+
+@router.post("/generate-healthbar-anim", response_model=HealthBarAnimResponse)
+async def generate_healthbar_anim(req: HealthBarAnimRequest):
+    """Generate health bar animation frames from a single source image."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, _do_generate_healthbar_anim, req)
+
+
+@router.post("/parse-sprite-sheet", response_model=ParseSpriteSheetResponse)
+async def parse_sprite_sheet(req: ParseSpriteSheetRequest):
+    """Parse an existing sprite sheet into individual frames."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, _do_parse_sprite_sheet, req)
 
 
 @router.get("/element-types")

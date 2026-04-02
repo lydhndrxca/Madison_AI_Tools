@@ -9,6 +9,7 @@ import { useFavorites } from "@/hooks/FavoritesContext";
 import { useSessionRegister } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
 import { useModels, type ModelInfo } from "@/hooks/ModelsContext";
+import { useGenerationStatus } from "@/hooks/GenerationStatusContext";
 
 const VIEW_TABS = ["Main Stage", "3/4", "Front", "Back", "Side", "Top", "Bottom"];
 const DIMENSIONS = [
@@ -43,6 +44,13 @@ export function MultiviewPage() {
   const [prompt, setPrompt] = useState("");
   const [dimension, setDimension] = useState("square");
   const busy = useBusySet();
+  const genStatus = useGenerationStatus();
+  const prevBusyRef = useRef(false);
+  useEffect(() => {
+    if (busy.any && !prevBusyRef.current) genStatus.startPage("multiview");
+    else if (!busy.any && prevBusyRef.current) genStatus.endPage("multiview");
+    prevBusyRef.current = busy.any;
+  }, [busy.any, genStatus]);
   const [genText, setGenText] = useState<Record<string, string>>({});
 
   const [gallery, setGallery] = useState<Record<string, string[]>>({});

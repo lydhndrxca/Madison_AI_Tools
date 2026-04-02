@@ -45,6 +45,8 @@ export interface TabDef {
   isCustom?: boolean;
 }
 
+export type TabStatus = "generating" | "done";
+
 interface GroupedTabBarProps {
   tabs: TabDef[];
   active: string;
@@ -54,6 +56,8 @@ interface GroupedTabBarProps {
   noBorder?: boolean;
   /** Tab id currently receiving an image generation (pulsing highlight). */
   generatingTabId?: string | null;
+  /** Per-tab status indicators: red dot while generating, green dot when done. */
+  tabStatuses?: Record<string, TabStatus>;
   onReorder?: (tabs: TabDef[]) => void;
 }
 
@@ -66,7 +70,7 @@ const GROUP_BG: Record<string, string> = {
   refs: "rgba(0,0,0,0.08)",
 };
 
-export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, noBorder, generatingTabId, onReorder }: GroupedTabBarProps) {
+export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, noBorder, generatingTabId, tabStatuses, onReorder }: GroupedTabBarProps) {
   const groups: ("stage" | "views" | "library" | "artboard" | "search" | "refs")[] = ["stage", "views", "library", "artboard", "search", "refs"];
 
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
@@ -165,6 +169,12 @@ export function GroupedTabBar({ tabs, active, onSelect, onAddRef, onRemoveTab, n
         }}
       >
         {tab.label}
+        {tabStatuses?.[tab.id] && (
+          <span
+            className={cn("inline-block ml-1.5 h-1.5 w-1.5 rounded-full shrink-0", tabStatuses[tab.id] === "generating" && "animate-pulse")}
+            style={{ background: tabStatuses[tab.id] === "generating" ? "#ef4444" : "#22c55e" }}
+          />
+        )}
       </button>
     );
   };

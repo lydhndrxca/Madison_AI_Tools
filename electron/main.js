@@ -140,8 +140,13 @@ ipcMain.handle("session:save", async (_event, jsonStr) => {
     filters: [{ name: "Madison Session", extensions: ["json"] }],
   });
   if (canceled || !filePath) return false;
-  fs.writeFileSync(filePath, jsonStr, "utf8");
-  return true;
+  try {
+    await fs.promises.writeFile(filePath, jsonStr, "utf8");
+    return true;
+  } catch (err) {
+    console.error("[session:save] Write failed:", err);
+    return false;
+  }
 });
 
 ipcMain.handle("menu:open-session", async () => {

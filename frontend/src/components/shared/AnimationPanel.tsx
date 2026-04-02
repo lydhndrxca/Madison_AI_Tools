@@ -82,6 +82,8 @@ export function AnimationPanel({
   onNotify,
 }: AnimationPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const frameW = useMemo(() => (frames.length > 0 ? frames[0].width : 256), [frames]);
+  const frameH = useMemo(() => (frames.length > 0 ? frames[0].height : 256), [frames]);
   const [playing, setPlaying] = useState(false);
   const [looping, setLooping] = useState(true);
   const [currentIdx, setCurrentIdx] = useState(0);
@@ -127,19 +129,19 @@ export function AnimationPanel({
 
       try {
         const img = await loadImg(f.image_b64);
-        canvas.width = 256;
-        canvas.height = 256;
-        ctx.clearRect(0, 0, 256, 256);
-        ctx.drawImage(img, 0, 0, 256, 256);
+        canvas.width = frameW;
+        canvas.height = frameH;
+        ctx.clearRect(0, 0, frameW, frameH);
+        ctx.drawImage(img, 0, 0, frameW, frameH);
       } catch {
         ctx.fillStyle = "#333";
-        ctx.fillRect(0, 0, 256, 256);
+        ctx.fillRect(0, 0, frameW, frameH);
         ctx.fillStyle = "#f66";
         ctx.font = "12px sans-serif";
-        ctx.fillText("Error loading frame", 20, 130);
+        ctx.fillText("Error loading frame", 20, frameH / 2);
       }
     },
-    [frames],
+    [frames, frameW, frameH],
   );
 
   useEffect(() => {
@@ -264,21 +266,256 @@ export function AnimationPanel({
     [frames.length, totalMs],
   );
 
-  // Export helpers (WebM & sprite sheet) — implemented in video-export todo
-  const exportWebM = useCallback(async () => {
+  // ── Minimal GIF89a encoder (no dependencies) ──
+  const buildGif = useCallback(
+    async (gw: number, gh: number): Promise<Blob> => {
+      const canvas = document.createElement("canvas");
+      canvas.width = gw;
+      canvas.height = gh;
+      const ctx = canvas.getContext("2d")!;
+
+      // Quantise a frame into a 256-colour palette + indexed pixels
+      function quantise(imageData: ImageData) {
+        const { data, width, height } = imageData;
+        const palette: number[] = [];
+        const paletteMap = new Map<number, number>();
+        const pixels = new Uint8Array(width * height);
+        let transparentIdx = -1;
+
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+          const pi = i / 4;
+          if (a < 128) {
+            if (transparentIdx === -1) {
+              transparentIdx = palette.length / 3;
+              palette.push(0, 0, 0);
+            }
+            pixels[pi] = transparentIdx;
+            continue;
+          }
+          // Reduce to 6-bit per channel for palette dedup
+          const qr = r & 0xfc, qg = g & 0xfc, qb = b & 0xfc;
+          const key = (qr << 16) | (qg << 8) | qb;
+          let idx = paletteMap.get(key);
+          if (idx === undefined) {
+            if (palette.length / 3 >= 256) {
+              // Palette full — find nearest existing entry
+              let bestDist = Infinity, bestIdx = 0;
+              for (let p = 0; p < palette.length; p += 3) {
+                const dr = palette[p] - qr, dg = palette[p + 1] - qg, db = palette[p + 2] - qb;
+                const d = dr * dr + dg * dg + db * db;
+                if (d < bestDist) { bestDist = d; bestIdx = p / 3; }
+              }
+              idx = bestIdx;
+            } else {
+              idx = palette.length / 3;
+              palette.push(qr, qg, qb);
+            }
+            paletteMap.set(key, idx);
+          }
+          pixels[pi] = idx;
+        }
+
+        // Pad palette to next power of 2 (min 4 entries for colorRes >= 1)
+        let colorRes = 1;
+        while ((1 << (colorRes + 1)) < Math.max(palette.length / 3, 4)) colorRes++;
+        const palSize = 1 << (colorRes + 1);
+        while (palette.length / 3 < palSize) palette.push(0, 0, 0);
+
+        return { palette: new Uint8Array(palette), pixels, colorRes, transparentIdx, palSize };
+      }
+
+      // LZW compress
+      function lzwEncode(pixels: Uint8Array, minCodeSize: number): Uint8Array {
+        const clearCode = 1 << minCodeSize;
+        const eoiCode = clearCode + 1;
+        const out: number[] = [];
+        let codeSize = minCodeSize + 1;
+        let nextCode = eoiCode + 1;
+        const table = new Map<string, number>();
+
+        function initTable() {
+          table.clear();
+          for (let i = 0; i < clearCode; i++) table.set(String(i), i);
+          nextCode = eoiCode + 1;
+          codeSize = minCodeSize + 1;
+        }
+
+        let buffer = 0, bufBits = 0;
+        function writeCode(code: number) {
+          buffer |= code << bufBits;
+          bufBits += codeSize;
+          while (bufBits >= 8) { out.push(buffer & 0xff); buffer >>= 8; bufBits -= 8; }
+        }
+
+        initTable();
+        writeCode(clearCode);
+
+        let cur = String(pixels[0]);
+        for (let i = 1; i < pixels.length; i++) {
+          const next = cur + "," + pixels[i];
+          if (table.has(next)) {
+            cur = next;
+          } else {
+            writeCode(table.get(cur)!);
+            if (nextCode < 4096) {
+              table.set(next, nextCode++);
+              if (nextCode > (1 << codeSize) && codeSize < 12) codeSize++;
+            } else {
+              writeCode(clearCode);
+              initTable();
+            }
+            cur = String(pixels[i]);
+          }
+        }
+        writeCode(table.get(cur)!);
+        writeCode(eoiCode);
+        if (bufBits > 0) out.push(buffer & 0xff);
+        return new Uint8Array(out);
+      }
+
+      function subBlock(data: Uint8Array): Uint8Array {
+        const blocks: number[] = [];
+        for (let i = 0; i < data.length;) {
+          const chunk = Math.min(255, data.length - i);
+          blocks.push(chunk);
+          for (let j = 0; j < chunk; j++) blocks.push(data[i++]);
+        }
+        blocks.push(0); // block terminator
+        return new Uint8Array(blocks);
+      }
+
+      const parts: BlobPart[] = [];
+      function push(...arrays: Uint8Array[]) { for (const a of arrays) parts.push(a as unknown as BlobPart); }
+
+      // Header
+      push(new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61])); // GIF89a
+
+      // Logical Screen Descriptor (no GCT — each frame has its own LCT)
+      const w = gw, h = gh;
+      push(new Uint8Array([w & 0xff, w >> 8, h & 0xff, h >> 8, 0x00, 0x00, 0x00]));
+
+      // Netscape looping extension (loop forever)
+      push(new Uint8Array([0x21, 0xff, 0x0b,
+        0x4e, 0x45, 0x54, 0x53, 0x43, 0x41, 0x50, 0x45, 0x32, 0x2e, 0x30, // NETSCAPE2.0
+        0x03, 0x01, 0x00, 0x00, 0x00]));
+
+      for (const frame of frames) {
+        try {
+          const img = await loadImg(frame.image_b64);
+          // Fill with black first, then draw — this composites transparent pixels
+          // onto black instead of leaving green fringe from chroma key removal
+          ctx.fillStyle = "#000";
+          ctx.fillRect(0, 0, w, h);
+          ctx.drawImage(img, 0, 0, w, h);
+        } catch {
+          ctx.fillStyle = "#333";
+          ctx.fillRect(0, 0, w, h);
+        }
+        const imageData = ctx.getImageData(0, 0, w, h);
+
+        // Pre-pass: force near-black pixels (from compositing transparent onto black) to transparent
+        const d = imageData.data;
+        for (let px = 0; px < d.length; px += 4) {
+          if (d[px] < 8 && d[px + 1] < 8 && d[px + 2] < 8) {
+            d[px + 3] = 0; // mark as transparent
+          }
+        }
+
+        const { palette, pixels, colorRes, transparentIdx, palSize } = quantise(imageData);
+
+        const delay = Math.round(frame.duration_ms / 10); // GIF delay is in 1/100ths of a second
+        // Graphic Control Extension
+        const hasTransp = transparentIdx >= 0;
+        const packed = (hasTransp ? 0x01 : 0x00) | 0x08; // dispose = restore to bg
+        push(new Uint8Array([
+          0x21, 0xf9, 0x04, packed,
+          delay & 0xff, delay >> 8,
+          hasTransp ? transparentIdx : 0x00,
+          0x00,
+        ]));
+
+        // Image Descriptor with Local Color Table
+        const lctFlag = 0x80 | colorRes;
+        push(new Uint8Array([
+          0x2c,
+          0x00, 0x00, 0x00, 0x00, // left, top
+          w & 0xff, w >> 8, h & 0xff, h >> 8,
+          lctFlag,
+        ]));
+        push(palette);
+
+        // Image data (LZW)
+        const minCodeSize = colorRes + 1;
+        push(new Uint8Array([minCodeSize]));
+        push(subBlock(lzwEncode(pixels, minCodeSize)));
+      }
+
+      // Trailer
+      push(new Uint8Array([0x3b]));
+
+      return new Blob(parts, { type: "image/gif" });
+    },
+    [frames],
+  );
+
+  const exportGif = useCallback(async () => {
+    if (frames.length === 0) return;
+    onNotify?.("Encoding GIF…", "info");
+    try {
+      const blob = await buildGif(frameW, frameH);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "animation.gif";
+      a.click();
+      URL.revokeObjectURL(url);
+      onNotify?.("GIF exported", "success");
+    } catch (e) {
+      onNotify?.(`GIF export failed: ${e instanceof Error ? e.message : String(e)}`, "error");
+    }
+  }, [frames, frameW, frameH, buildGif, onNotify]);
+
+  // Export helpers (Video & sprite sheet)
+  const exportVideo = useCallback(async (preferMp4 = false) => {
     if (frames.length === 0) return;
     const canvas = document.createElement("canvas");
-    canvas.width = 256;
-    canvas.height = 256;
+    canvas.width = frameW;
+    canvas.height = frameH;
     const ctx = canvas.getContext("2d")!;
     const stream = canvas.captureStream(0);
     const track = stream.getVideoTracks()[0] as any;
 
-    let mimeType = "video/webm; codecs=vp9";
-    if (!MediaRecorder.isTypeSupported(mimeType)) {
-      mimeType = "video/webm";
+    // Pick best available format — prefer MP4 for compatibility, fall back to WebM
+    let mimeType = "";
+    let ext = "";
+    let label = "";
+    if (preferMp4) {
+      const mp4Candidates = [
+        "video/mp4; codecs=avc1",
+        "video/mp4; codecs=avc1.42E01E",
+        "video/mp4",
+      ];
+      for (const mt of mp4Candidates) {
+        if (MediaRecorder.isTypeSupported(mt)) { mimeType = mt; ext = "mp4"; label = "MP4"; break; }
+      }
+    }
+    if (!mimeType) {
+      const webmCandidates = [
+        "video/webm; codecs=vp9",
+        "video/webm; codecs=vp8",
+        "video/webm",
+      ];
+      for (const mt of webmCandidates) {
+        if (MediaRecorder.isTypeSupported(mt)) { mimeType = mt; ext = "webm"; label = "WebM"; break; }
+      }
+    }
+    if (!mimeType) {
+      onNotify?.("No supported video format found in this browser", "error");
+      return;
     }
 
+    onNotify?.(`Recording ${label}…`, "info");
     const recorder = new MediaRecorder(stream, { mimeType });
     const chunks: Blob[] = [];
     recorder.ondataavailable = (e) => {
@@ -286,14 +523,16 @@ export function AnimationPanel({
     };
     recorder.start();
 
+    // Play through all frames with a solid background (no transparency in video)
     for (const frame of frames) {
       try {
         const img = await loadImg(frame.image_b64);
-        ctx.clearRect(0, 0, 256, 256);
-        ctx.drawImage(img, 0, 0, 256, 256);
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, frameW, frameH);
+        ctx.drawImage(img, 0, 0, frameW, frameH);
       } catch {
         ctx.fillStyle = "#333";
-        ctx.fillRect(0, 0, 256, 256);
+        ctx.fillRect(0, 0, frameW, frameH);
       }
       track.requestFrame?.();
       await sleep(frame.duration_ms);
@@ -304,23 +543,23 @@ export function AnimationPanel({
       recorder.onstop = () => r();
     });
 
-    const blob = new Blob(chunks, { type: "video/webm" });
+    const blob = new Blob(chunks, { type: mimeType.split(";")[0] });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "animation.webm";
+    a.download = `animation.${ext}`;
     a.click();
     URL.revokeObjectURL(url);
-    onNotify?.("WebM exported", "success");
-  }, [frames, onNotify]);
+    onNotify?.(`${label} video exported`, "success");
+  }, [frames, frameW, frameH, onNotify]);
 
   const exportSpriteSheet = useCallback(async () => {
     if (frames.length === 0) return;
     const cols = Math.ceil(Math.sqrt(frames.length));
     const rows = Math.ceil(frames.length / cols);
     const canvas = document.createElement("canvas");
-    canvas.width = cols * 256;
-    canvas.height = rows * 256;
+    canvas.width = cols * frameW;
+    canvas.height = rows * frameH;
     const ctx = canvas.getContext("2d")!;
 
     for (let i = 0; i < frames.length; i++) {
@@ -328,7 +567,7 @@ export function AnimationPanel({
       const row = Math.floor(i / cols);
       try {
         const img = await loadImg(frames[i].image_b64);
-        ctx.drawImage(img, col * 256, row * 256, 256, 256);
+        ctx.drawImage(img, col * frameW, row * frameH, frameW, frameH);
       } catch {
         /* skip broken frames */
       }
@@ -344,7 +583,7 @@ export function AnimationPanel({
       URL.revokeObjectURL(url);
       onNotify?.("Sprite sheet exported", "success");
     });
-  }, [frames, onNotify]);
+  }, [frames, frameW, frameH, onNotify]);
 
   // Drag & drop reorder
   const dragIdx = useRef<number | null>(null);
@@ -393,15 +632,15 @@ export function AnimationPanel({
         {hasFrames ? (
           <canvas
             ref={canvasRef}
-            width={256}
-            height={256}
+            width={frameW}
+            height={frameH}
             style={{
               imageRendering: "pixelated",
               maxWidth: "100%",
               maxHeight: "100%",
               width: "auto",
               height: "auto",
-              aspectRatio: "1",
+              aspectRatio: `${frameW} / ${frameH}`,
             }}
           />
         ) : (
@@ -811,7 +1050,31 @@ export function AnimationPanel({
           }}
         >
           <button
-            onClick={exportWebM}
+            onClick={exportGif}
+            disabled={!hasFrames}
+            title="Export animated GIF (plays everywhere)"
+            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] hover:bg-white/10 disabled:opacity-30"
+            style={{
+              border: "1px solid var(--color-border)",
+              color: "var(--color-text-primary)",
+            }}
+          >
+            <Download size={12} /> GIF
+          </button>
+          <button
+            onClick={() => exportVideo(true)}
+            disabled={!hasFrames}
+            title="Export MP4 video (best compatibility)"
+            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] hover:bg-white/10 disabled:opacity-30"
+            style={{
+              border: "1px solid var(--color-border)",
+              color: "var(--color-text-primary)",
+            }}
+          >
+            <Download size={12} /> MP4
+          </button>
+          <button
+            onClick={() => exportVideo(false)}
             disabled={!hasFrames}
             title="Export WebM video"
             className="flex items-center gap-1 px-2 py-1 rounded text-[10px] hover:bg-white/10 disabled:opacity-30"

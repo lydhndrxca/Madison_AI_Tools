@@ -26,6 +26,7 @@ import type { ViewImage } from "@/components/shared/ThreeDGenSidebar";
 import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
 import { useArtDirector } from "@/hooks/ArtDirectorContext";
 import { useActivePage } from "@/hooks/ActivePageContext";
+import { useGenerationStatus } from "@/hooks/GenerationStatusContext";
 import { DeepSearchPanel } from "@/components/shared/DeepSearchPanel";
 import type { SearchResult } from "@/components/shared/DeepSearchPanel";
 import { useArtboard } from "@/hooks/ArtboardContext";
@@ -555,6 +556,13 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
   const [tabs, setTabs] = useState<TabDef[]>(BUILTIN_TABS);
   const [activeTab, setActiveTab] = useState("main");
   const busy = useBusySet();
+  const genStatus = useGenerationStatus();
+  const prevBusyRef = useRef(false);
+  useEffect(() => {
+    if (busy.any && !prevBusyRef.current) genStatus.startPage("character");
+    else if (!busy.any && prevBusyRef.current) genStatus.endPage("character");
+    prevBusyRef.current = busy.any;
+  }, [busy.any, genStatus]);
   const textBusy = busy.is("extract") || busy.is("enhance") || busy.is("randomize");
   const [genText, setGenText] = useState<Record<string, string>>({});
 

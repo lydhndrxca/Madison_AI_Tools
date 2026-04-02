@@ -107,7 +107,8 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
   }, []);
 
   const clearAll = useCallback(() => {
-    for (const [, { set }] of registryRef.current) {
+    for (const [id, { set }] of registryRef.current) {
+      if (id === "artboard") continue;
       set(null);
     }
   }, []);
@@ -143,12 +144,12 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
     if (!tpl) return;
     if (typeof tpl.activePage === "string") onSetActivePage(tpl.activePage);
     for (const [id, { set }] of registryRef.current) {
-      // First reset to clear images, then apply template settings
+      if (id === "artboard") continue;
       set(null);
     }
-    // Use a microtask to let the reset flush, then apply settings
     setTimeout(() => {
       for (const [id, { set }] of registryRef.current) {
+        if (id === "artboard") continue;
         if (tpl.pages[id] !== undefined) set(tpl.pages[id]);
       }
       onToast?.(`Template "${tpl.name}" loaded`, "success");
@@ -186,6 +187,7 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
       if (window.electronAPI?.saveSession) {
         const saved = await window.electronAPI.saveSession(json);
         if (saved) onToast?.("Session saved", "success");
+        else onToast?.("Save cancelled or failed — file may be too large", "error");
       } else {
         // Browser fallback: download as a JSON file
         const blob = new Blob([json], { type: "application/json" });
@@ -235,6 +237,7 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
 
       // Match saved entries to registered entries by prefix + position
       for (const [prefix, registered] of registeredByPrefix) {
+        if (prefix === "artboard") continue;
         const saved = savedByPrefix.get(prefix);
         if (!saved) continue;
         for (let i = 0; i < registered.length && i < saved.length; i++) {

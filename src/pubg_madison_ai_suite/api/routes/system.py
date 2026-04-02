@@ -515,3 +515,42 @@ async def ai_review(body: AiReviewRequest):
         return {"text": resp.text}
     except Exception as exc:
         return {"text": f"AI review failed: {exc}"}
+
+
+# ---------------------------------------------------------------------------
+# Bug Report
+# ---------------------------------------------------------------------------
+
+_BUG_REPORT_PATH = Path(os.environ.get("PUBG_SUITE_ROOT", Path(__file__).resolve().parents[4])) / "BUG_REPORT.md"
+
+
+class BugReportEntry(BaseModel):
+    description: str
+    element: str = ""
+    page: str = ""
+
+
+@router.get("/bug-report")
+async def get_bug_report():
+    if _BUG_REPORT_PATH.exists():
+        return {"content": _BUG_REPORT_PATH.read_text(encoding="utf-8")}
+    return {"content": ""}
+
+
+@router.post("/bug-report")
+async def add_bug_report(entry: BugReportEntry):
+    from datetime import datetime
+    header = ""
+    if not _BUG_REPORT_PATH.exists():
+        header = "# Bug Report\n\nBugs filed from Debug Mode in Madison AI Suite.\n\n"
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    location = f" (page: {entry.page}, element: {entry.element})" if entry.element or entry.page else ""
+    block = (
+        f"## [ ] Bug — {timestamp}{location}\n\n"
+        f"{entry.description}\n\n---\n\n"
+    )
+    with open(_BUG_REPORT_PATH, "a", encoding="utf-8") as f:
+        if header:
+            f.write(header)
+        f.write(block)
+    return {"ok": True}

@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { PageId } from "@/app";
+import { useGenerationStatus } from "@/hooks/GenerationStatusContext";
 
 interface SidebarProps {
   activePage: PageId;
@@ -60,7 +61,25 @@ const UTILITY_ITEMS: NavItem[] = [
   { id: "help", label: "Help Wiki", icon: HelpCircle },
 ];
 
+function GenDot({ pageId }: { pageId: string }) {
+  const { getPageStatus } = useGenerationStatus();
+  const status = getPageStatus(pageId);
+  if (status === "idle") return null;
+  return (
+    <span
+      className={cn("ml-auto shrink-0 h-2 w-2 rounded-full", status === "generating" && "animate-pulse")}
+      style={{ background: status === "generating" ? "#ef4444" : "#22c55e" }}
+      title={status === "generating" ? "Generating…" : "Generation complete"}
+    />
+  );
+}
+
 export function Sidebar({ activePage, onNavigate, onSettingsClick, collapsed, setCollapsed }: SidebarProps) {
+  const { viewedPage } = useGenerationStatus();
+  const handleNav = (page: PageId) => {
+    viewedPage(page);
+    onNavigate(page);
+  };
   return (
     <aside
       className={cn(
@@ -98,7 +117,7 @@ export function Sidebar({ activePage, onNavigate, onSettingsClick, collapsed, se
               return (
                 <button
                   key={item.id}
-                  onClick={() => onNavigate(item.id)}
+                  onClick={() => handleNav(item.id)}
                   className={cn(
                     "relative flex items-center gap-2.5 rounded px-3 py-2 text-[13px] font-medium transition-all w-full text-left cursor-pointer",
                     active
@@ -135,7 +154,7 @@ export function Sidebar({ activePage, onNavigate, onSettingsClick, collapsed, se
               return (
                 <button
                   key={item.id}
-                  onClick={() => !item.disabled && onNavigate(item.id)}
+                  onClick={() => !item.disabled && handleNav(item.id)}
                   disabled={item.disabled}
                   className={cn(
                     "relative flex items-center gap-2.5 rounded px-3 py-2 text-[13px] font-medium transition-all w-full text-left cursor-pointer",
@@ -157,10 +176,12 @@ export function Sidebar({ activePage, onNavigate, onSettingsClick, collapsed, se
                   )}
                   <Icon className="h-4 w-4 shrink-0" />
                   {item.label}
-                  {item.disabled && (
+                  {item.disabled ? (
                     <span className="ml-auto text-[9px] font-bold uppercase tracking-wide opacity-50">
                       Soon
                     </span>
+                  ) : (
+                    <GenDot pageId={item.id} />
                   )}
                 </button>
               );
@@ -179,7 +200,7 @@ export function Sidebar({ activePage, onNavigate, onSettingsClick, collapsed, se
               return (
                 <button
                   key={item.id}
-                  onClick={() => onNavigate(item.id)}
+                  onClick={() => handleNav(item.id)}
                   className={cn(
                     "relative flex items-center gap-2.5 rounded px-3 py-2 text-[13px] font-medium transition-all w-full text-left cursor-pointer",
                     active
@@ -199,6 +220,7 @@ export function Sidebar({ activePage, onNavigate, onSettingsClick, collapsed, se
                   )}
                   <Icon className="h-4 w-4 shrink-0" />
                   {item.label}
+                  <GenDot pageId={item.id} />
                 </button>
               );
             })}
@@ -216,7 +238,7 @@ export function Sidebar({ activePage, onNavigate, onSettingsClick, collapsed, se
               return (
                 <button
                   key={item.id}
-                  onClick={() => onNavigate(item.id)}
+                  onClick={() => handleNav(item.id)}
                   className={cn(
                     "relative flex items-center gap-2.5 rounded px-3 py-2 text-[13px] font-medium transition-all w-full text-left cursor-pointer",
                     active

@@ -11,6 +11,7 @@ import { useSessionRegister } from "@/hooks/SessionContext";
 import { useClipboardPaste, readClipboardImage } from "@/hooks/useClipboardPaste";
 import { useModels, type ModelInfo } from "@/hooks/ModelsContext";
 import { ShareToArtTableButton } from "@/components/shared/ShareToArtTableButton";
+import { useGenerationStatus } from "@/hooks/GenerationStatusContext";
 
 const DEFAULT_TABS: TabDef[] = [
   { id: "main", label: "Main Stage", group: "stage" },
@@ -51,6 +52,13 @@ export function GeminiPage() {
   const refCounter = useRef(0);
   const [prompt, setPrompt] = useState("");
   const busy = useBusySet();
+  const genStatus = useGenerationStatus();
+  const prevBusyRef = useRef(false);
+  useEffect(() => {
+    if (busy.any && !prevBusyRef.current) genStatus.startPage("gemini");
+    else if (!busy.any && prevBusyRef.current) genStatus.endPage("gemini");
+    prevBusyRef.current = busy.any;
+  }, [busy.any, genStatus]);
 
   const [gallery, setGallery] = useState<Record<string, string[]>>({});
   const [imageIdx, setImageIdx] = useState<Record<string, number>>({});
@@ -220,6 +228,22 @@ export function GeminiPage() {
     if (activeTab.startsWith("ref")) { setGallery((prev) => ({ ...prev, [activeTab]: [] })); setImageIdx((prev) => ({ ...prev, [activeTab]: 0 })); }
   }, [activeTab]);
 
+  const handleClearImage = useCallback(() => {
+    setGallery((prev) => {
+      const arr = prev[activeTab] || [];
+      if (arr.length <= 1) return { ...prev, [activeTab]: [] };
+      const idx = imageIdx[activeTab] ?? 0;
+      const next = arr.filter((_, i) => i !== idx);
+      setImageIdx((ip) => ({ ...ip, [activeTab]: Math.min(idx, next.length - 1) }));
+      return { ...prev, [activeTab]: next };
+    });
+  }, [activeTab, imageIdx]);
+
+  const handleClearAllImages = useCallback(() => {
+    setGallery({});
+    setImageIdx({});
+  }, []);
+
   const handleReset = useCallback(() => {
     setGallery({}); setImageIdx({}); setEditHistory([]); setPrompt("");
     setBatchCount(1); setAspectPreset("1:1"); setCustomW(1024); setCustomH(1024);
@@ -386,7 +410,10 @@ export function GeminiPage() {
               <Button size="sm" className="w-full" onClick={handleSendToPS} title="Send to Photoshop">Send to PS</Button>
               <Button size="sm" className="w-full" onClick={handleSaveImage} title="Save image to disk">Save Image</Button>
             </div>
-            <Button size="sm" className="w-full" onClick={handleReset} title="Clear all">Reset</Button>
+            <div className="grid grid-cols-2 gap-1.5">
+              <Button size="sm" className="w-full" onClick={handleClearAllImages} title="Clear all images from all tabs">Clear Images</Button>
+              <Button size="sm" className="w-full" onClick={handleReset} title="Reset everything">Reset All</Button>
+            </div>
           </div>
         </Card>
 
@@ -411,7 +438,8 @@ export function GeminiPage() {
           onCopyImage={handleCopyImage}
           onPasteImage={handlePaste}
           onOpenImage={handleOpenImage}
-          onClearImage={isRefTab ? handleClearRef : undefined}
+          onClearImage={isRefTab ? handleClearRef : handleClearImage}
+          onClearAllImages={handleClearAllImages}
           onImageEdited={handleImageEdited}
           imageCount={currentImages.length}
           imageIndex={currentIdx}

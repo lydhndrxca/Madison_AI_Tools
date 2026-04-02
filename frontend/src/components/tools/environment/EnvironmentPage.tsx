@@ -19,6 +19,7 @@ import { ShareToArtTableButton } from "@/components/shared/ShareToArtTableButton
 import { ArtDirectorConfigModal } from "@/components/shared/ArtDirectorConfigModal";
 import { useArtDirector } from "@/hooks/ArtDirectorContext";
 import { useActivePage } from "@/hooks/ActivePageContext";
+import { useGenerationStatus } from "@/hooks/GenerationStatusContext";
 import { DeepSearchPanel } from "@/components/shared/DeepSearchPanel";
 import type { SearchResult } from "@/components/shared/DeepSearchPanel";
 import { useArtboard } from "@/hooks/ArtboardContext";
@@ -242,6 +243,13 @@ export function EnvironmentPage({ instanceId = 0, active = true, projectUid }: E
   const [tabs, setTabs] = useState<TabDef[]>(BUILTIN_TABS);
   const [activeTab, setActiveTab] = useState("main");
   const busy = useBusySet();
+  const genStatus = useGenerationStatus();
+  const prevBusyRef = useRef(false);
+  useEffect(() => {
+    if (busy.any && !prevBusyRef.current) genStatus.startPage("environment");
+    else if (!busy.any && prevBusyRef.current) genStatus.endPage("environment");
+    prevBusyRef.current = busy.any;
+  }, [busy.any, genStatus]);
   const textBusy = busy.is("extract") || busy.is("enhance") || busy.is("randomize");
 
   const [gallery, setGallery] = useState<Record<string, string[]>>({});
