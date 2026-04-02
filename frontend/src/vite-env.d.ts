@@ -28,5 +28,9 @@ interface Window {
     menuResetSaveFolder: () => Promise<void>;
     /** Menu: reset app (clear cache + reload). */
     menuResetApp: () => Promise<void>;
+    /** Profile: save ZIP bytes to disk via native dialog. Returns true if saved. */
+    saveProfileFile: (data: number[], defaultName: string) => Promise<boolean>;
+    /** Profile: open ZIP from disk via native dialog. Returns byte array or null. */
+    openProfileFile: () => Promise<number[] | null>;
   };
 }

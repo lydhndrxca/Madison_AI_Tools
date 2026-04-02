@@ -57,6 +57,7 @@ const UI_MODE_OPTIONS = [
   { value: "create", label: "Create New" },
   { value: "colorize", label: "Colorize" },
   { value: "riff", label: "Explore Variations" },
+  { value: "healthbar", label: "Health Bar" },
 ];
 
 const ELEMENT_TYPE_OPTIONS = [
@@ -202,7 +203,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   const mainstageFileInputRef = useRef<HTMLInputElement>(null);
 
   // UI Generator state
-  const [uiMode, setUiMode] = useState<"create" | "colorize" | "riff">("create");
+  const [uiMode, setUiMode] = useState<"create" | "colorize" | "riff" | "healthbar">("create");
   const [elementType, setElementType] = useState("icon");
   const [prompt, setPrompt] = useState("");
   const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
@@ -225,9 +226,31 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     if (uiMode === "riff") { setMatchRefDims(true); }
   }, [uiMode]);
   const [useGrid, setUseGrid] = useState(true);
-  const [gridLayout, setGridLayout] = useState<"square" | "horizontal" | "vertical">("square");
+  const [gridLayout, setGridLayout] = useState<"square" | "horizontal" | "vertical" | "healthbar">("square");
   const [gridIntent, setGridIntent] = useState<"ideas" | "animation">("ideas");
   const [cellSize, setCellSize] = useState("");
+  const randomIdeasRef = useRef(false);
+
+  // Auto-configure settings when Health Bar mode is selected
+  useEffect(() => {
+    if (sessionLoadingRef.current) return;
+    if (uiMode === "healthbar") {
+      setCellSize("512x64");
+      setGridLayout("healthbar");
+      setUseGrid(true);
+      fetch("/assets/healthbar-template.png")
+        .then((r) => r.blob())
+        .then((blob) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const b64 = (reader.result as string).replace(/^data:image\/\w+;base64,/, "");
+            setRefImageB64(b64);
+          };
+          reader.readAsDataURL(blob);
+        })
+        .catch(() => { /* template not available */ });
+    }
+  }, [uiMode]);
 
   // Reference image
   const [refImageB64, setRefImageB64] = useState<string | null>(null);
@@ -241,13 +264,14 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     img.onload = () => {
       setRefImageDims({ w: img.naturalWidth, h: img.naturalHeight });
       if (sessionLoadingRef.current) return;
+      if (uiMode === "healthbar") return;
       const aspect = img.naturalWidth / img.naturalHeight;
       if (aspect > 1.4) setGridLayout("horizontal");
       else if (aspect < 0.7) setGridLayout("vertical");
       else setGridLayout("square");
     };
     img.src = `data:image/png;base64,${refImageB64}`;
-  }, [refImageB64]);
+  }, [refImageB64, uiMode]);
 
   // Button layout
   const [buttonShape, setButtonShape] = useState("auto");
@@ -353,6 +377,9 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       return id === "generate" || id === "refImage" || id === "saveOptions";
     }
     if (uiMode === "riff") {
+      return id === "generate" || id === "refImage" || id === "saveOptions";
+    }
+    if (uiMode === "healthbar") {
       return id === "generate" || id === "refImage" || id === "saveOptions";
     }
     // create mode
@@ -692,7 +719,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     const [outW, outH] = resolveOutputDims();
     const refImagesB64 = collectRefImagesB64();
 
-    const effectiveElementType = uiMode === "colorize" ? "colorize" : elementType;
+    const effectiveElementType = uiMode === "colorize" ? "colorize" : uiMode === "healthbar" ? "healthbar" : elementType;
     const isRiffMode = uiMode === "riff";
     const baseReq = {
       element_type: effectiveElementType,
@@ -726,7 +753,9 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       color_palette_b64: (uiMode === "colorize" && colorPaletteB64) ? colorPaletteB64 : undefined,
       custom_sections_context: customSections.getPromptContributions() || undefined,
       custom_section_images: customSections.getImageAttachments().map((img) => img.replace(/^data:image\/\w+;base64,/, "")).filter(Boolean) || undefined,
+      random_ideas: randomIdeasRef.current || undefined,
     };
+    randomIdeasRef.current = false;
 
     const shouldUseGrid = useGrid && effectiveElementType !== "scrollbar" && effectiveElementType !== "font" && effectiveElementType !== "number";
 
@@ -900,7 +929,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       const fusionContext = buildFusionBrief(styleFusion);
       const refImagesB64 = collectRefImagesB64();
       const body = JSON.stringify({
-        element_type: uiMode === "colorize" ? "colorize" : elementType,
+        element_type: uiMode === "colorize" ? "colorize" : uiMode === "healthbar" ? "healthbar" : elementType,
         prompt: animPrompt || prompt,
         frame_count: frameCount,
         source_image_b64: refImageB64 ? refImageB64.replace(/^data:image\/\w+;base64,/, "") : undefined,
@@ -1061,13 +1090,21 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
         addToast("Project loaded", "success");
       }
     };
+    const exportHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.storageKey === SK && detail?.instanceId === instanceId && detail?.carrier) {
+        detail.carrier.state = { prompt, elementType, sbOrientation, fontChars, styleFusion, modelId, styleLibraryFolder, buttonShape, borderStyle, outputSize };
+      }
+    };
     window.addEventListener("project-clear", clearHandler);
     window.addEventListener("project-save", saveHandler);
     window.addEventListener("project-load", loadHandler);
+    window.addEventListener("project-export", exportHandler);
     return () => {
       window.removeEventListener("project-clear", clearHandler);
       window.removeEventListener("project-save", saveHandler);
       window.removeEventListener("project-load", loadHandler);
+      window.removeEventListener("project-export", exportHandler);
     };
   }, [instanceId, handleReset, prompt, elementType, sbOrientation, fontChars, styleFusion, modelId, styleLibraryFolder, buttonShape, borderStyle, outputSize, addToast]);
 
@@ -1226,7 +1263,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       if (s === null) { handleReset(); return; }
       sessionLoadingRef.current = true;
       const d = s as Record<string, unknown>;
-      if (typeof d.uiMode === "string") setUiMode(d.uiMode as "create" | "colorize" | "riff");
+      if (typeof d.uiMode === "string") setUiMode(d.uiMode as "create" | "colorize" | "riff" | "healthbar");
       if (typeof d.elementType === "string") setElementType(d.elementType);
       if (typeof d.prompt === "string") setPrompt(d.prompt);
       if (typeof d.genCount === "number") setGenCount(d.genCount);
@@ -1237,7 +1274,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       if (typeof d.addColor === "boolean") setAddColor(d.addColor);
       if (typeof d.noColor === "boolean") setNoColor(d.noColor);
       if (typeof d.useGrid === "boolean") setUseGrid(d.useGrid);
-      if (typeof d.gridLayout === "string") setGridLayout(d.gridLayout as "square" | "horizontal" | "vertical");
+      if (typeof d.gridLayout === "string") setGridLayout(d.gridLayout as "square" | "horizontal" | "vertical" | "healthbar");
       if (typeof d.gridIntent === "string") setGridIntent(d.gridIntent as "ideas" | "animation");
       if (typeof d.cellSize === "string") setCellSize(d.cellSize);
       if (typeof d.buttonShape === "string") setButtonShape(d.buttonShape);
@@ -1369,6 +1406,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     const isCreate = uiMode === "create";
     const isColorize = uiMode === "colorize";
     const isRiff = uiMode === "riff";
+    const isHealthbar = uiMode === "healthbar";
 
     const colorMode = addColor ? "color" : noColor ? "bw" : "natural";
     const handleColorMode = (mode: string) => {
@@ -1378,8 +1416,8 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
 
     return (
       <>
-        {/* Element type sub-dropdown (Create / Riff only) */}
-        {(isCreate || isRiff) && (
+        {/* Element type sub-dropdown (Create / Riff only, hidden in Health Bar mode) */}
+        {(isCreate || isRiff) && !isHealthbar && (
           <div>
             <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Element Type</label>
             <Select
@@ -1419,7 +1457,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           rows={3}
-          placeholder={isRiff ? "What directions should the variations explore? e.g. different art styles, materials, eras..." : isColorize ? "Optional: describe color preferences, mood, or palette direction..." : 'Describe the element — use "quotes" for button label text'}
+          placeholder={isHealthbar ? "Describe the health bar style, mood, or visual treatment..." : isRiff ? "What directions should the variations explore? e.g. different art styles, materials, eras..." : isColorize ? "Optional: describe color preferences, mood, or palette direction..." : 'Describe the element — use "quotes" for button label text'}
           disabled={busy.any}
           data-voice-target="uiPrompt"
         />
@@ -1609,7 +1647,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
         )}
 
         {/* Generate button */}
-        <div className="pt-0.5">
+        <div className="pt-0.5 flex flex-col gap-1.5">
           <Button
             variant="primary"
             className="w-full"
@@ -1620,8 +1658,22 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
             disabled={busy.is("gen")}
             title="Generate from current settings"
           >
-            {isColorize ? "Colorize" : isRiff ? "Explore Variations" : "Generate"}
+            {isColorize ? "Colorize" : isRiff ? "Explore Variations" : isHealthbar ? "Generate Health Bars" : "Generate"}
           </Button>
+          {isHealthbar && (
+            <Button
+              className="w-full"
+              size="lg"
+              generating={busy.is("gen")}
+              generatingText="Generating Random Ideas..."
+              onClick={() => { randomIdeasRef.current = true; handleGenerate(); }}
+              disabled={busy.is("gen")}
+              title="Generate creative health bar variations with a retro/glitchy aesthetic"
+              style={{ border: "1px solid var(--color-border)", background: "var(--color-surface-raised)" }}
+            >
+              Generate Random Ideas
+            </Button>
+          )}
         </div>
       </>
     );
@@ -1649,11 +1701,12 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-[11px] font-medium truncate" style={{ color: "var(--color-text-primary)" }}>
-                {uiMode === "colorize" ? "Source image loaded" : uiMode === "riff" ? "Source element loaded" : "Reference loaded"}
+                {uiMode === "colorize" ? "Source image loaded" : uiMode === "riff" ? "Source element loaded" : uiMode === "healthbar" ? "Health bar template loaded" : "Reference loaded"}
               </p>
               <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
                 {uiMode === "colorize" ? "Will be colorized"
                   : uiMode === "riff" ? "Variations will match this element"
+                  : uiMode === "healthbar" ? "AI will paintover this base shape"
                   : "Used as visual inspiration"}
               </p>
             </div>
@@ -1676,6 +1729,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       <p className="text-[9px] leading-snug" style={{ color: "var(--color-text-muted)" }}>
         {uiMode === "colorize" ? "This image will be colorized — structure and proportions are preserved."
           : uiMode === "riff" ? "Variations will respect this image's dimensions, structure, and identity."
+          : uiMode === "healthbar" ? "The AI sees this health bar shape and generates paintovers and variations."
           : "Used as visual inspiration alongside your prompt and style library."}
       </p>
     </div>
@@ -2177,7 +2231,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
                 <Select
                   options={UI_MODE_OPTIONS}
                   value={uiMode}
-                  onChange={(e) => setUiMode(e.target.value as "create" | "colorize" | "riff")}
+                  onChange={(e) => setUiMode(e.target.value as "create" | "colorize" | "riff" | "healthbar")}
                   disabled={busy.any}
                 />
               </div>
@@ -2187,7 +2241,9 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
                 ? "Generate a brand-new UI element. Add a reference image for inspiration, or start from scratch."
                 : uiMode === "colorize"
                   ? "Colorize a sketch or monochrome image — explore different color palettes and treatments."
-                  : "Take an existing icon or element and generate new ideas that respect its dimensions and structure."}
+                  : uiMode === "healthbar"
+                    ? "Generate health bar variations with style paintovers. Reference image is auto-loaded."
+                    : "Take an existing icon or element and generate new ideas that respect its dimensions and structure."}
             </p>
           </div>
           {/* Row 2: View + Count */}
@@ -2209,13 +2265,14 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
                   className="px-2 py-1 text-xs rounded-[var(--radius-sm)]"
                   style={inputStyle}
                   value={gridLayout}
-                  onChange={(e) => setGridLayout(e.target.value as "square" | "horizontal" | "vertical")}
+                  onChange={(e) => setGridLayout(e.target.value as "square" | "horizontal" | "vertical" | "healthbar")}
                   disabled={busy.any}
-                  title="Grid cell layout — Square (4×4), Horizontal (4×5 wide cells), Vertical (5×4 tall cells)"
+                  title="Grid cell layout — Square (4×4), Horizontal (4×5 wide cells), Vertical (5×4 tall cells), Health Bar (2×8 wide cells)"
                 >
                   <option value="square">Square 4×4</option>
                   <option value="horizontal">Wide 4×5</option>
                   <option value="vertical">Tall 5×4</option>
+                  <option value="healthbar">Health Bar 2×8</option>
                 </select>
               )}
             </div>
@@ -2271,7 +2328,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
           const canToggle = TOGGLEABLE_SECTIONS.has(sectionId);
           const enabled = isSectionEnabled(sectionId);
           const label = sectionId === "generate"
-            ? (uiMode === "colorize" ? "Colorize Options" : uiMode === "riff" ? "Variation Options" : "Generate Options")
+            ? (uiMode === "colorize" ? "Colorize Options" : uiMode === "riff" ? "Variation Options" : uiMode === "healthbar" ? "Health Bar Options" : "Generate Options")
             : sectionId === "refImage" && (uiMode === "colorize" || uiMode === "riff") ? "Source Image"
             : SECTION_LABELS[sectionId];
           const sectionColor = getSectionColor("uilab", sectionId);

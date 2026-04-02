@@ -1024,13 +1024,21 @@ export function EnvironmentPage({ instanceId = 0, active = true, projectUid }: E
         addToast("Project loaded", "success");
       }
     };
+    const exportHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.storageKey === SK && detail?.instanceId === instanceId && detail?.carrier) {
+        detail.carrier.state = { description, envName, biome, gameContext, timeOfDay, seasonWeather, envScale, attributes, lockedAttrs, styleFusion, preservation, modelId };
+      }
+    };
     window.addEventListener("project-clear", clearHandler);
     window.addEventListener("project-save", saveHandler);
     window.addEventListener("project-load", loadHandler);
+    window.addEventListener("project-export", exportHandler);
     return () => {
       window.removeEventListener("project-clear", clearHandler);
       window.removeEventListener("project-save", saveHandler);
       window.removeEventListener("project-load", loadHandler);
+      window.removeEventListener("project-export", exportHandler);
     };
   }, [instanceId, handleReset, description, envName, biome, gameContext, timeOfDay, seasonWeather, envScale, attributes, lockedAttrs, styleFusion, preservation, modelId, addToast]);
 

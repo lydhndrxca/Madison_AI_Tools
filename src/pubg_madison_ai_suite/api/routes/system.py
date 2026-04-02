@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, File, UploadFile
 from pydantic import BaseModel
 
 from pubg_madison_ai_suite.api import core
@@ -378,6 +378,113 @@ async def save_settings_backup(body: SettingsBackupRequest):
         return {"ok": True}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# User profile export / import
+# ---------------------------------------------------------------------------
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+
+_PROFILE_DIRS = {
+    "style_library": _PROJECT_ROOT / "STYLE_LIBRARY",
+    "user_library": _PROJECT_ROOT / "USER_LIBRARY",
+    "artboard_library": _PROJECT_ROOT / "ARTBOARD_LIBRARY",
+}
+
+
+class ProfileExportRequest(BaseModel):
+    settings: dict = {}
+
+
+@router.post("/profile/export")
+async def profile_export(body: ProfileExportRequest):
+    """Bundle all libraries + settings into a ZIP and stream it back."""
+    import io
+    import platform
+    import zipfile
+    from datetime import datetime, timezone
+
+    from fastapi.responses import StreamingResponse
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        manifest = {
+            "version": 1,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "machine": platform.node(),
+            "contents": [],
+        }
+
+        if body.settings:
+            settings_json = json.dumps(body.settings, ensure_ascii=False)
+            zf.writestr("settings/localStorage.json", settings_json)
+            manifest["contents"].append("settings")
+
+        for dir_key, dir_path in _PROFILE_DIRS.items():
+            if not dir_path.is_dir():
+                continue
+            file_count = 0
+            for file_path in dir_path.rglob("*"):
+                if not file_path.is_file():
+                    continue
+                arc_name = f"{dir_key}/{file_path.relative_to(dir_path).as_posix()}"
+                zf.write(file_path, arc_name)
+                file_count += 1
+            if file_count > 0:
+                manifest["contents"].append(dir_key)
+
+        zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+
+    size = buf.seek(0, 2)
+    buf.seek(0)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"madison_profile_{ts}.madison-profile"
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(size),
+        },
+    )
+
+
+
+@router.post("/profile/import")
+async def profile_import(file: UploadFile = File(...)):
+    """Accept a profile ZIP, extract libraries to disk, return settings for localStorage."""
+    import io
+    import zipfile
+
+    data = await file.read()
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data), "r")
+    except zipfile.BadZipFile:
+        return {"ok": False, "error": "Invalid profile file"}
+
+    settings: dict = {}
+    settings_path = "settings/localStorage.json"
+    if settings_path in zf.namelist():
+        try:
+            settings = json.loads(zf.read(settings_path).decode("utf-8"))
+        except Exception:
+            pass
+
+    for dir_key, dir_path in _PROFILE_DIRS.items():
+        prefix = f"{dir_key}/"
+        members = [n for n in zf.namelist() if n.startswith(prefix) and not n.endswith("/")]
+        if not members:
+            continue
+        dir_path.mkdir(parents=True, exist_ok=True)
+        for member in members:
+            rel = member[len(prefix):]
+            target = dir_path / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(zf.read(member))
+
+    zf.close()
+    return {"ok": True, "settings": settings}
 
 
 @router.post("/ai-review")

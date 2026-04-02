@@ -4,6 +4,7 @@ export interface Toast {
   id: number;
   message: string;
   level: "info" | "error" | "success";
+  progress?: number;
 }
 
 let _nextId = 0;
@@ -17,11 +18,16 @@ export function useToast() {
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 5000);
+    return id;
+  }, []);
+
+  const updateToast = useCallback((id: number, updates: Partial<Pick<Toast, "message" | "level" | "progress">>) => {
+    setToasts((prev) => prev.map((t) => (t.id === id ? { ...t, ...updates } : t)));
   }, []);
 
   const dismissToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  return { toasts, addToast, dismissToast };
+  return { toasts, addToast, updateToast, dismissToast };
 }

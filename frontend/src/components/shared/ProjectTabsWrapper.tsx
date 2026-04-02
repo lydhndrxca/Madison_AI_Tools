@@ -250,6 +250,41 @@ export function ProjectTabsWrapper({
     [projects, activeIdx, persist, storageKey],
   );
 
+  const handleDuplicate = useCallback(
+    (idx: number) => {
+      if (projects.length >= MAX_PROJECTS) return;
+      setCtxMenu(null);
+
+      // Synchronous carrier — source page writes its state into this object
+      const carrier: { state: Record<string, unknown> | null } = { state: null };
+      window.dispatchEvent(
+        new CustomEvent("project-export", {
+          detail: { storageKey, instanceId: idx, carrier },
+        }),
+      );
+
+      const newProj: ProjectMeta = {
+        name: `${projects[idx].name} (Copy)`,
+        uid: crypto.randomUUID(),
+      };
+      const next = [...projects, newProj];
+      persist(next);
+      const targetIdx = next.length - 1;
+      setActiveIdx(targetIdx);
+
+      if (carrier.state) {
+        setTimeout(() => {
+          window.dispatchEvent(
+            new CustomEvent("project-load", {
+              detail: { storageKey, instanceId: targetIdx, data: carrier.state },
+            }),
+          );
+        }, 150);
+      }
+    },
+    [projects, storageKey, persist],
+  );
+
   const handleContextMenu = useCallback((e: React.MouseEvent, idx: number) => {
     e.preventDefault();
     setCtxMenu({ x: e.clientX, y: e.clientY, idx });
@@ -307,7 +342,9 @@ export function ProjectTabsWrapper({
                     background: "var(--color-input-bg)",
                     border: "1px solid var(--color-border)",
                     color: "var(--color-text-primary)",
-                    width: Math.max(60, editValue.length * 7),
+                    width: Math.max(80, editValue.length * 7.5 + 16),
+                    minWidth: 80,
+                    maxWidth: 300,
                     outline: "none",
                   }}
                   value={editValue}
@@ -319,9 +356,20 @@ export function ProjectTabsWrapper({
                   }}
                   autoFocus
                   onClick={(e) => e.stopPropagation()}
+                  onFocus={(e) => e.target.select()}
                 />
               ) : (
-                <span>{proj.name}</span>
+                <span
+                  style={{
+                    maxWidth: 120,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    display: "inline-block",
+                  }}
+                >
+                  {proj.name}
+                </span>
               )}
             </button>
           );
@@ -371,6 +419,12 @@ export function ProjectTabsWrapper({
           }}
         >
           <CtxMenuItem label="Rename" onClick={() => handleRename(ctxMenu.idx)} />
+          <CtxMenuItem
+            label="Duplicate"
+            onClick={() => handleDuplicate(ctxMenu.idx)}
+            disabled={projects.length >= MAX_PROJECTS}
+          />
+          <div className="mx-2 my-1" style={{ height: 1, background: "var(--color-border)" }} />
           <CtxMenuItem label="Save Project..." onClick={() => handleSaveProject(ctxMenu.idx)} />
           <CtxMenuItem label="Load Project..." onClick={() => handleLoadProject(ctxMenu.idx)} />
           <div className="mx-2 my-1" style={{ height: 1, background: "var(--color-border)" }} />

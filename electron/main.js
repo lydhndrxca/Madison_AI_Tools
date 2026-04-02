@@ -186,6 +186,35 @@ ipcMain.handle("menu:reset-app", () => {
   }
 });
 
+ipcMain.handle("profile:save", async (_event, dataArray, defaultName) => {
+  if (!mainWindow) return false;
+  const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, {
+    title: "Save User Profile",
+    defaultPath: path.join(app.getPath("documents"), defaultName || "madison_profile.madison-profile"),
+    filters: [{ name: "Madison Profile", extensions: ["madison-profile"] }],
+  });
+  if (canceled || !filePath) return false;
+  fs.writeFileSync(filePath, Buffer.from(dataArray));
+  return true;
+});
+
+ipcMain.handle("profile:open", async () => {
+  if (!mainWindow) return null;
+  const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
+    title: "Load User Profile",
+    filters: [{ name: "Madison Profile", extensions: ["madison-profile"] }],
+    properties: ["openFile"],
+  });
+  if (canceled || filePaths.length === 0) return null;
+  try {
+    const buf = fs.readFileSync(filePaths[0]);
+    return Array.from(new Uint8Array(buf));
+  } catch (err) {
+    console.error("[main] Failed to read profile file:", err.message);
+    return null;
+  }
+});
+
 // Forward Ctrl+V clipboard images to renderer
 function setupClipboardPaste() {
   if (!mainWindow) return;

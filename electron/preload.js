@@ -36,4 +36,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
   menuSetSaveFolder: () => ipcRenderer.invoke("menu:set-save-folder"),
   menuResetSaveFolder: () => ipcRenderer.invoke("menu:reset-save-folder"),
   menuResetApp: () => ipcRenderer.invoke("menu:reset-app"),
+
+  // Profile: save ZIP to disk via native dialog, returns true if saved
+  saveProfileFile: (data, defaultName) =>
+    ipcRenderer.invoke("profile:save", data, defaultName),
+
+  // Profile: open ZIP from disk via native dialog, returns Uint8Array or null
+  openProfileFile: () => ipcRenderer.invoke("profile:open"),
 });

@@ -22,17 +22,30 @@ export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
         return (
           <div
             key={t.id}
-            className="flex items-start gap-2 px-3 py-2 rounded shadow-lg animate-fade-in"
-            style={{ background: s.bg, border: `1px solid ${s.border}`, color: s.color }}
+            className="flex flex-col gap-1 px-3 py-2 rounded shadow-lg animate-fade-in"
+            style={{ background: s.bg, border: `1px solid ${s.border}`, color: s.color, minWidth: 220 }}
           >
-            <span className="text-xs flex-1 break-words">{t.message}</span>
-            <button
-              onClick={() => onDismiss(t.id)}
-              className="shrink-0 p-0.5 rounded cursor-pointer"
-              style={{ background: "transparent", border: "none", color: "inherit", opacity: 0.6 }}
-            >
-              <X className="h-3 w-3" />
-            </button>
+            <div className="flex items-start gap-2">
+              <span className="text-xs flex-1 break-words">{t.message}</span>
+              <button
+                onClick={() => onDismiss(t.id)}
+                className="shrink-0 p-0.5 rounded cursor-pointer"
+                style={{ background: "transparent", border: "none", color: "inherit", opacity: 0.6 }}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+            {t.progress != null && (
+              <div className="w-full rounded-full overflow-hidden" style={{ height: 4, background: "rgba(255,255,255,0.12)" }}>
+                <div
+                  className="h-full rounded-full transition-all duration-200"
+                  style={{
+                    width: `${Math.min(100, Math.round(t.progress * 100))}%`,
+                    background: t.progress >= 1 ? "var(--color-success)" : "var(--color-primary)",
+                  }}
+                />
+              </div>
+            )}
           </div>
         );
       })}

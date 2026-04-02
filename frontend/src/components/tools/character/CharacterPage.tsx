@@ -841,13 +841,27 @@ export function CharacterPage({ instanceId = 0, active = true, projectUid }: Cha
         addToast("Project loaded", "success");
       }
     };
+    const exportHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.storageKey === "madison-charlab-projects" && detail?.instanceId === instanceId && detail?.carrier) {
+        detail.carrier.state = {
+          tabs, activeTab, description, editPrompt,
+          age, race, gender, build, attributes, bible, costume,
+          prodStylePresets, tonePresets, costumeStylePresets, materialPresets, hwDetailPresets, originPresets,
+          sectionsOpen, lockedSections, sectionEnabled, extractTargets, extractMode,
+          styleFusion, envPlacement, styleLibraryFolder, genCount, viewGenCount, modelId, editModel, multiviewModel,
+        };
+      }
+    };
     window.addEventListener("project-clear", clearHandler);
     window.addEventListener("project-save", saveHandler);
     window.addEventListener("project-load", loadHandler);
+    window.addEventListener("project-export", exportHandler);
     return () => {
       window.removeEventListener("project-clear", clearHandler);
       window.removeEventListener("project-save", saveHandler);
       window.removeEventListener("project-load", loadHandler);
+      window.removeEventListener("project-export", exportHandler);
     };
   }, [instanceId, clearAllState, tabs, activeTab, description, editPrompt, age, race, gender, build, attributes, bible, costume, prodStylePresets, tonePresets, costumeStylePresets, materialPresets, hwDetailPresets, originPresets, sectionsOpen, lockedSections, sectionEnabled, extractTargets, extractMode, styleFusion, envPlacement, styleLibraryFolder, genCount, viewGenCount, modelId, editModel, multiviewModel, addToast]);
 

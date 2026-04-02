@@ -464,6 +464,7 @@ def _build_ui_prompt(
     add_color: bool = False,
     no_color: bool = False,
     riff_mode: bool = False,
+    random_ideas: bool = False,
     **kwargs,
 ) -> str:
     """Build the full text prompt for UI element generation."""
@@ -547,6 +548,32 @@ def _build_ui_prompt(
             "- NO other text, NO other elements, NO scene, NO background objects.\n"
             + CHROMA_BG
         )
+
+    elif element_type == "healthbar":
+        import random as _rand
+        base = (
+            f"You are a game UI health bar designer. Generate a single, standalone health bar / HP bar "
+            f"at {gen_w}x{gen_h} pixels.\n"
+            "The health bar is a WIDE, THIN, HORIZONTAL bar that must fill the FULL WIDTH of the canvas.\n"
+            "Maintain approximately an 8:1 width-to-height aspect ratio for the bar element itself.\n"
+            "The bar should be centered vertically with chroma-key green above and below.\n"
+            "This must look like a polished, production-ready game UI health/HP bar.\n"
+            "The selected art style MUST be applied as a paintover on the health bar structure. "
+            "Imagine you are doing concept art paintovers of this base health bar.\n"
+            + CHROMA_BG
+        )
+        if random_ideas:
+            states = ["full HP", "75% HP", "50% HP", "25% HP", "critical 10% HP",
+                       "empty/depleted", "overshield", "regenerating", "poisoned",
+                       "frozen", "burning", "shielded", "glitched"]
+            chosen_state = _rand.choice(states)
+            base += (
+                f"\nRANDOM IDEA MODE — seed #{_rand.randint(1000, 9999)}:\n"
+                "Go for a retro, minimal, early-internet, glitchy computer aesthetic. "
+                "Think pixel art, CRT scanlines, old DOS/Win95 UI, 8-bit game health bars. "
+                f"Show the health bar at: {chosen_state}.\n"
+                "Be creative and experimental — surprise the viewer with unexpected visual treatments."
+            )
 
     elif element_type == "colorize":
         palette_note = ""
@@ -762,6 +789,7 @@ def _build_grid_prompt(
     ref_original_width: int = 0,
     ref_original_height: int = 0,
     grid_intent: str = "ideas",
+    random_ideas: bool = False,
 ) -> str:
     """Build prompt for grid sprite sheet generation.
 
@@ -929,6 +957,37 @@ def _build_grid_prompt(
             "- If a reference image is provided, use it as the element and animate it."
         )
 
+    # --- Healthbar-specific grid instructions ---
+    if element_type == "healthbar":
+        import random as _rand
+        parts.append(
+            f"HEALTH BAR GRID — {total_cells} variations:\n"
+            f"Each cell ({cell_w}×{cell_h} px) contains ONE health bar variation — "
+            "a wide horizontal bar filling the full cell width.\n"
+            "The health bar must be THIN and HORIZONTAL, matching approximately an 8:1 aspect ratio.\n"
+            "Center the bar vertically within each cell. Chroma-key green above and below.\n\n"
+            "VARY across cells:\n"
+            "- Health fill level (100%, 75%, 50%, 25%, critical 10%, empty, overshield)\n"
+            "- Color schemes and palettes\n"
+            "- Artistic styles (pixel art, flat minimal, glossy, retro CRT, glitch aesthetic, "
+            "neon, medieval, sci-fi, fantasy, steampunk)\n"
+            "- Surface treatments and materials\n\n"
+            "The selected art style MUST be applied as a paintover on the health bar structure. "
+            "Imagine you are doing concept art paintovers of this base health bar."
+        )
+        if random_ideas:
+            parts.append(
+                f"*** RANDOM IDEAS MODE — seed #{_rand.randint(1000, 9999)} ***\n"
+                "Go WILD with a retro, minimal, early-internet, glitchy computer aesthetic!\n"
+                "Think: pixel art, CRT scanlines, old DOS/Win95 UI chrome, 8-bit game bars, "
+                "broken LCD displays, retro terminal green-on-black, VHS tracking artifacts, "
+                "lo-fi dithering, chunky bitmap fonts on the bar.\n"
+                "Show different health states: full, half, low, critical, depleted, regenerating, "
+                "poisoned (dripping), frozen (ice crystals), burning (flames), shielded (glow), "
+                "glitched (corrupted pixels).\n"
+                "Be maximally creative and experimental — surprise the viewer."
+            )
+
     parts.append(
         f"CRITICAL — ONE ASSET PER CELL (all {total_cells} cells):\n"
         f"- Each cell is {cell_w}×{cell_h} px. Draw EXACTLY ONE single {element_type} in each cell — "
@@ -1018,11 +1077,12 @@ class UIGenRequest(BaseModel):
     custom_sections_context: Optional[str] = None
     custom_section_images: Optional[list[str]] = None
     riff_mode: bool = False
-    grid_layout: str = "square"  # "square" | "horizontal" | "vertical"
+    grid_layout: str = "square"  # "square" | "horizontal" | "vertical" | "healthbar"
     grid_intent: str = "ideas"  # "ideas" | "animation"
     color_palette_b64: Optional[str] = None
     ref_original_width: Optional[int] = None
     ref_original_height: Optional[int] = None
+    random_ideas: bool = False
 
 
 class UIGenerateRequest(UIGenRequest):
@@ -1169,6 +1229,7 @@ def _do_generate_single(req: UIGenRequest) -> UIGenSingleResponse:
         add_color=True if req.element_type == "colorize" else req.add_color,
         no_color=False if req.element_type == "colorize" else req.no_color,
         riff_mode=req.riff_mode,
+        random_ideas=req.random_ideas,
         has_color_palette=bool(req.color_palette_b64),
     )
 
@@ -1819,7 +1880,9 @@ def _do_generate_grid(req: UIGenRequest) -> UIGenGridResponse:
     cell_h = req.cell_height or 256
 
     layout = req.grid_layout or "square"
-    if layout == "horizontal":
+    if layout == "healthbar":
+        grid_cols, grid_rows = 2, 8
+    elif layout == "horizontal":
         grid_cols, grid_rows = 4, 5
     elif layout == "vertical":
         grid_cols, grid_rows = 5, 4
@@ -1863,6 +1926,7 @@ def _do_generate_grid(req: UIGenRequest) -> UIGenGridResponse:
         ref_original_width=req.ref_original_width or 0,
         ref_original_height=req.ref_original_height or 0,
         grid_intent=req.grid_intent or "ideas",
+        random_ideas=req.random_ideas,
     )
 
     if req.custom_sections_context:
@@ -1928,7 +1992,18 @@ def _do_generate_grid(req: UIGenRequest) -> UIGenGridResponse:
     # --- Smart cropping: detect actual cell positions via green-band projection ---
     detected_cells, det_cols, det_rows, bg_color = _detect_cells_by_projection(result)
 
+    keep_aspect = layout == "healthbar"
     sq_size = max(cell_w, cell_h, 256)
+    out_w = cell_w if keep_aspect else sq_size
+    out_h = cell_h if keep_aspect else sq_size
+
+    def _postprocess_cell(cell_img):
+        cell_img = _remove_bg_adaptive(cell_img, bg_color)
+        if keep_aspect:
+            cell_img = cell_img.resize((out_w, out_h), Image.Resampling.LANCZOS)
+        else:
+            cell_img = _make_square_cell(cell_img, output_size=sq_size)
+        return cell_img
 
     if detected_cells and det_cols >= 2 and det_rows >= 2:
         log.info("=== Using projection-detected grid: %d cols × %d rows (%d cells), bg=RGB%s ===",
@@ -1936,8 +2011,7 @@ def _do_generate_grid(req: UIGenRequest) -> UIGenGridResponse:
         actual_cols, actual_rows = det_cols, det_rows
         cells_b64: list[str] = []
         for idx, cell in enumerate(detected_cells):
-            cell = _remove_bg_adaptive(cell, bg_color)
-            cell = _make_square_cell(cell, output_size=sq_size)
+            cell = _postprocess_cell(cell)
             cells_b64.append(core.image_to_b64(cell))
             r_idx, c_idx = divmod(idx, actual_cols)
             core.save_generated_image(
@@ -1960,8 +2034,7 @@ def _do_generate_grid(req: UIGenRequest) -> UIGenGridResponse:
                 x1, y1 = col * cell_w, row * cell_h
                 x2, y2 = x1 + cell_w, y1 + cell_h
                 cell = result.crop((x1, y1, x2, y2)).copy()
-                cell = _remove_bg_adaptive(cell, bg_color)
-                cell = _make_square_cell(cell, output_size=sq_size)
+                cell = _postprocess_cell(cell)
                 cells_b64.append(core.image_to_b64(cell))
                 core.save_generated_image(
                     cell, "AI UILab",
@@ -1975,8 +2048,8 @@ def _do_generate_grid(req: UIGenRequest) -> UIGenGridResponse:
         full_grid_b64=core.image_to_b64(result),
         width=result.width,
         height=result.height,
-        cell_width=sq_size,
-        cell_height=sq_size,
+        cell_width=out_w,
+        cell_height=out_h,
         grid_cols=actual_cols,
         grid_rows=actual_rows,
     )

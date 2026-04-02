@@ -8,6 +8,7 @@ import { ConsolePanel } from "@/components/shared/ConsolePanel";
 import { AudioSettingsModal } from "@/components/shared/AudioSettingsModal";
 import { useWebSocket } from "@/hooks/useApi";
 import { useSessionContext } from "@/hooks/SessionContext";
+import { useToastContext } from "@/hooks/ToastContext";
 import { useVoiceToText, nativeSpeechSupported } from "@/hooks/useVoiceToText";
 import type { VoiceEngine } from "@/hooks/useVoiceToText";
 
@@ -292,6 +293,128 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
     return () => clearTimeout(timer);
   }, [voiceRestartPending, voice]);
 
+  const { addToast, updateToast, dismissToast } = useToastContext();
+  const profileFileRef = useRef<HTMLInputElement>(null);
+
+  const _backendBase = window.location.protocol === "file:" ? "http://127.0.0.1:8420" : "";
+
+  const handleSaveProfile = useCallback(async () => {
+    try {
+      const settings: Record<string, string> = {};
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && /^madison[-_]/i.test(key)) {
+          settings[key] = localStorage.getItem(key) || "";
+        }
+      }
+      const tid = addToast("Packaging user profile…", "info");
+      updateToast(tid, { progress: 0 });
+
+      const res = await fetch(`${_backendBase}/api/system/profile/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings }),
+      });
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+
+      const total = Number(res.headers.get("Content-Length") || 0);
+      const reader = res.body?.getReader();
+      const chunks: BlobPart[] = [];
+      let loaded = 0;
+
+      if (reader) {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          loaded += value.length;
+          if (total > 0) {
+            const pct = Math.min(loaded / total, 0.99);
+            const mb = (loaded / 1048576).toFixed(1);
+            const totalMb = (total / 1048576).toFixed(1);
+            updateToast(tid, { message: `Downloading profile… ${mb} / ${totalMb} MB`, progress: pct });
+          }
+        }
+      }
+
+      const blob = new Blob(chunks, { type: "application/zip" });
+      updateToast(tid, { message: "Saving profile…", progress: 1 });
+
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="?([^"]+)"?/);
+      const filename = match?.[1] || `madison_profile_${Date.now()}.madison-profile`;
+
+      if (window.electronAPI?.saveProfileFile) {
+        const buf = await blob.arrayBuffer();
+        const saved = await window.electronAPI.saveProfileFile(
+          Array.from(new Uint8Array(buf)),
+          filename,
+        );
+        if (saved) {
+          dismissToast(tid);
+          addToast("User profile saved", "success");
+        }
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        dismissToast(tid);
+        addToast("User profile downloaded", "success");
+      }
+    } catch (e) {
+      console.error("[Profile] Save failed", e);
+      addToast(`Profile save failed: ${e instanceof Error ? e.message : e}`, "error");
+    }
+  }, [addToast, updateToast, dismissToast, _backendBase]);
+
+  const handleLoadProfile = useCallback(async () => {
+    if (window.electronAPI?.openProfileFile) {
+      const data = await window.electronAPI.openProfileFile();
+      if (!data) return;
+      await _importProfileData(new Uint8Array(data));
+    } else {
+      profileFileRef.current?.click();
+    }
+  }, []);
+
+  const _importProfileData = useCallback(async (bytes: Uint8Array) => {
+    addToast("Importing user profile...", "info");
+    try {
+      const form = new FormData();
+      form.append("file", new Blob([bytes] as BlobPart[]), "profile.madison-profile");
+      const res = await fetch(`${_backendBase}/api/system/profile/import`, {
+        method: "POST",
+        body: form,
+      });
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.error || "Import failed");
+
+      if (json.settings && typeof json.settings === "object") {
+        for (const [key, val] of Object.entries(json.settings)) {
+          if (typeof val === "string") localStorage.setItem(key, val);
+        }
+      }
+      addToast("Profile imported — reloading app...", "success");
+      setTimeout(() => window.location.reload(), 1200);
+    } catch (e) {
+      addToast(`Profile import failed: ${e instanceof Error ? e.message : e}`, "error");
+    }
+  }, [addToast, _backendBase]);
+
+  const handleProfileFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    await _importProfileData(bytes);
+    if (profileFileRef.current) profileFileRef.current.value = "";
+  }, [_importProfileData]);
+
   const onWsMessage = useCallback(
     (msg: { type: string; data: Record<string, unknown> }) => {
       if (msg.type === "status" && typeof msg.data.message === "string") {
@@ -359,6 +482,9 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
           <MenuBarDropdown label="File" items={[
             { label: "Save Session", shortcut: "Ctrl+S", onClick: () => triggerSave() },
             { label: "Open Session", shortcut: "Ctrl+O", onClick: () => triggerOpen() },
+            { separator: true },
+            { label: "Save User Profile", onClick: handleSaveProfile },
+            { label: "Load User Profile", onClick: handleLoadProfile },
             { separator: true },
             { label: "Audio Settings...", onClick: () => setAudioSettingsOpen(true) },
             { separator: true },
@@ -484,6 +610,7 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
       <ConsolePanel open={consoleOpen} onClose={() => setConsoleOpen(false)} />
       <AudioSettingsModal open={audioSettingsOpen} onClose={() => setAudioSettingsOpen(false)} />
       <WelcomeModal onNavigate={onNavigate as (page: string) => void} />
+      <input ref={profileFileRef} type="file" accept=".madison-profile,.zip" className="hidden" onChange={handleProfileFileSelect} />
 
       {/* Voice engine right-click context menu */}
       {voiceCtxMenu && (
