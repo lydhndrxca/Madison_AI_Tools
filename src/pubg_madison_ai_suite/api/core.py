@@ -234,6 +234,19 @@ _COST_PER_IMAGE_OUTPUT = {
 
 _GROUNDING_COST_PER_QUERY = 0.014
 
+# Veo: USD per second of generated video
+_COST_PER_SECOND_VIDEO: dict[str, float] = {
+    "veo-3.1-generate-preview": 0.40,
+    "veo-3.1-fast-generate-preview": 0.15,
+    "veo-3.1-lite-generate-preview": 0.05,
+    "veo-3.0-generate-001": 0.40,
+    "veo-3.0-fast-generate-001": 0.15,
+    "veo-2.0-generate-001": 0.50,
+}
+
+# Meshy: approximate USD per API credit (~$0.02 based on Pro plan $20/1000 credits)
+_MESHY_COST_PER_CREDIT = 0.02
+
 _cost_lock = threading.Lock()
 _cost_data: dict | None = None
 _COST_FILE = CONFIG_ROOT / "api_costs.json"
@@ -273,7 +286,10 @@ def _save_cost_data() -> None:
 
 def track_cost(category: str, model: str, input_tokens: int = 0,
                output_tokens: int = 0, images_generated: int = 0,
-               grounding_queries: int = 0) -> float:
+               grounding_queries: int = 0,
+               video_seconds: int = 0,
+               meshy_credits: int = 0,
+               flat_cost: float = 0.0) -> float:
     """Record an API cost event. Returns the cost delta."""
     cost = 0.0
 
@@ -291,6 +307,16 @@ def track_cost(category: str, model: str, input_tokens: int = 0,
 
     if grounding_queries > 0:
         cost += grounding_queries * _GROUNDING_COST_PER_QUERY
+
+    if video_seconds > 0:
+        rate = _COST_PER_SECOND_VIDEO.get(model, 0.40)
+        cost += video_seconds * rate
+
+    if meshy_credits > 0:
+        cost += meshy_credits * _MESHY_COST_PER_CREDIT
+
+    if flat_cost > 0:
+        cost += flat_cost
 
     if cost <= 0:
         return 0.0
@@ -847,6 +873,76 @@ def save_generated_image(
         return str(image_path)
     except Exception as e:
         print(f"[AutoSave] Failed: {e}")
+        return None
+
+
+def save_generated_video(
+    video_b64: str,
+    tool_name: str = "Veo",
+    metadata: dict | None = None,
+) -> str | None:
+    """Save a generated video to ALL GENERATED IMAGES/<tool>/<date>/ with JSON sidecar.
+
+    Returns the saved file path as a string, or None on error.
+    """
+    import json as _json
+    from datetime import datetime
+    from uuid import uuid4
+
+    try:
+        root = _get_save_root() / tool_name
+        date_dir = root / datetime.now().strftime("%Y-%m-%d")
+        date_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        uid = uuid4().hex[:8]
+        filename = f"auto_{timestamp}_{uid}.mp4"
+        video_path = date_dir / filename
+
+        raw = base64.b64decode(video_b64)
+        video_path.write_bytes(raw)
+
+        # Generate a thumbnail from the first frame
+        thumb_path = None
+        try:
+            import subprocess, sys, tempfile
+            thumb_dir = date_dir / ".thumbs"
+            thumb_dir.mkdir(exist_ok=True)
+            thumb_file = thumb_dir / (video_path.stem + ".thumb.jpg")
+
+            # Try ffmpeg first for a quick thumbnail
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", str(video_path), "-vframes", "1",
+                     "-vf", "scale=160:-1", str(thumb_file)],
+                    capture_output=True, timeout=10,
+                )
+                if thumb_file.is_file() and thumb_file.stat().st_size > 0:
+                    thumb_path = thumb_file
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
+        except Exception:
+            pass
+
+        meta = {
+            "timestamp": datetime.now().isoformat(),
+            "tool": tool_name,
+            "generation_type": "video",
+            "image_file": filename,
+            "media_type": "video",
+            "width": 0,
+            "height": 0,
+            "model": metadata.get("model", "") if metadata else "",
+        }
+        if metadata:
+            meta.update(metadata)
+
+        with open(video_path.with_suffix(".json"), "w", encoding="utf-8") as f:
+            _json.dump(meta, f, indent=2, ensure_ascii=False)
+
+        return str(video_path)
+    except Exception as e:
+        print(f"[AutoSave Video] Failed: {e}")
         return None
 
 

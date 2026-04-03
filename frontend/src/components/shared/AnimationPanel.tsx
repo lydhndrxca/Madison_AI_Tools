@@ -18,7 +18,17 @@ import {
   Copy,
   Repeat,
   Image as ImageIcon,
+  ChevronLeft,
+  ChevronRight,
+  Undo2,
+  Sliders,
+  SunMedium,
+  Contrast,
+  Paintbrush,
+  Droplets,
+  RotateCw,
 } from "lucide-react";
+import type { ModelInfo } from "@/hooks/ModelsContext";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,6 +41,14 @@ export interface AnimationFrame {
   height: number;
   duration_ms: number;
   label?: string;
+  alternatives?: string[];
+  activeAltIdx?: number;
+}
+
+export interface RegenOptions {
+  modelId?: string;
+  count?: number;
+  notes?: string;
 }
 
 export interface AnimationPanelProps {
@@ -38,9 +56,11 @@ export interface AnimationPanelProps {
   onFramesChange: (frames: AnimationFrame[]) => void;
   generating?: boolean;
   onGenerate: (prompt: string, frameCount: number) => void;
-  onRegenerateFrame: (frameId: string) => void;
+  onRegenerateFrame: (frameId: string, opts?: RegenOptions) => void;
   sourceImage?: string | null;
   onNotify?: (msg: string, level: "success" | "error" | "info") => void;
+  models?: ModelInfo[];
+  defaultModelId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,12 +81,199 @@ function loadImg(b64: string): Promise<HTMLImageElement> {
   });
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 const CHECKERBOARD =
   "repeating-conic-gradient(#2a2a2a 0% 25%, #1e1e1e 0% 50%) 0 0 / 20px 20px";
+
+// ---------------------------------------------------------------------------
+// Manual WebM encoder — based on the proven whammy.js approach.
+// Each frame: canvas → WebP (toDataURL) → extract VP8 bitstream → WebM/EBML
+// ---------------------------------------------------------------------------
+
+function parseWebP(dataUrl: string): Uint8Array {
+  const base64 = dataUrl.split(",")[1];
+  const bin = atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+function extractVP8(webp: Uint8Array): Uint8Array | null {
+  if (webp.length < 20) return null;
+  let off = 12;
+  while (off < webp.length - 8) {
+    const tag = String.fromCharCode(webp[off], webp[off + 1], webp[off + 2], webp[off + 3]);
+    const sz = webp[off + 4] | (webp[off + 5] << 8) | (webp[off + 6] << 16) | (webp[off + 7] << 24);
+    if (tag === "VP8 ") return webp.slice(off + 8, off + 8 + sz);
+    off += 8 + sz + (sz & 1);
+  }
+  return null;
+}
+
+function numToBuffer(num: number): Uint8Array {
+  const bytes: number[] = [];
+  let v = num;
+  do { bytes.unshift(v & 0xFF); v = Math.floor(v / 256); } while (v > 0);
+  return new Uint8Array(bytes.length ? bytes : [0]);
+}
+
+function strToBuffer(str: string): Uint8Array {
+  return new TextEncoder().encode(str);
+}
+
+function float64ToBuffer(val: number): Uint8Array {
+  const buf = new ArrayBuffer(8);
+  new DataView(buf).setFloat64(0, val);
+  return new Uint8Array(buf);
+}
+
+interface EBMLNode {
+  id: number;
+  data: Uint8Array | EBMLNode[];
+}
+
+function serializeEBML(nodes: EBMLNode[]): Uint8Array {
+  const parts: Uint8Array[] = [];
+
+  for (const node of nodes) {
+    // Encode element ID
+    const idBytes: number[] = [];
+    let idVal = node.id;
+    const idBuf: number[] = [];
+    do { idBuf.unshift(idVal & 0xFF); idVal = Math.floor(idVal / 256); } while (idVal > 0);
+    for (const b of idBuf) idBytes.push(b);
+
+    // Encode data
+    let data: Uint8Array;
+    if (node.data instanceof Uint8Array) {
+      data = node.data;
+    } else {
+      data = serializeEBML(node.data);
+    }
+
+    // VINT-encode the size
+    const len = data.length;
+    let sizeBytes: number[];
+    if (len <= 0x7E) {
+      sizeBytes = [0x80 | len];
+    } else if (len <= 0x3FFE) {
+      sizeBytes = [0x40 | (len >> 8), len & 0xFF];
+    } else if (len <= 0x1FFFFE) {
+      sizeBytes = [0x20 | (len >> 16), (len >> 8) & 0xFF, len & 0xFF];
+    } else {
+      sizeBytes = [0x10 | ((len >> 24) & 0x0F), (len >> 16) & 0xFF, (len >> 8) & 0xFF, len & 0xFF];
+    }
+
+    const elem = new Uint8Array(idBytes.length + sizeBytes.length + data.length);
+    elem.set(idBytes, 0);
+    elem.set(sizeBytes, idBytes.length);
+    elem.set(data, idBytes.length + sizeBytes.length);
+    parts.push(elem);
+  }
+
+  let total = 0;
+  for (const p of parts) total += p.length;
+  const result = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) { result.set(p, off); off += p.length; }
+  return result;
+}
+
+function makeSimpleBlock(trackNum: number, timecode: number, keyframe: boolean, frameData: Uint8Array): Uint8Array {
+  const flags = keyframe ? 0x80 : 0;
+  const header = new Uint8Array([
+    trackNum | 0x80,
+    (timecode >> 8) & 0xFF,
+    timecode & 0xFF,
+    flags,
+  ]);
+  const result = new Uint8Array(header.length + frameData.length);
+  result.set(header, 0);
+  result.set(frameData, header.length);
+  return result;
+}
+
+async function buildWebMVideo(
+  images: (HTMLImageElement | null)[],
+  frameDurations: number[],
+  width: number,
+  height: number,
+): Promise<Blob> {
+  const cvs = document.createElement("canvas");
+  cvs.width = width;
+  cvs.height = height;
+  const ctx = cvs.getContext("2d")!;
+
+  // Step 1: convert each frame to VP8 via WebP
+  const vp8Frames: Uint8Array[] = [];
+  for (let i = 0; i < images.length; i++) {
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, width, height);
+    if (images[i]) ctx.drawImage(images[i]!, 0, 0, width, height);
+    const dataUrl = cvs.toDataURL("image/webp", 0.85);
+    if (!dataUrl.includes("image/webp")) {
+      throw new Error("Browser does not support WebP encoding");
+    }
+    const webpBytes = parseWebP(dataUrl);
+    const vp8 = extractVP8(webpBytes);
+    if (!vp8) throw new Error(`Frame ${i}: could not extract VP8 bitstream from WebP`);
+    vp8Frames.push(vp8);
+  }
+
+  const totalDuration = frameDurations.reduce((a, b) => a + b, 0);
+
+  // Step 2: build clusters — one per frame (most compatible structure)
+  const clusters: EBMLNode[] = [];
+  let absMs = 0;
+  for (let i = 0; i < vp8Frames.length; i++) {
+    clusters.push({
+      id: 0x1F43B675, // Cluster
+      data: [
+        { id: 0xE7, data: numToBuffer(absMs) }, // Timecode
+        { id: 0xA3, data: makeSimpleBlock(1, 0, true, vp8Frames[i]) }, // SimpleBlock
+      ],
+    });
+    absMs += frameDurations[i];
+  }
+
+  // Step 3: assemble full EBML document
+  const doc: EBMLNode[] = [
+    { id: 0x1A45DFA3, data: [ // EBML Header
+      { id: 0x4286, data: numToBuffer(1) },     // EBMLVersion
+      { id: 0x42F7, data: numToBuffer(1) },     // EBMLReadVersion
+      { id: 0x42F2, data: numToBuffer(4) },     // EBMLMaxIDLength
+      { id: 0x42F3, data: numToBuffer(8) },     // EBMLMaxSizeLength
+      { id: 0x4282, data: strToBuffer("webm") }, // DocType
+      { id: 0x4287, data: numToBuffer(2) },     // DocTypeVersion
+      { id: 0x4285, data: numToBuffer(2) },     // DocTypeReadVersion
+    ]},
+    { id: 0x18538067, data: [ // Segment
+      { id: 0x1549A966, data: [ // Info
+        { id: 0x2AD7B1, data: numToBuffer(1000000) }, // TimecodeScale (1ms)
+        { id: 0x4D80, data: strToBuffer("AnimPanel") }, // MuxingApp
+        { id: 0x5741, data: strToBuffer("AnimPanel") }, // WritingApp
+        { id: 0x4489, data: float64ToBuffer(totalDuration) }, // Duration
+      ]},
+      { id: 0x1654AE6B, data: [ // Tracks
+        { id: 0xAE, data: [ // TrackEntry
+          { id: 0xD7, data: numToBuffer(1) },       // TrackNumber
+          { id: 0x73C5, data: numToBuffer(1) },     // TrackUID
+          { id: 0x9C, data: numToBuffer(0) },       // FlagLacing
+          { id: 0x22B59C, data: strToBuffer("und") }, // Language
+          { id: 0x86, data: strToBuffer("V_VP8") }, // CodecID
+          { id: 0x83, data: numToBuffer(1) },       // TrackType (video)
+          { id: 0xE0, data: [                        // Video
+            { id: 0xB0, data: numToBuffer(width) },  // PixelWidth
+            { id: 0xBA, data: numToBuffer(height) }, // PixelHeight
+          ]},
+        ]},
+      ]},
+      ...clusters,
+    ]},
+  ];
+
+  const bytes = serializeEBML(doc);
+  return new Blob([new Uint8Array(bytes)], { type: "video/webm" });
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -80,12 +287,14 @@ export function AnimationPanel({
   onRegenerateFrame,
   sourceImage,
   onNotify,
+  models = [],
+  defaultModelId = "",
 }: AnimationPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameW = useMemo(() => (frames.length > 0 ? frames[0].width : 256), [frames]);
   const frameH = useMemo(() => (frames.length > 0 ? frames[0].height : 256), [frames]);
   const [playing, setPlaying] = useState(false);
-  const [looping, setLooping] = useState(true);
+  const [looping, setLooping] = useState(false);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [globalDuration, setGlobalDuration] = useState(100);
   const [frameCount, setFrameCount] = useState(16);
@@ -99,6 +308,23 @@ export function AnimationPanel({
     idx: number;
   } | null>(null);
 
+  // Regen panel state
+  const [showRegenPanel, setShowRegenPanel] = useState(false);
+  const [regenModelId, setRegenModelId] = useState(defaultModelId);
+  const [regenCount, setRegenCount] = useState(2);
+  const [regenNotes, setRegenNotes] = useState("");
+  const [regenerating, setRegenerating] = useState(false);
+
+  // Image adjustment state
+  const [adjustMode, setAdjustMode] = useState(false);
+  const [brightness, setBrightness] = useState(0);
+  const [contrast, setContrast] = useState(0);
+  const [saturation, setSaturation] = useState(0);
+  const [hueRotation, setHueRotation] = useState(0);
+
+  // Undo stack
+  const [editHistory, setEditHistory] = useState<{ frameIdx: number; previousData: string; label: string }[]>([]);
+
   useEffect(() => {
     framesRef.current = frames;
   }, [frames]);
@@ -108,6 +334,9 @@ export function AnimationPanel({
   useEffect(() => {
     loopingRef.current = looping;
   }, [looping]);
+
+  // Cancel rAF on unmount
+  useEffect(() => () => { if (rafRef.current !== null) cancelAnimationFrame(rafRef.current); }, []);
 
   // Clamp currentIdx when frames shrink
   useEffect(() => {
@@ -148,36 +377,63 @@ export function AnimationPanel({
     drawFrame(currentIdx);
   }, [currentIdx, drawFrame]);
 
-  // Playback loop
-  const startPlayback = useCallback(async () => {
-    if (framesRef.current.length === 0) return;
+  // Playback loop — uses rAF + performance.now() for deterministic timing
+  const rafRef = useRef<number | null>(null);
+  const playbackOrigin = useRef<{ t0: number; startIdx: number }>({ t0: 0, startIdx: 0 });
+
+  const startPlayback = useCallback(() => {
+    const f = framesRef.current;
+    if (f.length === 0) return;
     playingRef.current = true;
     setPlaying(true);
-    let idx = currentIdx;
+    playbackOrigin.current = { t0: performance.now(), startIdx: currentIdx };
 
-    while (playingRef.current) {
-      const f = framesRef.current;
-      if (f.length === 0) break;
-      if (idx >= f.length) {
+    const tick = () => {
+      if (!playingRef.current) return;
+      const fr = framesRef.current;
+      if (fr.length === 0) { playingRef.current = false; setPlaying(false); return; }
+
+      const { t0, startIdx } = playbackOrigin.current;
+      const elapsed = performance.now() - t0;
+
+      // Walk cumulative schedule from startIdx to find current frame
+      let cum = 0;
+      let idx = startIdx;
+      for (let i = startIdx; i < fr.length; i++) {
+        const dur = fr[i]?.duration_ms ?? 100;
+        if (cum + dur > elapsed) { idx = i; break; }
+        cum += dur;
+        idx = i + 1;
+      }
+
+      if (idx >= fr.length) {
         if (loopingRef.current) {
+          playbackOrigin.current = { t0: performance.now(), startIdx: 0 };
           idx = 0;
         } else {
-          break;
+          setCurrentIdx(fr.length - 1);
+          drawFrame(fr.length - 1);
+          playingRef.current = false;
+          setPlaying(false);
+          return;
         }
       }
-      setCurrentIdx(idx);
-      await drawFrame(idx);
-      await sleep(f[idx]?.duration_ms ?? 100);
-      idx++;
-    }
 
-    playingRef.current = false;
-    setPlaying(false);
+      setCurrentIdx(idx);
+      drawFrame(idx);
+      rafRef.current = requestAnimationFrame(tick);
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
   }, [currentIdx, drawFrame]);
 
   const stopPlayback = useCallback(() => {
     playingRef.current = false;
     setPlaying(false);
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
   }, []);
 
   const togglePlay = useCallback(() => {
@@ -238,6 +494,129 @@ export function AnimationPanel({
     },
     [frames, onFramesChange],
   );
+
+  // ── Undo ──
+  const pushUndo = useCallback((frameIdx: number, previousData: string, label: string) => {
+    setEditHistory((h) => [...h, { frameIdx, previousData, label }]);
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    if (editHistory.length === 0) return;
+    const last = editHistory[editHistory.length - 1];
+    setEditHistory((h) => h.slice(0, -1));
+    const next = [...frames];
+    if (next[last.frameIdx]) {
+      next[last.frameIdx] = { ...next[last.frameIdx], image_b64: last.previousData };
+      onFramesChange(next);
+      setCurrentIdx(last.frameIdx);
+      onNotify?.(`Undo: ${last.label}`, "info");
+    }
+  }, [editHistory, frames, onFramesChange, onNotify]);
+
+  // Keyboard: Ctrl+Z for undo
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "z") {
+        e.preventDefault();
+        handleUndo();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [handleUndo]);
+
+  // ── Alternative cycling ──
+  const cycleAlternative = useCallback((idx: number, dir: 1 | -1) => {
+    const f = frames[idx];
+    if (!f || !f.alternatives || f.alternatives.length === 0) return;
+    const allImages = [f.image_b64, ...f.alternatives.filter((a) => a !== f.image_b64)];
+    if (allImages.length <= 1) return;
+    const currentAltIdx = f.activeAltIdx ?? 0;
+    let next = currentAltIdx + dir;
+    if (next < 0) next = allImages.length - 1;
+    if (next >= allImages.length) next = 0;
+
+    pushUndo(idx, f.image_b64, "Switch alternative");
+    const updated = [...frames];
+    updated[idx] = { ...f, image_b64: allImages[next], activeAltIdx: next };
+    onFramesChange(updated);
+  }, [frames, onFramesChange, pushUndo]);
+
+  // ── Regenerate frame ──
+  const handleRegenerate = useCallback(() => {
+    const f = frames[currentIdx];
+    if (!f || regenerating) return;
+    setRegenerating(true);
+    onRegenerateFrame(f.id, {
+      modelId: regenModelId || undefined,
+      count: regenCount,
+      notes: regenNotes || undefined,
+    });
+  }, [frames, currentIdx, regenerating, onRegenerateFrame, regenModelId, regenCount, regenNotes]);
+
+  // Reset regenerating when generating stops
+  useEffect(() => {
+    if (!generating) setRegenerating(false);
+  }, [generating]);
+
+  // ── Image adjustments ──
+  const resetAdjust = useCallback(() => {
+    setBrightness(0);
+    setContrast(0);
+    setSaturation(0);
+    setHueRotation(0);
+  }, []);
+
+  const applyAdjustment = useCallback(async () => {
+    const f = frames[currentIdx];
+    if (!f) return;
+    if (brightness === 0 && contrast === 0 && saturation === 0 && hueRotation === 0) return;
+
+    pushUndo(currentIdx, f.image_b64, "Adjust image");
+
+    const img = await loadImg(f.image_b64);
+    const canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext("2d")!;
+    ctx.filter = `brightness(${1 + brightness / 100}) contrast(${1 + contrast / 100}) saturate(${1 + saturation / 100}) hue-rotate(${hueRotation}deg)`;
+    ctx.drawImage(img, 0, 0);
+    const dataUrl = canvas.toDataURL("image/png");
+    const b64 = dataUrl.replace(/^data:image\/\w+;base64,/, "");
+
+    const next = [...frames];
+    next[currentIdx] = { ...f, image_b64: b64 };
+    onFramesChange(next);
+    resetAdjust();
+    onNotify?.("Adjustment applied", "success");
+  }, [frames, currentIdx, brightness, contrast, saturation, hueRotation, pushUndo, onFramesChange, resetAdjust, onNotify]);
+
+  // Live adjustment preview on canvas
+  useEffect(() => {
+    if (!adjustMode) return;
+    const canvas = canvasRef.current;
+    if (!canvas || frames.length === 0) return;
+    const f = frames[currentIdx];
+    if (!f) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    let cancelled = false;
+    loadImg(f.image_b64).then((img) => {
+      if (cancelled) return;
+      canvas.width = frameW;
+      canvas.height = frameH;
+      ctx.clearRect(0, 0, frameW, frameH);
+      if (brightness === 0 && contrast === 0 && saturation === 0 && hueRotation === 0) {
+        ctx.drawImage(img, 0, 0, frameW, frameH);
+      } else {
+        ctx.filter = `brightness(${1 + brightness / 100}) contrast(${1 + contrast / 100}) saturate(${1 + saturation / 100}) hue-rotate(${hueRotation}deg)`;
+        ctx.drawImage(img, 0, 0, frameW, frameH);
+        ctx.filter = "none";
+      }
+    });
+    return () => { cancelled = true; };
+  }, [adjustMode, brightness, contrast, saturation, hueRotation, frames, currentIdx, frameW, frameH]);
 
   // Context menu
   const handleTimelineContext = useCallback(
@@ -403,24 +782,13 @@ export function AnimationPanel({
       for (const frame of frames) {
         try {
           const img = await loadImg(frame.image_b64);
-          // Fill with black first, then draw — this composites transparent pixels
-          // onto black instead of leaving green fringe from chroma key removal
-          ctx.fillStyle = "#000";
-          ctx.fillRect(0, 0, w, h);
+          ctx.clearRect(0, 0, w, h);
           ctx.drawImage(img, 0, 0, w, h);
         } catch {
           ctx.fillStyle = "#333";
           ctx.fillRect(0, 0, w, h);
         }
         const imageData = ctx.getImageData(0, 0, w, h);
-
-        // Pre-pass: force near-black pixels (from compositing transparent onto black) to transparent
-        const d = imageData.data;
-        for (let px = 0; px < d.length; px += 4) {
-          if (d[px] < 8 && d[px + 1] < 8 && d[px + 2] < 8) {
-            d[px + 3] = 0; // mark as transparent
-          }
-        }
 
         const { palette, pixels, colorRes, transparentIdx, palSize } = quantise(imageData);
 
@@ -476,81 +844,91 @@ export function AnimationPanel({
     }
   }, [frames, frameW, frameH, buildGif, onNotify]);
 
-  // Export helpers (Video & sprite sheet)
-  const exportVideo = useCallback(async (preferMp4 = false) => {
+  // Export video — records a visible canvas via MediaRecorder (most reliable approach)
+  const exportVideo = useCallback(async () => {
     if (frames.length === 0) return;
-    const canvas = document.createElement("canvas");
-    canvas.width = frameW;
-    canvas.height = frameH;
-    const ctx = canvas.getContext("2d")!;
-    const stream = canvas.captureStream(0);
-    const track = stream.getVideoTracks()[0] as any;
 
-    // Pick best available format — prefer MP4 for compatibility, fall back to WebM
-    let mimeType = "";
-    let ext = "";
-    let label = "";
-    if (preferMp4) {
-      const mp4Candidates = [
-        "video/mp4; codecs=avc1",
-        "video/mp4; codecs=avc1.42E01E",
-        "video/mp4",
-      ];
-      for (const mt of mp4Candidates) {
-        if (MediaRecorder.isTypeSupported(mt)) { mimeType = mt; ext = "mp4"; label = "MP4"; break; }
+    const images = await Promise.all(
+      frames.map((f) => loadImg(f.image_b64).catch(() => null)),
+    );
+
+    // Show a recording overlay with a visible canvas so captureStream actually works
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;";
+    const label = document.createElement("div");
+    label.textContent = "Recording video…";
+    label.style.cssText = "color:#fff;font-size:14px;font-family:system-ui;";
+    overlay.appendChild(label);
+
+    const recCanvas = document.createElement("canvas");
+    recCanvas.width = frameW;
+    recCanvas.height = frameH;
+    recCanvas.style.cssText = "max-width:60%;max-height:50%;border:1px solid #555;border-radius:4px;";
+    overlay.appendChild(recCanvas);
+    document.body.appendChild(overlay);
+
+    const ctx = recCanvas.getContext("2d")!;
+
+    try {
+      const stream = recCanvas.captureStream();
+      let mimeType = "";
+      for (const mt of ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"]) {
+        if (MediaRecorder.isTypeSupported(mt)) { mimeType = mt; break; }
       }
-    }
-    if (!mimeType) {
-      const webmCandidates = [
-        "video/webm; codecs=vp9",
-        "video/webm; codecs=vp8",
-        "video/webm",
-      ];
-      for (const mt of webmCandidates) {
-        if (MediaRecorder.isTypeSupported(mt)) { mimeType = mt; ext = "webm"; label = "WebM"; break; }
-      }
-    }
-    if (!mimeType) {
-      onNotify?.("No supported video format found in this browser", "error");
-      return;
-    }
+      if (!mimeType) { onNotify?.("No video format supported", "error"); return; }
 
-    onNotify?.(`Recording ${label}…`, "info");
-    const recorder = new MediaRecorder(stream, { mimeType });
-    const chunks: Blob[] = [];
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data);
-    };
-    recorder.start();
+      const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_000_000 });
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
 
-    // Play through all frames with a solid background (no transparency in video)
-    for (const frame of frames) {
-      try {
-        const img = await loadImg(frame.image_b64);
+      const drawAt = (idx: number) => {
+        const img = images[idx];
         ctx.fillStyle = "#000";
         ctx.fillRect(0, 0, frameW, frameH);
-        ctx.drawImage(img, 0, 0, frameW, frameH);
-      } catch {
-        ctx.fillStyle = "#333";
-        ctx.fillRect(0, 0, frameW, frameH);
+        if (img) ctx.drawImage(img, 0, 0, frameW, frameH);
+      };
+
+      const schedule: number[] = [];
+      let cum = 0;
+      for (const f of frames) { cum += f.duration_ms; schedule.push(cum); }
+
+      drawAt(0);
+      recorder.start();
+
+      // Animate with requestAnimationFrame — canvas is visible so rAF fires reliably
+      await new Promise<void>((resolve) => {
+        const t0 = performance.now();
+        function tick() {
+          const elapsed = performance.now() - t0;
+          if (elapsed >= cum + 500) { resolve(); return; }
+          let idx = 0;
+          while (idx < schedule.length - 1 && elapsed >= schedule[idx]) idx++;
+          drawAt(Math.min(idx, images.length - 1));
+          requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+      });
+
+      recorder.stop();
+      await new Promise<void>((r) => { recorder.onstop = () => r(); });
+
+      const blob = new Blob(chunks, { type: "video/webm" });
+      if (blob.size < 500) {
+        onNotify?.("Recording produced empty file", "error");
+        return;
       }
-      track.requestFrame?.();
-      await sleep(frame.duration_ms);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "animation.webm";
+      a.click();
+      URL.revokeObjectURL(url);
+      onNotify?.(`Video exported (${(blob.size / 1024).toFixed(0)} KB)`, "success");
+    } catch (e) {
+      onNotify?.(`Export failed: ${e instanceof Error ? e.message : String(e)}`, "error");
+    } finally {
+      document.body.removeChild(overlay);
     }
-
-    recorder.stop();
-    await new Promise<void>((r) => {
-      recorder.onstop = () => r();
-    });
-
-    const blob = new Blob(chunks, { type: mimeType.split(";")[0] });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `animation.${ext}`;
-    a.click();
-    URL.revokeObjectURL(url);
-    onNotify?.(`${label} video exported`, "success");
   }, [frames, frameW, frameH, onNotify]);
 
   const exportSpriteSheet = useCallback(async () => {
@@ -615,8 +993,181 @@ export function AnimationPanel({
 
   const hasFrames = frames.length > 0;
 
+  const currentFrame = hasFrames ? frames[currentIdx] : null;
+  const hasAlts = currentFrame?.alternatives && currentFrame.alternatives.length > 0;
+  const inputStyle: CSSProperties = {
+    background: "var(--color-input-bg)",
+    border: "1px solid var(--color-border)",
+    color: "var(--color-text-primary)",
+  };
+
   return (
     <div style={panelStyle}>
+      {/* ── Editing Toolbar ── */}
+      {hasFrames && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            padding: "4px 10px",
+            borderBottom: "1px solid var(--color-border)",
+            background: "var(--color-card)",
+            flexWrap: "wrap",
+          }}
+        >
+          <button
+            onClick={() => { setAdjustMode(!adjustMode); setShowRegenPanel(false); }}
+            title="Image adjustments (brightness, contrast, saturation, hue)"
+            className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded cursor-pointer transition-colors"
+            style={{
+              background: adjustMode ? "var(--color-accent)" : "var(--color-input-bg)",
+              color: adjustMode ? "#fff" : "var(--color-text-secondary)",
+              border: adjustMode ? "1px solid var(--color-accent)" : "1px solid var(--color-border)",
+            }}
+          >
+            <Sliders className="h-3 w-3" /> Adjust
+          </button>
+          <button
+            onClick={() => { setShowRegenPanel(!showRegenPanel); setAdjustMode(false); }}
+            title="Regenerate this frame with options"
+            className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded cursor-pointer transition-colors"
+            style={{
+              background: showRegenPanel ? "var(--color-accent)" : "var(--color-input-bg)",
+              color: showRegenPanel ? "#fff" : "var(--color-text-secondary)",
+              border: showRegenPanel ? "1px solid var(--color-accent)" : "1px solid var(--color-border)",
+            }}
+          >
+            <RefreshCw className="h-3 w-3" /> Regenerate
+          </button>
+          <div className="w-px h-4 mx-1" style={{ background: "var(--color-border)" }} />
+          <button
+            onClick={handleUndo}
+            disabled={editHistory.length === 0}
+            title={`Undo (${editHistory.length} in history) — Ctrl+Z`}
+            className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded cursor-pointer transition-colors disabled:opacity-30"
+            style={{ background: "var(--color-input-bg)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
+          >
+            <Undo2 className="h-3 w-3" /> Undo{editHistory.length > 0 ? ` (${editHistory.length})` : ""}
+          </button>
+        </div>
+      )}
+
+      {/* ── Adjustment Sliders ── */}
+      {adjustMode && hasFrames && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "6px 10px",
+            borderBottom: "1px solid var(--color-border)",
+            background: "var(--color-bg-secondary)",
+            flexWrap: "wrap",
+          }}
+        >
+          {([
+            { label: "Brightness", value: brightness, set: setBrightness, icon: <SunMedium className="h-3 w-3" /> },
+            { label: "Contrast", value: contrast, set: setContrast, icon: <Contrast className="h-3 w-3" /> },
+            { label: "Saturation", value: saturation, set: setSaturation, icon: <Droplets className="h-3 w-3" /> },
+            { label: "Hue", value: hueRotation, set: setHueRotation, icon: <RotateCw className="h-3 w-3" />, min: 0, max: 360 },
+          ] as const).map((s) => (
+            <label key={s.label} className="flex items-center gap-1 text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+              {s.icon}
+              {s.label}
+              <input
+                type="range"
+                min={("min" in s) ? s.min : -100}
+                max={("max" in s) ? s.max : 100}
+                value={s.value}
+                onChange={(e) => s.set(Number(e.target.value))}
+                className="w-16 h-3"
+              />
+              <span className="w-7 text-right tabular-nums" style={{ color: "var(--color-text-secondary)" }}>{s.value}</span>
+            </label>
+          ))}
+          <button
+            onClick={applyAdjustment}
+            className="px-2 py-0.5 rounded text-[10px] font-medium"
+            style={{ background: "var(--color-accent)", color: "#fff", border: "none" }}
+          >
+            Apply
+          </button>
+          <button
+            onClick={resetAdjust}
+            className="px-2 py-0.5 rounded text-[10px]"
+            style={{ background: "var(--color-input-bg)", color: "var(--color-text-muted)", border: "1px solid var(--color-border)" }}
+          >
+            Reset
+          </button>
+        </div>
+      )}
+
+      {/* ── Regeneration Panel ── */}
+      {showRegenPanel && hasFrames && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "6px 10px",
+            borderBottom: "1px solid var(--color-border)",
+            background: "var(--color-bg-secondary)",
+            flexWrap: "wrap",
+          }}
+        >
+          <label className="flex items-center gap-1 text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+            Model
+            <select
+              value={regenModelId}
+              onChange={(e) => setRegenModelId(e.target.value)}
+              className="px-1.5 py-0.5 text-[10px] rounded"
+              style={inputStyle}
+            >
+              <option value="">Default</option>
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1 text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+            Count
+            <div className="flex gap-1">
+              {[1, 2, 3, 4].map((n) => (
+                <button
+                  key={n}
+                  onClick={() => setRegenCount(n)}
+                  className="px-1.5 py-0.5 text-[10px] rounded font-medium"
+                  style={{
+                    background: regenCount === n ? "var(--color-accent)" : "var(--color-input-bg)",
+                    color: regenCount === n ? "#fff" : "var(--color-text-secondary)",
+                    border: regenCount === n ? "1px solid var(--color-accent)" : "1px solid var(--color-border)",
+                  }}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </label>
+          <input
+            type="text"
+            placeholder="Notes (optional)…"
+            value={regenNotes}
+            onChange={(e) => setRegenNotes(e.target.value)}
+            className="flex-1 min-w-[100px] px-2 py-0.5 text-[10px] rounded"
+            style={inputStyle}
+          />
+          <button
+            onClick={handleRegenerate}
+            disabled={regenerating || !currentFrame}
+            className="px-2 py-0.5 rounded text-[10px] font-medium disabled:opacity-40"
+            style={{ background: "var(--color-accent)", color: "#fff", border: "none" }}
+          >
+            {regenerating ? "Regenerating…" : `Regenerate Frame ${currentIdx + 1}`}
+          </button>
+        </div>
+      )}
+
       {/* ── Playback Canvas ── */}
       <div
         style={{
@@ -779,63 +1330,101 @@ export function AnimationPanel({
           borderBottom: "1px solid var(--color-border)",
         }}
       >
-        {frames.map((f, idx) => (
-          <div
-            key={f.id}
-            draggable
-            onDragStart={() => handleDragStart(idx)}
-            onDragOver={(e) => handleDragOver(e, idx)}
-            onClick={() => {
-              stopPlayback();
-              setCurrentIdx(idx);
-            }}
-            onContextMenu={(e) => handleTimelineContext(e, idx)}
-            style={{
-              flexShrink: 0,
-              width: 56,
-              height: 56,
-              borderRadius: 4,
-              border:
-                idx === currentIdx
-                  ? "2px solid var(--color-accent)"
-                  : "1px solid var(--color-border)",
-              background: CHECKERBOARD,
-              cursor: "pointer",
-              position: "relative",
-              overflow: "hidden",
-            }}
-          >
-            <img
-              src={
-                f.image_b64.startsWith("data:")
-                  ? f.image_b64
-                  : `data:image/png;base64,${f.image_b64}`
-              }
-              alt={f.label || `Frame ${idx + 1}`}
-              style={{
-                width: "100%",
-                height: "100%",
-                objectFit: "contain",
-                imageRendering: "pixelated",
+        {frames.map((f, idx) => {
+          const fHasAlts = f.alternatives && f.alternatives.length > 0;
+          return (
+            <div
+              key={f.id}
+              draggable
+              onDragStart={() => handleDragStart(idx)}
+              onDragOver={(e) => handleDragOver(e, idx)}
+              onClick={() => {
+                stopPlayback();
+                setCurrentIdx(idx);
               }}
-            />
-            <span
+              onContextMenu={(e) => handleTimelineContext(e, idx)}
+              className="group"
               style={{
-                position: "absolute",
-                bottom: 1,
-                right: 2,
-                fontSize: 9,
-                background: "rgba(0,0,0,0.7)",
-                color: "#ccc",
-                padding: "0 3px",
-                borderRadius: 2,
-                lineHeight: "14px",
+                flexShrink: 0,
+                width: 56,
+                height: 56,
+                borderRadius: 4,
+                border:
+                  idx === currentIdx
+                    ? "2px solid var(--color-accent)"
+                    : "1px solid var(--color-border)",
+                background: CHECKERBOARD,
+                cursor: "pointer",
+                position: "relative",
+                overflow: "hidden",
               }}
             >
-              {idx + 1}
-            </span>
-          </div>
-        ))}
+              <img
+                src={
+                  f.image_b64.startsWith("data:")
+                    ? f.image_b64
+                    : `data:image/png;base64,${f.image_b64}`
+                }
+                alt={f.label || `Frame ${idx + 1}`}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "contain",
+                  imageRendering: "pixelated",
+                }}
+              />
+              <span
+                style={{
+                  position: "absolute",
+                  bottom: 1,
+                  right: 2,
+                  fontSize: 9,
+                  background: "rgba(0,0,0,0.7)",
+                  color: "#ccc",
+                  padding: "0 3px",
+                  borderRadius: 2,
+                  lineHeight: "14px",
+                }}
+              >
+                {idx + 1}
+              </span>
+              {/* Alternative arrows */}
+              {fHasAlts && (
+                <>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); cycleAlternative(idx, -1); }}
+                    className="absolute left-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity"
+                    style={{ background: "rgba(0,0,0,0.6)", borderRadius: "0 3px 3px 0", padding: "2px 1px", border: "none", color: "#fff", cursor: "pointer" }}
+                  >
+                    <ChevronLeft size={10} />
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); cycleAlternative(idx, 1); }}
+                    className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity"
+                    style={{ background: "rgba(0,0,0,0.6)", borderRadius: "3px 0 0 3px", padding: "2px 1px", border: "none", color: "#fff", cursor: "pointer" }}
+                  >
+                    <ChevronRight size={10} />
+                  </button>
+                  <span
+                    style={{
+                      position: "absolute",
+                      top: 1,
+                      left: 2,
+                      fontSize: 8,
+                      background: "var(--color-accent)",
+                      color: "#fff",
+                      padding: "0 3px",
+                      borderRadius: 2,
+                      lineHeight: "12px",
+                    }}
+                  >
+                    {(f.activeAltIdx ?? 0) + 1}/{1 + f.alternatives!.length}
+                  </span>
+                </>
+              )}
+            </div>
+          );
+        })}
         {frames.length === 0 && !generating && (
           <span
             style={{
@@ -869,7 +1458,11 @@ export function AnimationPanel({
             {
               icon: <RefreshCw size={12} />,
               label: "Regenerate",
-              action: () => onRegenerateFrame(frames[contextMenu.idx].id),
+              action: () => {
+                setCurrentIdx(contextMenu.idx);
+                setShowRegenPanel(true);
+                setAdjustMode(false);
+              },
             },
             {
               icon: <Copy size={12} />,
@@ -912,14 +1505,18 @@ export function AnimationPanel({
         <label
           style={{ fontSize: 10, color: "var(--color-text-muted)" }}
         >
-          Frame ms:
+          All frames:
           <input
             type="number"
-            min={16}
+            min={1}
             max={2000}
-            step={10}
+            step={1}
             value={globalDuration}
-            onChange={(e) => setGlobalDuration(Number(e.target.value) || 100)}
+            onChange={(e) => {
+              const ms = Math.max(1, Math.min(2000, Number(e.target.value) || 100));
+              setGlobalDuration(ms);
+              if (hasFrames) onFramesChange(frames.map((f) => ({ ...f, duration_ms: ms })));
+            }}
             className="ml-1 w-14 rounded px-1 py-0.5 text-xs"
             style={{
               background: "var(--color-input-bg)",
@@ -927,18 +1524,33 @@ export function AnimationPanel({
               color: "var(--color-text-primary)",
             }}
           />
+          <span style={{ marginLeft: 3 }}>ms</span>
         </label>
-        <button
-          onClick={applyGlobalDuration}
-          disabled={!hasFrames}
-          className="text-[10px] px-2 py-0.5 rounded hover:bg-white/10 disabled:opacity-30"
-          style={{
-            border: "1px solid var(--color-border)",
-            color: "var(--color-text-primary)",
-          }}
-        >
-          Apply to all
-        </button>
+        <span style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
+          {hasFrames ? `${(1000 / globalDuration).toFixed(1)} fps` : ""}
+        </span>
+        {/* FPS presets */}
+        <div style={{ display: "flex", gap: 3 }}>
+          {[{label:"8",ms:125},{label:"12",ms:83},{label:"24",ms:42},{label:"30",ms:33},{label:"60",ms:17}].map((p) => (
+            <button
+              key={p.label}
+              disabled={!hasFrames}
+              onClick={() => {
+                setGlobalDuration(p.ms);
+                onFramesChange(frames.map((f) => ({ ...f, duration_ms: p.ms })));
+              }}
+              className="px-1.5 py-0.5 rounded text-[9px] disabled:opacity-30"
+              style={{
+                background: globalDuration === p.ms ? "var(--color-accent)" : "var(--color-input-bg)",
+                border: "1px solid var(--color-border)",
+                color: globalDuration === p.ms ? "#fff" : "var(--color-text-muted)",
+                cursor: hasFrames ? "pointer" : "default",
+              }}
+            >
+              {p.label}fps
+            </button>
+          ))}
+        </div>
 
         {hasFrames && (
           <label
@@ -951,14 +1563,14 @@ export function AnimationPanel({
             This frame:
             <input
               type="number"
-              min={16}
+              min={1}
               max={2000}
-              step={10}
+              step={1}
               value={frames[currentIdx]?.duration_ms ?? 100}
               onChange={(e) =>
                 setFrameDuration(
                   currentIdx,
-                  Number(e.target.value) || 100,
+                  Math.max(1, Number(e.target.value) || 100),
                 )
               }
               className="ml-1 w-14 rounded px-1 py-0.5 text-xs"
@@ -1062,19 +1674,7 @@ export function AnimationPanel({
             <Download size={12} /> GIF
           </button>
           <button
-            onClick={() => exportVideo(true)}
-            disabled={!hasFrames}
-            title="Export MP4 video (best compatibility)"
-            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] hover:bg-white/10 disabled:opacity-30"
-            style={{
-              border: "1px solid var(--color-border)",
-              color: "var(--color-text-primary)",
-            }}
-          >
-            <Download size={12} /> MP4
-          </button>
-          <button
-            onClick={() => exportVideo(false)}
+            onClick={() => exportVideo()}
             disabled={!hasFrames}
             title="Export WebM video"
             className="flex items-center gap-1 px-2 py-1 rounded text-[10px] hover:bg-white/10 disabled:opacity-30"
@@ -1083,7 +1683,7 @@ export function AnimationPanel({
               color: "var(--color-text-primary)",
             }}
           >
-            <Download size={12} /> WebM
+            <Download size={12} /> Video
           </button>
           <button
             onClick={exportSpriteSheet}

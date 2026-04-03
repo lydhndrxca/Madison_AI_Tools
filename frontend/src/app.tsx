@@ -30,13 +30,14 @@ import { WritingRoomPage } from "./components/tools/writingroom/WritingRoomPage"
 import { HelpPage } from "./components/tools/help/HelpPage";
 import { ArtboardSessionRegister } from "./components/session/ArtboardSessionRegister";
 import { ArtTablePage } from "./components/tools/arttable/ArtTablePage";
+import { VeoPage } from "./components/tools/veo/VeoPage";
 
-export type PageId = "style-library" | "prompt-builder" | "generated-images" | "favorites" | "gemini" | "multiview" | "character" | "weapon" | "prop" | "environment" | "uilab" | "arttable" | "3d" | "transcripts" | "brainstorm" | "writingroom" | "help";
+export type PageId = "style-library" | "prompt-builder" | "generated-images" | "favorites" | "gemini" | "veo" | "multiview" | "character" | "weapon" | "prop" | "environment" | "uilab" | "arttable" | "3d" | "transcripts" | "brainstorm" | "writingroom" | "help";
 
 function AppInner() {
   const [activePage, setActivePage] = useState<PageId>("character");
   const { addToast } = useToastContext();
-  const VALID_PAGES = new Set<string>(["style-library", "prompt-builder", "generated-images", "favorites", "gemini", "multiview", "character", "weapon", "prop", "environment", "uilab", "arttable", "3d", "transcripts", "brainstorm", "writingroom", "help"]);
+  const VALID_PAGES = new Set<string>(["style-library", "prompt-builder", "generated-images", "favorites", "gemini", "veo", "multiview", "character", "weapon", "prop", "environment", "uilab", "arttable", "3d", "transcripts", "brainstorm", "writingroom", "help"]);
   const setPage = useCallback((p: string) => { if (VALID_PAGES.has(p)) setActivePage(p as PageId); }, []);
 
   useEffect(() => {
@@ -44,6 +45,16 @@ function AppInner() {
     document.addEventListener("copy", onCopy);
     return () => document.removeEventListener("copy", onCopy);
   }, [addToast]);
+
+  // Global navigation event so any component can trigger page changes
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const page = (e as CustomEvent<string>).detail;
+      if (page) setPage(page);
+    };
+    window.addEventListener("app-navigate", handler);
+    return () => window.removeEventListener("app-navigate", handler);
+  }, [setPage]);
 
   return (
     <ActivePageProvider value={activePage}>
@@ -54,6 +65,7 @@ function AppInner() {
         <div className="h-full" style={{ display: activePage === "prompt-builder" ? "contents" : "none" }}><PromptBuilderPage /></div>
         <div className="h-full" style={{ display: activePage === "generated-images" || activePage === "favorites" ? "contents" : "none" }}><GeneratedImagesPage defaultTab={activePage === "favorites" ? "favorites" : "browse"} onNavigate={setPage} /></div>
         <div className="h-full" style={{ display: activePage === "gemini" ? "contents" : "none" }}><GeminiPage /></div>
+        <div className="h-full" style={{ display: activePage === "veo" ? "contents" : "none" }}><VeoPage /></div>
         <div className="h-full" style={{ display: activePage === "multiview" ? "contents" : "none" }}><MultiviewPage /></div>
         <div className="h-full" style={{ display: activePage === "character" ? "contents" : "none" }}><CharacterLabWrapper /></div>
         <div className="h-full" style={{ display: activePage === "weapon" ? "contents" : "none" }}><WeaponLabWrapper /></div>
@@ -72,17 +84,25 @@ function AppInner() {
   );
 }
 
-class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
-  state = { error: null as Error | null };
+class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null; stack: string }> {
+  state = { error: null as Error | null, stack: "" };
   static getDerivedStateFromError(error: Error) { return { error }; }
-  componentDidCatch(error: Error, info: ErrorInfo) { console.error("[AppErrorBoundary]", error, info.componentStack); }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("[AppErrorBoundary]", error, info.componentStack);
+    this.setState({ stack: info.componentStack ?? "" });
+  }
   render() {
     if (this.state.error) {
       return (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", background: "#1a1a1c", color: "#e0e0e0", fontFamily: "system-ui", gap: 16, padding: 32, textAlign: "center" }}>
           <div style={{ fontSize: 20, fontWeight: 600 }}>Something went wrong</div>
           <div style={{ fontSize: 13, color: "#999", maxWidth: 480 }}>{this.state.error.message}</div>
-          <button onClick={() => this.setState({ error: null })} style={{ marginTop: 8, padding: "8px 20px", background: "#333", color: "#fff", border: "1px solid #555", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>
+          {this.state.stack && (
+            <pre style={{ fontSize: 10, color: "#f88", maxWidth: "90vw", maxHeight: 200, overflow: "auto", textAlign: "left", background: "#111", padding: 8, borderRadius: 4, whiteSpace: "pre-wrap" }}>
+              {this.state.stack}
+            </pre>
+          )}
+          <button onClick={() => this.setState({ error: null, stack: "" })} style={{ marginTop: 8, padding: "8px 20px", background: "#333", color: "#fff", border: "1px solid #555", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>
             Try Again
           </button>
           <button onClick={() => window.location.reload()} style={{ padding: "8px 20px", background: "transparent", color: "#888", border: "1px solid #444", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>

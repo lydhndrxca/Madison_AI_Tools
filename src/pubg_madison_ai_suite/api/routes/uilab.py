@@ -575,6 +575,19 @@ def _build_ui_prompt(
                 "Be creative and experimental — surprise the viewer with unexpected visual treatments."
             )
 
+    elif element_type == "hitmarker":
+        base = (
+            f"You are a game UI animation frame designer. Generate a single animation frame "
+            f"at {gen_w}x{gen_h} pixels.\n"
+            "You MUST reproduce the source reference icon as FAITHFULLY as possible — "
+            "same shape, silhouette, colors, proportions, textures, and fine details. "
+            "The icon's core identity must be perfectly preserved.\n"
+            "Apply ONLY the animation state change described in the user's prompt — "
+            "nothing else should differ from the source icon.\n"
+            "Center the icon on a chroma-key green background.\n"
+            + CHROMA_BG
+        )
+
     elif element_type == "colorize":
         palette_note = ""
         if kwargs.get("has_color_palette"):
@@ -987,6 +1000,21 @@ def _build_grid_prompt(
                 "glitched (corrupted pixels).\n"
                 "Be maximally creative and experimental — surprise the viewer."
             )
+
+    if element_type == "hitmarker":
+        parts.append(
+            f"HIT MARKER ANIMATION SHEET — {total_cells} frames:\n"
+            f"Each cell ({cell_w}×{cell_h} px) is ONE FRAME of an animation sequence.\n"
+            "You MUST reproduce the source reference icon as FAITHFULLY as possible in EVERY frame — "
+            "same shape, silhouette, colors, proportions, textures, and fine details.\n"
+            "The icon's core identity must be perfectly preserved across all frames.\n"
+            "The ONLY thing that changes between frames is the animation state described in the user's prompt.\n"
+            "Frames read left-to-right, top-to-bottom as a time sequence.\n"
+            "Frame 1 is the start state; the last frame is the end state.\n"
+            "The animation should loop cleanly — the last frame should transition smoothly back to frame 1.\n"
+            "Center each icon on chroma-key green within its cell.\n"
+            "Think of this as a sprite sheet for a game engine animation — precise, consistent, production-ready."
+        )
 
     parts.append(
         f"CRITICAL — ONE ASSET PER CELL (all {total_cells} cells):\n"

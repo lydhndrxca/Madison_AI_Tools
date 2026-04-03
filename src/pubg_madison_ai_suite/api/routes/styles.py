@@ -6,9 +6,11 @@ Each style is a directory with meta.json + up to 16 reference images.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -17,6 +19,7 @@ from fastapi import APIRouter, UploadFile, File, Form
 from pydantic import BaseModel
 
 router = APIRouter()
+_pool = ThreadPoolExecutor(max_workers=2)
 
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 MAX_IMAGES_PER_FOLDER = 16
@@ -344,3 +347,75 @@ def toggle_disabled(folder_name: str, req: ToggleDisabledReq) -> dict:
     meta["updated_at"] = datetime.now(timezone.utc).isoformat()
     _write_meta(folder_name, meta)
     return {"ok": True, "disabled": now_disabled}
+
+
+# ── AI Describe style folder ─────────────────────────────────────
+
+def _describe_style_folder(folder_name: str) -> dict:
+    """Load images from a style library folder and ask Gemini to describe the visual style."""
+    from PIL import Image as PILImage
+    from pubg_madison_ai_suite.api import core
+
+    api_key = core.get_api_key()
+    if not api_key:
+        return {"ok": False, "error": "No API key configured."}
+
+    folder_path = _lib_dir() / folder_name
+    if not folder_path.is_dir():
+        return {"ok": False, "error": f"Folder '{folder_name}' not found."}
+
+    meta = _read_meta(folder_name)
+    disabled = set(meta.get("disabled_images", {}).get("__root__", []))
+    image_paths = [p for p in _image_files(folder_path) if p.name not in disabled]
+
+    if not image_paths:
+        return {"ok": False, "error": "No images in this style folder."}
+
+    contents: list = []
+    contents.append(
+        "You are an expert art director. I'm showing you reference images from a style library. "
+        "Write a concise, vivid style description (2-4 sentences) that captures the unified visual "
+        "aesthetic across all these images. Cover: rendering technique, color palette, texture quality, "
+        "level of detail, mood/atmosphere, and any distinctive artistic traits. "
+        "Write it as a directive — something I can paste into a generation prompt, e.g. "
+        "'Render in a [style]: [details]...'\n\n"
+        "Return ONLY the style description text, nothing else."
+    )
+
+    loaded = 0
+    for p in image_paths[:8]:
+        try:
+            img = PILImage.open(p).convert("RGB")
+            if max(img.size) > 512:
+                ratio = 512 / max(img.size)
+                img = img.resize((int(img.width * ratio), int(img.height * ratio)), PILImage.Resampling.LANCZOS)
+            contents.append(img)
+            loaded += 1
+        except Exception:
+            continue
+
+    if loaded == 0:
+        return {"ok": False, "error": "Could not load any images from the folder."}
+
+    contents.append("Now describe the unified visual style of these images:")
+
+    try:
+        description = core.rest_generate_text_multimodal(
+            api_key,
+            "gemini-2.5-flash",
+            contents,
+            timeout=60,
+            cost_category="style_describe",
+        )
+        if not description:
+            return {"ok": False, "error": "Gemini returned no description."}
+        return {"ok": True, "description": description.strip()}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@router.post("/folders/{folder_name}/describe")
+async def describe_folder_style(folder_name: str):
+    """Have AI analyze all images in a style folder and generate a text description."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, _describe_style_folder, folder_name)

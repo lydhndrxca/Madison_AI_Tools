@@ -13,8 +13,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("clipboard:paste-image", handler);
   },
 
-  // Session: save collected state to file via native dialog
+  // Session: Save As — native dialog, returns filePath or null
   saveSession: (data) => ipcRenderer.invoke("session:save", data),
+
+  // Session: Save to known path (no dialog)
+  saveSessionToPath: (filePath, data) => ipcRenderer.invoke("session:save-to-path", filePath, data),
+
+  // Session: recent files list
+  getRecentSessionFiles: () => ipcRenderer.invoke("session:recent-files"),
+
+  // Session: open a specific file by path
+  openSessionFile: (filePath) => ipcRenderer.invoke("session:open-file", filePath),
 
   // Session: main requests renderer to collect & save state
   onRequestSave: (callback) => {
@@ -23,9 +32,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("session:request-save", handler);
   },
 
-  // Session: main sends loaded session data to renderer
+  // Session: main sends loaded session data to renderer (with optional filePath)
   onSessionLoaded: (callback) => {
-    const handler = (_event, data) => callback(data);
+    const handler = (_event, data, filePath) => callback(data, filePath);
     ipcRenderer.on("session:loaded", handler);
     return () => ipcRenderer.removeListener("session:loaded", handler);
   },

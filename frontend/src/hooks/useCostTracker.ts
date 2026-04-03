@@ -10,10 +10,22 @@ export interface CostData {
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
+  // Gemini image / text
   image_generation: "Image Generation",
   text_generation: "Text / JSON",
-  art_director: "Art Director Chat",
 
+  // Veo video
+  veo_video: "Veo Video Generation",
+  veo_enhance: "Veo Prompt Enhance",
+
+  // 3D services
+  meshy_3d: "Meshy Image-to-3D",
+  meshy_retexture: "Meshy Retexture",
+  hitem3d: "Hitem3D",
+  "3d_analysis": "3D AI Analysis",
+
+  // Assistants & tools
+  art_director: "Art Director Chat",
   voice_transcription: "Dictation",
   deep_search: "Deep Reference Search",
   grounding: "Grounded Search",
@@ -21,6 +33,13 @@ const CATEGORY_LABELS: Record<string, string> = {
   editing: "Image Editing",
   multiview: "Multi-View Generation",
   upscale: "AI Upscale / Restore",
+  style_describe: "Style Description",
+  prompt_review: "Prompt Builder Review",
+  help: "Help / Docs",
+  writing_room: "Writing Room",
+  persona_research: "Persona Research",
+  persona_enhance: "Persona Enhance",
+  brainstorm: "Brainstorm",
 };
 
 export function getCategoryLabel(key: string): string {

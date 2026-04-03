@@ -20,7 +20,7 @@ if str(_pkg_root) not in sys.path:
 
 from pubg_madison_ai_suite.api.ws import manager
 from pubg_madison_ai_suite.api.cancel import reset_cancel_event, release_cancel_event, cancel_all  # noqa: F401
-from pubg_madison_ai_suite.api.routes import system, gemini, character, weapon, prop, environment, uilab, editor, styles, gallery, userlib, artboard, prompts, palette, history, queue, export, director, refsearch, threedgen, brainstorm, writingroom, persona, help
+from pubg_madison_ai_suite.api.routes import system, gemini, veo, character, weapon, prop, environment, uilab, editor, styles, gallery, userlib, artboard, prompts, palette, history, queue, export, director, refsearch, threedgen, brainstorm, writingroom, persona, help
 
 app = FastAPI(title="Madison AI Suite API", version="2.0.0")
 
@@ -33,6 +33,7 @@ app.add_middleware(
 
 app.include_router(system.router, prefix="/api/system", tags=["system"])
 app.include_router(gemini.router, prefix="/api/gemini", tags=["gemini"])
+app.include_router(veo.router, prefix="/api/veo", tags=["veo"])
 app.include_router(character.router, prefix="/api/character", tags=["character"])
 app.include_router(weapon.router, prefix="/api/weapon", tags=["weapon"])
 app.include_router(prop.router, prefix="/api/prop", tags=["prop"])

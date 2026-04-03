@@ -344,17 +344,11 @@ export function ThreeDGenSidebar({ getViewImages, toolLabel, embedded }: ThreeDG
       ...(meshyAutoSize && { origin_at: meshyOriginAt as MeshyCreateParams["origin_at"] }),
     };
 
-    for (let i = 0; i < meshyCount; i++) {
+    const meshyJobs = Array.from({ length: meshyCount }, async () => {
       try {
-        let taskId: string;
-        if (views.length >= 2) {
-          taskId = await meshyCreateMultiImageTo3D(
-            views.map((v) => ({ base64: v.base64, mimeType: v.mimeType })),
-            params,
-          );
-        } else {
-          taskId = await meshyCreateImageTo3D(views[0].base64, views[0].mimeType, params);
-        }
+        const taskId = views.length >= 2
+          ? await meshyCreateMultiImageTo3D(views.map((v) => ({ base64: v.base64, mimeType: v.mimeType })), params)
+          : await meshyCreateImageTo3D(views[0].base64, views[0].mimeType, params);
         const job: LocalJob = { id: taskId, service: "meshy", status: "pending", progress: 0 };
         setJobs((prev) => [job, ...prev]);
         startPolling(taskId, "meshy", views.length >= 2);
@@ -362,7 +356,8 @@ export function ThreeDGenSidebar({ getViewImages, toolLabel, embedded }: ThreeDG
       } catch (e) {
         addToast(`Meshy error: ${(e as Error).message}`, "error");
       }
-    }
+    });
+    await Promise.all(meshyJobs);
   }, [
     getViewImages, meshyModel, meshyModelType, meshyTopology, meshyPolycount,
     meshyShouldRemesh, meshySavePreRemeshed, meshySymmetry, meshyPose,
@@ -387,7 +382,7 @@ export function ThreeDGenSidebar({ getViewImages, toolLabel, embedded }: ThreeDG
       face: hitemFace,
     };
 
-    for (let i = 0; i < hitemCount; i++) {
+    const hitemJobs = Array.from({ length: hitemCount }, async () => {
       try {
         const taskId = await hitem3dSubmitTask(
           params,
@@ -401,7 +396,8 @@ export function ThreeDGenSidebar({ getViewImages, toolLabel, embedded }: ThreeDG
       } catch (e) {
         addToast(`Hitem3D error: ${(e as Error).message}`, "error");
       }
-    }
+    });
+    await Promise.all(hitemJobs);
   }, [getViewImages, hitemModel, hitemResolution, hitemFormat, hitemFace, hitemCount, startPolling, addToast]);
 
   const availableResolutions = HITEM3D_MODEL_INFO[hitemModel]?.resolutions ?? [];

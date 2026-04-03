@@ -30,6 +30,7 @@ class GenerateRequest(BaseModel):
     base_image_b64: Optional[str] = None
     ref_images_b64: Optional[dict[str, str]] = None
     model_id: Optional[str] = None
+    style_guidance: Optional[str] = None
 
 
 class GenerateResponse(BaseModel):
@@ -140,10 +141,13 @@ def _do_generate(
 async def generate(body: GenerateRequest):
     loop = asyncio.get_event_loop()
     await manager.broadcast("status", {"message": "Generating image..."})
+    prompt = body.prompt
+    if body.style_guidance:
+        prompt = f"{prompt}\n\n--- Style Library Guidance ---\n{body.style_guidance}"
     result = await loop.run_in_executor(
         _pool,
         _do_generate,
-        body.prompt,
+        prompt,
         body.mode,
         body.aspect_ratio,
         body.base_image_b64,

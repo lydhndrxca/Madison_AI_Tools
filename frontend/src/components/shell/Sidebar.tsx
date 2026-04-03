@@ -18,6 +18,7 @@ import {
   Lightbulb,
   PenTool,
   HelpCircle,
+  Video,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { PageId } from "@/app";
@@ -47,6 +48,7 @@ const TOOL_ITEMS: NavItem[] = [
   { id: "arttable", label: "Art Table", icon: PenTool },
   { id: "3d", label: "3D GEN AI", icon: Box },
   { id: "gemini", label: "Default Gemini", icon: Sparkles },
+  { id: "veo", label: "Veo Video", icon: Video },
   { id: "multiview", label: "Multiview", icon: Image },
 ];
 

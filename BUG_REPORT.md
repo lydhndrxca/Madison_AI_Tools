@@ -82,3 +82,15 @@ tried to save and it "failed to save" - large file but still it should save
 
 ---
 
+## [ ] Bug — 2026-04-02 21:50:29 (page: uilab, element: Image: "Sheet 2" in "Hit Marker Sheets (4)" [Main content] (page: uilab))
+
+user should be able to double click hit marker grid views to open
+
+---
+
+## [ ] Bug — 2026-04-02 22:49:40 (page: veo, element: "1723 x 1271525 x 6551072 x 9321248 x 8001082 x 3261551 x 644" [Main content] (page: veo))
+
+dragging mouse over art table images wont select them
+
+---
+

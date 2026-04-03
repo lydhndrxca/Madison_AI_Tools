@@ -58,12 +58,22 @@ function stripArtboardTemplateImages(state: unknown): unknown {
   return { ...s, itemsByBoard };
 }
 
+interface RecentFile {
+  path: string;
+  name: string;
+}
+
 interface SessionContextValue {
   register: (pageId: string, getter: StateGetter, setter: StateSetter) => void;
   unregister: (pageId: string) => void;
   clearAll: () => void;
   triggerSave: () => void;
+  triggerSaveAs: () => void;
   triggerOpen: () => void;
+  triggerOpenRecent: (filePath: string) => void;
+  recentFiles: RecentFile[];
+  refreshRecentFiles: () => void;
+  currentFilePath: string | null;
   templates: SessionTemplate[];
   saveTemplate: (name: string) => void;
   loadTemplate: (idx: number) => void;
@@ -76,7 +86,12 @@ const SessionContext = createContext<SessionContextValue>({
   unregister: () => {},
   clearAll: () => {},
   triggerSave: () => {},
+  triggerSaveAs: () => {},
   triggerOpen: () => {},
+  triggerOpenRecent: () => {},
+  recentFiles: [],
+  refreshRecentFiles: () => {},
+  currentFilePath: null,
   templates: [],
   saveTemplate: () => {},
   loadTemplate: () => {},
@@ -173,7 +188,21 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
     });
   }, []);
 
-  const doSaveSession = useCallback(async () => {
+  const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
+  const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
+
+  const refreshRecentFiles = useCallback(async () => {
+    if (window.electronAPI?.getRecentSessionFiles) {
+      try {
+        const paths: string[] = await window.electronAPI.getRecentSessionFiles();
+        setRecentFiles(paths.map((p) => ({ path: p, name: p.replace(/^.*[\\/]/, "").replace(/\.json$/, "") })));
+      } catch { /* */ }
+    }
+  }, []);
+
+  useEffect(() => { refreshRecentFiles(); }, [refreshRecentFiles]);
+
+  const buildSessionJson = useCallback(() => {
     const session: Record<string, unknown> = {
       _version: 1,
       _savedAt: new Date().toISOString(),
@@ -182,14 +211,20 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
     for (const [id, { get }] of registryRef.current) {
       session[id] = get();
     }
+    return JSON.stringify(session);
+  }, []);
+
+  const doSaveAs = useCallback(async () => {
     try {
-      const json = JSON.stringify(session);
+      const json = buildSessionJson();
       if (window.electronAPI?.saveSession) {
-        const saved = await window.electronAPI.saveSession(json);
-        if (saved) onToast?.("Session saved", "success");
-        else onToast?.("Save cancelled or failed — file may be too large", "error");
+        const filePath = await window.electronAPI.saveSession(json);
+        if (filePath) {
+          setCurrentFilePath(filePath);
+          refreshRecentFiles();
+          onToast?.("Session saved", "success");
+        }
       } else {
-        // Browser fallback: download as a JSON file
         const blob = new Blob([json], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -200,23 +235,45 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
         onToast?.("Session saved (downloaded)", "success");
       }
     } catch (err) {
+      console.error("[Session] Save As failed:", err);
+      onToast?.("Failed to save session", "error");
+    }
+  }, [buildSessionJson, refreshRecentFiles, onToast]);
+
+  const doSave = useCallback(async () => {
+    if (!currentFilePath) {
+      doSaveAs();
+      return;
+    }
+    try {
+      const json = buildSessionJson();
+      if (window.electronAPI?.saveSessionToPath) {
+        const ok = await window.electronAPI.saveSessionToPath(currentFilePath, json);
+        if (ok) {
+          refreshRecentFiles();
+          onToast?.("Session saved", "success");
+        } else {
+          onToast?.("Failed to save session", "error");
+        }
+      } else {
+        doSaveAs();
+      }
+    } catch (err) {
       console.error("[Session] Save failed:", err);
       onToast?.("Failed to save session", "error");
     }
-  }, [onToast]);
+  }, [currentFilePath, buildSessionJson, doSaveAs, refreshRecentFiles, onToast]);
 
-  const triggerSave = useCallback(() => { doSaveSession(); }, [doSaveSession]);
+  const triggerSave = useCallback(() => { doSave(); }, [doSave]);
+  const triggerSaveAs = useCallback(() => { doSaveAs(); }, [doSaveAs]);
 
-  const applySession = useCallback((data: string) => {
+  const applySession = useCallback((data: string, filePath?: string) => {
     try {
       const session = JSON.parse(data) as Record<string, unknown>;
       if (typeof session.activePage === "string") {
         onSetActivePage(session.activePage);
       }
 
-      // Build a map of saved session keys grouped by tool prefix
-      // (e.g., "uilab-abc123" → prefix "uilab").  This lets us match
-      // saved data even when project UIDs differ between save & load.
       const savedByPrefix = new Map<string, { key: string; data: unknown }[]>();
       for (const key of Object.keys(session)) {
         if (key.startsWith("_") || key === "activePage") continue;
@@ -226,7 +283,6 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
         savedByPrefix.get(prefix)!.push({ key, data: session[key] });
       }
 
-      // Group current registry entries by the same prefix
       const registeredByPrefix = new Map<string, { id: string; set: StateSetter }[]>();
       for (const [id, { set }] of registryRef.current) {
         const dash = id.indexOf("-");
@@ -235,7 +291,6 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
         registeredByPrefix.get(prefix)!.push({ id, set });
       }
 
-      // Match saved entries to registered entries by prefix + position
       for (const [prefix, registered] of registeredByPrefix) {
         if (prefix === "artboard") continue;
         const saved = savedByPrefix.get(prefix);
@@ -245,12 +300,15 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
         }
       }
 
-      onToast?.("Session loaded", "success");
+      if (filePath) setCurrentFilePath(filePath);
+      refreshRecentFiles();
+      const name = filePath ? filePath.replace(/^.*[\\/]/, "").replace(/\.json$/, "") : "session";
+      onToast?.(`Loaded: ${name}`, "success");
     } catch (err) {
       console.error("[Session] Load failed:", err);
       onToast?.("Failed to load session", "error");
     }
-  }, [onSetActivePage, onToast]);
+  }, [onSetActivePage, refreshRecentFiles, onToast]);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -258,7 +316,6 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
     if (window.electronAPI?.menuOpenSession) {
       window.electronAPI.menuOpenSession();
     } else {
-      // Browser fallback: file picker
       if (!fileInputRef.current) {
         const input = document.createElement("input");
         input.type = "file";
@@ -281,22 +338,29 @@ export function SessionProvider({ children, activePage, onSetActivePage, onToast
     }
   }, [applySession]);
 
-  useEffect(() => {
-    if (!window.electronAPI?.onRequestSave) return;
-    const unsub = window.electronAPI.onRequestSave(async () => {
-      await doSaveSession();
-    });
-    return unsub;
+  const triggerOpenRecent = useCallback(async (filePath: string) => {
+    if (window.electronAPI?.openSessionFile) {
+      const ok = await window.electronAPI.openSessionFile(filePath);
+      if (!ok) onToast?.("Failed to open session file", "error");
+    }
   }, [onToast]);
 
   useEffect(() => {
+    if (!window.electronAPI?.onRequestSave) return;
+    const unsub = window.electronAPI.onRequestSave(async () => {
+      await doSave();
+    });
+    return unsub;
+  }, [doSave]);
+
+  useEffect(() => {
     if (!window.electronAPI?.onSessionLoaded) return;
-    const unsub = window.electronAPI.onSessionLoaded((data: string) => applySession(data));
+    const unsub = window.electronAPI.onSessionLoaded((data: string, filePath?: string) => applySession(data, filePath));
     return unsub;
   }, [applySession]);
 
   return (
-    <SessionContext.Provider value={{ register, unregister, clearAll, triggerSave, triggerOpen, templates, saveTemplate, loadTemplate, deleteTemplate, renameTemplate }}>
+    <SessionContext.Provider value={{ register, unregister, clearAll, triggerSave, triggerSaveAs, triggerOpen, triggerOpenRecent, recentFiles, refreshRecentFiles, currentFilePath, templates, saveTemplate, loadTemplate, deleteTemplate, renameTemplate }}>
       {children}
     </SessionContext.Provider>
   );

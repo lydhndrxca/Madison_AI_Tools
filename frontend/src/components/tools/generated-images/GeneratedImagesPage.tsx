@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { ChevronRight, ChevronDown, X, Copy, Download, ArrowLeft, ArrowRight, RefreshCw, Trash2, FolderOpen, CheckSquare, Square, Star, RotateCcw, Monitor } from "lucide-react";
+import { ChevronRight, ChevronDown, X, Copy, Download, ArrowLeft, ArrowRight, RefreshCw, Trash2, FolderOpen, CheckSquare, Square, Star, RotateCcw, Monitor, Play } from "lucide-react";
 import { apiFetch } from "@/hooks/useApi";
 import { useImageEnhance } from "@/hooks/useImageEnhance";
 import { FavoritesPage } from "@/components/tools/favorites/FavoritesPage";
@@ -17,6 +17,7 @@ interface ImageEntry {
   generation_type: string;
   timestamp: string;
   prompt: string;
+  media_type?: "image" | "video";
 }
 
 interface CtxMenu { x: number; y: number; idx: number }
@@ -73,16 +74,6 @@ export function GeneratedImagesPage({ defaultTab, onNavigate }: GeneratedImagesP
     setLoadingTree(false);
   }, []);
 
-  useEffect(() => { fetchTree(); }, [fetchTree]);
-
-  const toggleTool = (name: string) => {
-    setExpandedTools((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name); else next.add(name);
-      return next;
-    });
-  };
-
   const selectDate = useCallback(async (tool: string, date: string) => {
     setSelectedTool(tool);
     setSelectedDate(date);
@@ -105,6 +96,43 @@ export function GeneratedImagesPage({ defaultTab, onNavigate }: GeneratedImagesP
     setLoadingImages(false);
   }, []);
 
+  useEffect(() => { fetchTree(); }, [fetchTree]);
+
+  const pendingToolSelect = useRef<string | null>(null);
+
+  // When tree loads, auto-select pending tool's most recent date
+  useEffect(() => {
+    const toolName = pendingToolSelect.current;
+    if (!toolName || tree.length === 0) return;
+    const entry = tree.find((t) => t.name === toolName);
+    if (entry && entry.dates.length > 0) {
+      setExpandedTools((prev) => new Set(prev).add(toolName));
+      selectDate(toolName, entry.dates[0].date);
+    }
+    pendingToolSelect.current = null;
+  }, [tree, selectDate]);
+
+  // Listen for external navigation requests (e.g. "jump to Veo in gallery")
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const toolName = (e as CustomEvent<string>).detail;
+      if (!toolName) return;
+      setSubTab("browse");
+      pendingToolSelect.current = toolName;
+      fetchTree();
+    };
+    window.addEventListener("gallery-select-tool", handler);
+    return () => window.removeEventListener("gallery-select-tool", handler);
+  }, [fetchTree]);
+
+  const toggleTool = (name: string) => {
+    setExpandedTools((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  };
+
   const openPreview = useCallback(async (idx: number) => {
     setPreviewIdx(idx);
     const img = images[idx];
@@ -120,9 +148,11 @@ export function GeneratedImagesPage({ defaultTab, onNavigate }: GeneratedImagesP
     setPreviewMeta(null);
     setLoadingPreview(true);
     try {
-      const resp = await apiFetch<{ image_b64: string; meta?: Record<string, unknown> }>(`/gallery/image?tool=${encodeURIComponent(selectedTool)}&date=${encodeURIComponent(selectedDate)}&filename=${encodeURIComponent(img.filename)}`);
+      const resp = await apiFetch<{ image_b64: string; meta?: Record<string, unknown>; media_type?: string }>(`/gallery/image?tool=${encodeURIComponent(selectedTool)}&date=${encodeURIComponent(selectedDate)}&filename=${encodeURIComponent(img.filename)}`);
       if (resp.image_b64) {
-        const dataUrl = `data:image/png;base64,${resp.image_b64}`;
+        const isVideo = resp.media_type === "video" || img.media_type === "video";
+        const mime = isVideo ? "video/mp4" : "image/png";
+        const dataUrl = `data:${mime};base64,${resp.image_b64}`;
         fullImageCache.current.set(fk, dataUrl);
         setPreviewSrc(dataUrl);
         if (resp.meta) {
@@ -508,16 +538,23 @@ export function GeneratedImagesPage({ defaultTab, onNavigate }: GeneratedImagesP
                         className="w-full h-full object-contain"
                         loading="lazy"
                       />
+                      {img.media_type === "video" && (
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                          <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,0.6)", border: "2px solid rgba(255,255,255,0.5)" }}>
+                            <Play size={14} fill="white" style={{ color: "white", marginLeft: 2 }} />
+                          </div>
+                        </div>
+                      )}
                       <div className="absolute inset-0 opacity-0 group-hover:opacity-100 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.35)", transition: "opacity 150ms" }}>
-                        <span className="text-[10px] font-medium px-2 py-1 rounded" style={{ background: "rgba(0,0,0,0.7)", color: "var(--color-foreground)" }}>View</span>
+                        <span className="text-[10px] font-medium px-2 py-1 rounded" style={{ background: "rgba(0,0,0,0.7)", color: "var(--color-foreground)" }}>{img.media_type === "video" ? "Play" : "View"}</span>
                       </div>
                     </div>
                     <div className="px-2 py-1.5">
                       <p className="text-[10px] truncate" style={{ color: "var(--color-text-primary)" }}>
-                        {img.view && img.generation_type ? `${img.view} — ${img.generation_type}` : img.filename}
+                        {img.media_type === "video" ? (img.generation_type ? `Video — ${img.generation_type}` : "Video") : (img.view && img.generation_type ? `${img.view} — ${img.generation_type}` : img.filename)}
                       </p>
                       <p className="text-[9px]" style={{ color: "var(--color-text-muted)" }}>
-                        {img.width}×{img.height}{img.model ? ` · ${img.model.split("-").slice(0, 3).join("-")}` : ""}
+                        {img.media_type === "video" ? (img.model ? img.model.split("-").slice(0, 3).join("-") : "video") : `${img.width}×${img.height}`}{img.model && img.media_type !== "video" ? ` · ${img.model.split("-").slice(0, 3).join("-")}` : ""}
                       </p>
                     </div>
                   </div>
@@ -585,24 +622,35 @@ export function GeneratedImagesPage({ defaultTab, onNavigate }: GeneratedImagesP
             style={{ maxWidth: "90vw", maxHeight: "90vh", background: "rgba(28,28,28,1)", border: "1px solid rgba(255,255,255,0.08)" }}
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Left: Image + buttons */}
+            {/* Left: Media + buttons */}
             <div className="flex flex-col items-center justify-center min-w-0" style={{ minWidth: 400, maxWidth: "60vw" }}>
-              {/* Image area with floating nav arrows */}
+              {/* Media area with floating nav arrows */}
               <div className="flex-1 flex items-center justify-center p-5 min-h-0 relative"
                 onContextMenu={(e) => { e.preventDefault(); if (previewIdx !== null) handleContextMenu(e, previewIdx); }}
               >
                 {previewIdx > 0 && (
-                  <button onClick={() => navigatePreview(-1)} className="absolute left-2 top-1/2 -translate-y-1/2 p-2 rounded-full cursor-pointer z-10 opacity-50 hover:opacity-100 transition-opacity" style={{ background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.7)" }} title="Previous image (Left arrow)">
+                  <button onClick={() => navigatePreview(-1)} className="absolute left-2 top-1/2 -translate-y-1/2 p-2 rounded-full cursor-pointer z-10 opacity-50 hover:opacity-100 transition-opacity" style={{ background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.7)" }} title="Previous (Left arrow)">
                     <ArrowLeft className="h-4 w-4" />
                   </button>
                 )}
                 {previewIdx < images.length - 1 && (
-                  <button onClick={() => navigatePreview(1)} className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-full cursor-pointer z-10 opacity-50 hover:opacity-100 transition-opacity" style={{ background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.7)" }} title="Next image (Right arrow)">
+                  <button onClick={() => navigatePreview(1)} className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-full cursor-pointer z-10 opacity-50 hover:opacity-100 transition-opacity" style={{ background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.7)" }} title="Next (Right arrow)">
                     <ArrowRight className="h-4 w-4" />
                   </button>
                 )}
                 {loadingPreview && <RefreshCw className="h-6 w-6 animate-spin" style={{ color: "rgba(255,255,255,0.25)" }} />}
-                {previewSrc && <img src={previewSrc} alt="" className="max-w-full max-h-[70vh] object-contain rounded" style={{ boxShadow: "0 4px 32px rgba(0,0,0,0.6)" }} />}
+                {previewSrc && currentImage?.media_type === "video" ? (
+                  <video
+                    src={previewSrc}
+                    controls
+                    autoPlay
+                    loop
+                    className="max-w-full max-h-[70vh] rounded"
+                    style={{ boxShadow: "0 4px 32px rgba(0,0,0,0.6)" }}
+                  />
+                ) : previewSrc ? (
+                  <img src={previewSrc} alt="" className="max-w-full max-h-[70vh] object-contain rounded" style={{ boxShadow: "0 4px 32px rgba(0,0,0,0.6)" }} />
+                ) : null}
               </div>
 
               {/* Navigation counter */}
@@ -610,29 +658,35 @@ export function GeneratedImagesPage({ defaultTab, onNavigate }: GeneratedImagesP
                 {previewIdx + 1} of {images.length}
               </div>
 
-              {/* Action buttons — directly below image */}
-              <div className="flex items-center justify-center gap-1.5 px-4 py-3 shrink-0" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-                <button onClick={() => copyImageAtIdx(previewIdx)} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="Copy image to clipboard">
-                  <Copy className="h-3.5 w-3.5" /> Copy
-                </button>
-                <button onClick={() => downloadImageAtIdx(previewIdx)} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="Save image to disk">
-                  <Download className="h-3.5 w-3.5" /> Save
-                </button>
-                <button onClick={handleSendToPS} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="Open this image in Adobe Photoshop">
-                  <Monitor className="h-3.5 w-3.5" /> Send to PS
-                </button>
-                <button onClick={() => handleEnhancePreview("upscale")} disabled={enhancer.busy} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium disabled:opacity-40" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="AI upscale">
-                  {enhancer.busy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <span className="text-[9px] font-bold">▲</span>} AI Upres
-                </button>
-                <button onClick={() => handleEnhancePreview("restore")} disabled={enhancer.busy} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium disabled:opacity-40" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="AI restore">
-                  {enhancer.busy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <span className="text-[9px] font-bold">✦</span>} AI Restore
-                </button>
-                {onNavigate && (
-                  <button onClick={handleRestore} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="Restore to main stage">
-                    <RotateCcw className="h-3.5 w-3.5" /> Restore to Main Stage
+              {/* Action buttons — directly below media */}
+              <div className="flex items-center justify-center gap-1.5 px-4 py-3 shrink-0 flex-wrap" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                {currentImage?.media_type !== "video" && (
+                  <button onClick={() => copyImageAtIdx(previewIdx)} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="Copy image to clipboard">
+                    <Copy className="h-3.5 w-3.5" /> Copy
                   </button>
                 )}
-                <button onClick={() => { if (previewIdx !== null) deleteImages([images[previewIdx].filename]); }} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)" }} title="Delete this image">
+                <button onClick={() => downloadImageAtIdx(previewIdx)} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title={currentImage?.media_type === "video" ? "Save video" : "Save image to disk"}>
+                  <Download className="h-3.5 w-3.5" /> Save
+                </button>
+                {currentImage?.media_type !== "video" && (
+                  <>
+                    <button onClick={handleSendToPS} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="Open this image in Adobe Photoshop">
+                      <Monitor className="h-3.5 w-3.5" /> Send to PS
+                    </button>
+                    <button onClick={() => handleEnhancePreview("upscale")} disabled={enhancer.busy} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium disabled:opacity-40" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="AI upscale">
+                      {enhancer.busy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <span className="text-[9px] font-bold">▲</span>} AI Upres
+                    </button>
+                    <button onClick={() => handleEnhancePreview("restore")} disabled={enhancer.busy} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium disabled:opacity-40" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="AI restore">
+                      {enhancer.busy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <span className="text-[9px] font-bold">✦</span>} AI Restore
+                    </button>
+                    {onNavigate && (
+                      <button onClick={handleRestore} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.6)" }} title="Restore to main stage">
+                        <RotateCcw className="h-3.5 w-3.5" /> Restore to Main Stage
+                      </button>
+                    )}
+                  </>
+                )}
+                <button onClick={() => { if (previewIdx !== null) deleteImages([images[previewIdx].filename]); }} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] cursor-pointer font-medium" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)" }} title="Delete">
                   <Trash2 className="h-3.5 w-3.5" /> Delete
                 </button>
               </div>
@@ -654,7 +708,7 @@ export function GeneratedImagesPage({ defaultTab, onNavigate }: GeneratedImagesP
               const h = Number(meta.height || currentImage.height || 0);
               const ts = String(meta.timestamp || currentImage.timestamp || "");
 
-              const knownKeys = new Set(["timestamp", "tool", "view", "generation_type", "image_file", "width", "height", "model", "description", "prompt", "thumbnail_b64"]);
+              const knownKeys = new Set(["timestamp", "tool", "view", "generation_type", "image_file", "width", "height", "model", "description", "prompt", "thumbnail_b64", "media_type"]);
               const extraFields = Object.entries(meta).filter(([k]) => !knownKeys.has(k) && meta[k] !== "" && meta[k] !== null && meta[k] !== undefined);
 
               return (

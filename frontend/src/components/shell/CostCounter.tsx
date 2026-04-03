@@ -78,7 +78,7 @@ export function CostCounter() {
             </div>
 
             {sortedCategories.length > 0 && (
-              <div className="flex flex-col gap-1.5" style={{ borderTop: "1px solid var(--color-border)", paddingTop: 10 }}>
+              <div className="flex flex-col gap-1.5" style={{ borderTop: "1px solid var(--color-border)", paddingTop: 10, maxHeight: 320, overflowY: "auto" }}>
                 {sortedCategories.map(([cat, cost]) => {
                   const pct = total > 0 ? (cost / total) * 100 : 0;
                   return (

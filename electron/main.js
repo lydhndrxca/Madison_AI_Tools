@@ -132,19 +132,60 @@ ipcMain.handle("clipboard:readImage", () => {
   return { dataUrl: img.toDataURL() };
 });
 
+// Recent session files
+const RECENT_FILE = path.join(app.getPath("userData"), "recent-sessions.json");
+function loadRecentFiles() {
+  try { return JSON.parse(fs.readFileSync(RECENT_FILE, "utf8")); } catch { return []; }
+}
+function addRecentFile(fp) {
+  let recent = loadRecentFiles().filter((r) => r !== fp);
+  recent.unshift(fp);
+  if (recent.length > 10) recent = recent.slice(0, 10);
+  try { fs.writeFileSync(RECENT_FILE, JSON.stringify(recent), "utf8"); } catch { /* */ }
+}
+
 ipcMain.handle("session:save", async (_event, jsonStr) => {
-  if (!mainWindow) return false;
+  if (!mainWindow) return null;
   const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, {
     title: "Save Session",
     defaultPath: path.join(app.getPath("documents"), "madison-session.json"),
     filters: [{ name: "Madison Session", extensions: ["json"] }],
   });
-  if (canceled || !filePath) return false;
+  if (canceled || !filePath) return null;
   try {
     await fs.promises.writeFile(filePath, jsonStr, "utf8");
-    return true;
+    addRecentFile(filePath);
+    return filePath;
   } catch (err) {
     console.error("[session:save] Write failed:", err);
+    return null;
+  }
+});
+
+ipcMain.handle("session:save-to-path", async (_event, filePath, jsonStr) => {
+  try {
+    await fs.promises.writeFile(filePath, jsonStr, "utf8");
+    addRecentFile(filePath);
+    return true;
+  } catch (err) {
+    console.error("[session:save-to-path] Write failed:", err);
+    return false;
+  }
+});
+
+ipcMain.handle("session:recent-files", () => {
+  return loadRecentFiles().filter((fp) => fs.existsSync(fp));
+});
+
+ipcMain.handle("session:open-file", async (_event, fp) => {
+  try {
+    const data = fs.readFileSync(fp, "utf8");
+    JSON.parse(data);
+    addRecentFile(fp);
+    if (mainWindow) mainWindow.webContents.send("session:loaded", data, fp);
+    return true;
+  } catch (err) {
+    console.error("[session:open-file] Failed:", err.message);
     return false;
   }
 });
@@ -160,7 +201,8 @@ ipcMain.handle("menu:open-session", async () => {
   try {
     const data = fs.readFileSync(filePaths[0], "utf8");
     JSON.parse(data);
-    mainWindow.webContents.send("session:loaded", data);
+    addRecentFile(filePaths[0]);
+    mainWindow.webContents.send("session:loaded", data, filePaths[0]);
   } catch (err) {
     console.error("[main] Failed to read session file:", err.message);
   }

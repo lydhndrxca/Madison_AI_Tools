@@ -53,8 +53,9 @@ const DEFAULT_SHORTCUTS: ShortcutDef[] = [
   // Global
   { id: "openSettings", label: "Open Settings", category: "global", defaultKeys: "Ctrl+,", currentKeys: "Ctrl+," },
   { id: "toggleConsole", label: "Toggle Console", category: "global", defaultKeys: "Ctrl+`", currentKeys: "Ctrl+`" },
-  { id: "saveSession", label: "Save Session", category: "global", defaultKeys: "Ctrl+S", currentKeys: "Ctrl+S" },
-  { id: "openSession", label: "Open Session", category: "global", defaultKeys: "Ctrl+O", currentKeys: "Ctrl+O" },
+  { id: "saveSession", label: "Save", category: "global", defaultKeys: "Ctrl+S", currentKeys: "Ctrl+S" },
+  { id: "saveAsSession", label: "Save As", category: "global", defaultKeys: "Ctrl+Shift+S", currentKeys: "Ctrl+Shift+S" },
+  { id: "openSession", label: "Open", category: "global", defaultKeys: "Ctrl+O", currentKeys: "Ctrl+O" },
   { id: "toggleVoice", label: "Toggle Dictate", category: "global", defaultKeys: "Ctrl+R", currentKeys: "Ctrl+R" },
   { id: "toggleFullscreen", label: "Toggle Fullscreen Viewer", category: "global", defaultKeys: "Ctrl+F", currentKeys: "Ctrl+F" },
   { id: "exitFullscreen", label: "Exit Fullscreen", category: "global", defaultKeys: "Escape", currentKeys: "Escape", singleKey: false },

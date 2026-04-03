@@ -19,7 +19,7 @@ from fastapi import File, Form, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
-from pubg_madison_ai_suite.api.core import CONFIG_ROOT, get_extra_key
+from pubg_madison_ai_suite.api.core import CONFIG_ROOT, get_extra_key, track_cost
 
 router = APIRouter()
 
@@ -176,6 +176,10 @@ async def meshy_proxy(body: MeshyCreateRequest):
         data = r.json()
         if r.ok and isinstance(data, dict) and "result" in data:
             _add_job({"task_id": data["result"], "service": "meshy", "type": "single", "status": "PENDING", "progress": 0, "created_at": time.time()})
+            is_v6 = str(body.ai_model or "").startswith("meshy-6")
+            has_tex = body.should_texture is not False
+            credits = (30 if has_tex else 20) if is_v6 else (15 if has_tex else 5)
+            track_cost("meshy_3d", body.ai_model or "meshy", meshy_credits=credits)
         return data
 
     if body.action == "create-multi-image-to-3d":
@@ -184,6 +188,10 @@ async def meshy_proxy(body: MeshyCreateRequest):
         data = r.json()
         if r.ok and isinstance(data, dict) and "result" in data:
             _add_job({"task_id": data["result"], "service": "meshy", "type": "multi", "status": "PENDING", "progress": 0, "created_at": time.time()})
+            is_v6 = str(body.ai_model or "").startswith("meshy-6")
+            has_tex = body.should_texture is not False
+            credits = (30 if has_tex else 20) if is_v6 else (15 if has_tex else 5)
+            track_cost("meshy_3d", body.ai_model or "meshy", meshy_credits=credits)
         return data
 
     if body.action == "poll-image-to-3d":
@@ -242,6 +250,7 @@ async def meshy_proxy(body: MeshyCreateRequest):
             data = r.json()
             if r.ok and isinstance(data, dict) and "result" in data:
                 _add_job({"task_id": data["result"], "service": "meshy", "type": "retexture", "status": "PENDING", "progress": 0, "created_at": time.time()})
+                track_cost("meshy_retexture", body.ai_model or "meshy", meshy_credits=10)
             if not r.ok:
                 return JSONResponse(status_code=r.status_code, content=data if isinstance(data, dict) else {"error": str(data)})
             return data
@@ -375,6 +384,7 @@ async def hitem3d_proxy(body: Hitem3DRequest):
                 task_id = data.get("task_id") or (data.get("data", {}) if isinstance(data.get("data"), dict) else {}).get("task_id")
             if task_id:
                 _add_job({"task_id": task_id, "service": "hitem3d", "type": "image-to-3d", "status": "created", "progress": 0, "created_at": time.time(), "model": body.model, "resolution": body.resolution})
+                track_cost("hitem3d", body.model or "hitem3d", flat_cost=0.50)
             return data
         except Exception as e:
             return {"error": str(e)}

@@ -4,6 +4,7 @@ import { NumberStepper } from "@/components/ui/NumberStepper";
 import { ImageViewer } from "@/components/shared/ImageViewer";
 import { EditHistory } from "@/components/shared/EditHistory";
 import { GroupedTabBar, type TabDef } from "@/components/shared/TabBar";
+import { ArtboardCanvas } from "@/components/shared/ArtboardCanvas";
 import { apiFetch, cancelAllRequests } from "@/hooks/useApi";
 import { useToastContext } from "@/hooks/ToastContext";
 import { useFavorites } from "@/hooks/FavoritesContext";
@@ -15,6 +16,7 @@ import { useGenerationStatus } from "@/hooks/GenerationStatusContext";
 
 const DEFAULT_TABS: TabDef[] = [
   { id: "main", label: "Main Stage", group: "stage" },
+  { id: "artboard", label: "Art Table", group: "artboard" },
   { id: "refA", label: "Ref A", group: "refs" },
   { id: "refB", label: "Ref B", group: "refs" },
   { id: "refC", label: "Ref C", group: "refs" },
@@ -74,6 +76,9 @@ export function GeminiPage() {
   const [customH, setCustomH] = useState(1024);
   const [batchCount, setBatchCount] = useState(1);
 
+  const [styleLibraryFolder, setStyleLibraryFolder] = useState("");
+  const [styleLibraryFolders, setStyleLibraryFolders] = useState<{ name: string; guidance_text: string }[]>([]);
+
   const [completedCount, setCompletedCount] = useState(0);
   const [genStartTime, setGenStartTime] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
@@ -81,6 +86,12 @@ export function GeminiPage() {
   useEffect(() => {
     if (defaultModelId && !modelId) setModelId(defaultModelId);
   }, [defaultModelId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    apiFetch<{ name: string; guidance_text: string }[]>("/styles/folders?category=general")
+      .then(setStyleLibraryFolders)
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!genStartTime) return;
@@ -145,6 +156,9 @@ export function GeminiPage() {
     const baseB64 = Object.values(refImgs)[0] || null;
     const refMap = Object.keys(refImgs).length > 0 ? refImgs : null;
 
+    const styleFolder = styleLibraryFolders.find((f) => f.name === styleLibraryFolder);
+    const styleGuidance = styleFolder?.guidance_text || undefined;
+
     const promises = Array.from({ length: batchCount }, (_, i) =>
       apiFetch<{ image_b64: string | null; width: number; height: number; error: string | null }>("/gemini/generate", {
         method: "POST",
@@ -155,6 +169,7 @@ export function GeminiPage() {
           base_image_b64: baseB64,
           ref_images_b64: refMap,
           model_id: modelId || undefined,
+          style_guidance: styleGuidance,
         }),
       }).then((resp) => {
         setCompletedCount((c) => c + 1);
@@ -183,7 +198,7 @@ export function GeminiPage() {
 
     setGenStartTime(null);
     busy.end("generate");
-  }, [prompt, gallery, imageIdx, tabs, modelId, effectiveAspect, batchCount, setTabImage, appendToGallery, addToast, busy]);
+  }, [prompt, gallery, imageIdx, tabs, modelId, effectiveAspect, batchCount, setTabImage, appendToGallery, addToast, busy, styleLibraryFolder, styleLibraryFolders]);
 
   const handleCancel = useCallback(async () => {
     cancelAllRequests();
@@ -199,9 +214,8 @@ export function GeminiPage() {
     reader.readAsDataURL(file); e.target.value = "";
   }, [activeTab, setTabImage]);
 
-  useClipboardPaste(
-    useCallback((dataUrl: string) => setTabImage(activeTab, dataUrl), [activeTab, setTabImage]),
-  );
+  const clipboardPasteCb = useCallback((dataUrl: string) => setTabImage(activeTab, dataUrl), [activeTab, setTabImage]);
+  useClipboardPaste(activeTab === "artboard" ? undefined : clipboardPasteCb);
 
   const handlePaste = useCallback(async () => {
     try {
@@ -389,6 +403,27 @@ export function GeminiPage() {
           </div>
         </Card>
 
+        {/* Style Library */}
+        {styleLibraryFolders.length > 0 && (
+          <Card>
+            <div className="px-3 py-2 space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>Style Library</p>
+              <select
+                className="w-full px-2 py-1.5 text-xs rounded-[var(--radius-sm)] min-w-0 truncate"
+                style={selectStyle}
+                value={styleLibraryFolder}
+                onChange={(e) => setStyleLibraryFolder(e.target.value)}
+                title="Style folder for visual guidance"
+              >
+                <option value="">Default (Gemini)</option>
+                {styleLibraryFolders.map((f) => (
+                  <option key={f.name} value={f.name}>{f.name}</option>
+                ))}
+              </select>
+            </div>
+          </Card>
+        )}
+
         {/* Generate */}
         <Card>
           <div className="px-3 py-2 space-y-2">
@@ -429,26 +464,32 @@ export function GeminiPage() {
           onAddRef={handleAddRef}
           onRemoveTab={handleRemoveRef}
         />
-        <ImageViewer
-          src={currentSrc}
-          placeholder={`No ${(tabs.find((t) => t.id === activeTab)?.label ?? activeTab).toLowerCase()} image loaded`}
-          showToolbar={true}
-          locked={isGenerating}
-          onSaveImage={handleSaveImage}
-          onCopyImage={handleCopyImage}
-          onPasteImage={handlePaste}
-          onOpenImage={handleOpenImage}
-          onClearImage={isRefTab ? handleClearRef : handleClearImage}
-          onClearAllImages={handleClearAllImages}
-          onImageEdited={handleImageEdited}
-          imageCount={currentImages.length}
-          imageIndex={currentIdx}
-          onPrevImage={handlePrevImage}
-          onNextImage={handleNextImage}
-          isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
-          onToggleFavorite={currentSrc ? () => { const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "gemini", label: "main", source: "viewer" }); } : undefined}
-        />
-        <ShareToArtTableButton imageB64={currentSrc} tool="gemini" prompt={prompt} />
+        {activeTab === "artboard" ? (
+          <ArtboardCanvas />
+        ) : (
+          <div className="flex-1 flex overflow-hidden min-h-0">
+            <ImageViewer
+              src={currentSrc}
+              placeholder={`No ${(tabs.find((t) => t.id === activeTab)?.label ?? activeTab).toLowerCase()} image loaded`}
+              showToolbar={true}
+              locked={isGenerating}
+              onSaveImage={handleSaveImage}
+              onCopyImage={handleCopyImage}
+              onPasteImage={handlePaste}
+              onOpenImage={handleOpenImage}
+              onClearImage={isRefTab ? handleClearRef : handleClearImage}
+              onClearAllImages={handleClearAllImages}
+              onImageEdited={handleImageEdited}
+              imageCount={currentImages.length}
+              imageIndex={currentIdx}
+              onPrevImage={handlePrevImage}
+              onNextImage={handleNextImage}
+              isFavorited={currentSrc ? isFavorited(currentSrc.replace(/^data:image\/\w+;base64,/, "")) : false}
+              onToggleFavorite={currentSrc ? () => { const b64 = currentSrc.replace(/^data:image\/\w+;base64,/, ""); if (isFavorited(b64)) { const fid = getFavoriteId(b64); if (fid) removeFavorite(fid); } else addFavorite({ image_b64: b64, tool: "gemini", label: "main", source: "viewer" }); } : undefined}
+            />
+            <ShareToArtTableButton imageB64={currentSrc} tool="gemini" prompt={prompt} />
+          </div>
+        )}
 
         {/* Progress / Status Bar */}
         {isGenerating && (

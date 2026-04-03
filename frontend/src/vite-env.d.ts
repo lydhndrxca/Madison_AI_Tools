@@ -12,12 +12,18 @@ interface Window {
     readClipboardImage: () => Promise<ClipboardResult | null>;
     /** Push: main process sends pasted image data on every Ctrl+V. Returns unsubscribe fn. */
     onPasteImage: (callback: (result: ClipboardResult) => void) => () => void;
-    /** Session: send collected state JSON to main for saving to disk. */
-    saveSession: (data: string) => Promise<boolean>;
+    /** Session: Save As — native dialog, returns filePath or null. */
+    saveSession: (data: string) => Promise<string | null>;
+    /** Session: Save to known path (no dialog). Returns true on success. */
+    saveSessionToPath: (filePath: string, data: string) => Promise<boolean>;
+    /** Session: get list of recent session file paths. */
+    getRecentSessionFiles: () => Promise<string[]>;
+    /** Session: open a specific session file by path. */
+    openSessionFile: (filePath: string) => Promise<boolean>;
     /** Session: main requests renderer to collect state and save. */
     onRequestSave: (callback: () => void) => () => void;
-    /** Session: main sends loaded session JSON to renderer. */
-    onSessionLoaded: (callback: (data: string) => void) => () => void;
+    /** Session: main sends loaded session JSON to renderer (with optional filePath). */
+    onSessionLoaded: (callback: (data: string, filePath?: string) => void) => () => void;
     /** Menu: open external console window. */
     menuShowConsole: () => Promise<void>;
     /** Menu: trigger open session dialog from renderer. */

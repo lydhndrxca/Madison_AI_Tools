@@ -494,10 +494,6 @@ async def ai_review(body: AiReviewRequest):
         return {"text": "No API key configured — cannot perform AI review."}
 
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
-
         prompt = (
             "You are reviewing a user-created sidebar panel for an AI concept art tool.\n"
             f"Panel name: {body.section_name}\n"
@@ -511,8 +507,11 @@ async def ai_review(body: AiReviewRequest):
             "Keep it concise and constructive."
         )
 
-        resp = model.generate_content(prompt)
-        return {"text": resp.text}
+        result = core.rest_generate_text(
+            api_key, "gemini-2.0-flash", prompt, timeout=30,
+            cost_category="prompt_review",
+        )
+        return {"text": result or "No response from AI."}
     except Exception as exc:
         return {"text": f"AI review failed: {exc}"}
 

@@ -4,7 +4,7 @@ import { ImageViewer } from "@/components/shared/ImageViewer";
 import { GridGallery } from "@/components/shared/GridGallery";
 import type { GridGalleryResult } from "@/components/shared/GridGallery";
 import { AnimationPanel } from "@/components/shared/AnimationPanel";
-import type { AnimationFrame } from "@/components/shared/AnimationPanel";
+import type { AnimationFrame, RegenOptions } from "@/components/shared/AnimationPanel";
 import { GroupedTabBar } from "@/components/shared/TabBar";
 import { ArtboardCanvas } from "@/components/shared/ArtboardCanvas";
 import type { TabDef } from "@/components/shared/TabBar";
@@ -60,6 +60,7 @@ const UI_MODE_OPTIONS = [
   { value: "riff", label: "Explore Variations" },
   { value: "healthbar", label: "Health Bar" },
   { value: "animateHB", label: "Animate Health Bar" },
+  { value: "hitmarker", label: "Hit Marker" },
 ];
 
 const ELEMENT_TYPE_OPTIONS = [
@@ -205,9 +206,12 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
   const mainstageFileInputRef = useRef<HTMLInputElement>(null);
 
   // UI Generator state
-  const [uiMode, setUiMode] = useState<"create" | "colorize" | "riff" | "healthbar" | "animateHB">("create");
+  const [uiMode, setUiMode] = useState<"create" | "colorize" | "riff" | "healthbar" | "animateHB" | "hitmarker">("create");
   const [hbInputType, setHbInputType] = useState<"single" | "spritesheet">("single");
   const [hbFrameCount, setHbFrameCount] = useState(8);
+  const [hmSheetCount, setHmSheetCount] = useState(4);
+  const [hmFrameCount, setHmFrameCount] = useState(8);
+  const [hmSheets, setHmSheets] = useState<{ id: string; frames: AnimationFrame[]; previewB64: string }[]>([]);
   const [elementType, setElementType] = useState("icon");
   const [prompt, setPrompt] = useState("");
   const [artDirectorConfigOpen, setArtDirectorConfigOpen] = useState(false);
@@ -263,6 +267,11 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
         })
         .catch(() => { /* template not available */ });
     }
+    if (uiMode === "hitmarker") {
+      setMatchRefDims(true);
+      setStrictRefAdherence(true);
+      setUseGrid(false);
+    }
   }, [uiMode]);
 
   // Reference image
@@ -277,7 +286,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     img.onload = () => {
       setRefImageDims({ w: img.naturalWidth, h: img.naturalHeight });
       if (sessionLoadingRef.current) return;
-      if (uiMode === "healthbar") return;
+      if (uiMode === "healthbar" || uiMode === "hitmarker") return;
       const aspect = img.naturalWidth / img.naturalHeight;
       if (aspect > 1.4) setGridLayout("horizontal");
       else if (aspect < 0.7) setGridLayout("vertical");
@@ -396,6 +405,9 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       return id === "generate" || id === "refImage" || id === "saveOptions";
     }
     if (uiMode === "animateHB") {
+      return id === "generate" || id === "refImage" || id === "saveOptions";
+    }
+    if (uiMode === "hitmarker") {
       return id === "generate" || id === "refImage" || id === "saveOptions";
     }
     // create mode
@@ -749,7 +761,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     const [outW, outH] = resolveOutputDims();
     const refImagesB64 = collectRefImagesB64();
 
-    const effectiveElementType = uiMode === "colorize" ? "colorize" : uiMode === "healthbar" ? "healthbar" : uiMode === "animateHB" ? "healthbar-anim" : elementType;
+    const effectiveElementType = uiMode === "colorize" ? "colorize" : uiMode === "healthbar" ? "healthbar" : uiMode === "animateHB" ? "healthbar-anim" : uiMode === "hitmarker" ? "hitmarker" : elementType;
     const isRiffMode = uiMode === "riff";
     const baseReq = {
       element_type: effectiveElementType,
@@ -968,7 +980,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       const fusionContext = buildFusionBrief(styleFusion);
       const refImagesB64 = collectRefImagesB64();
       const body = JSON.stringify({
-        element_type: uiMode === "colorize" ? "colorize" : uiMode === "healthbar" ? "healthbar" : elementType,
+        element_type: uiMode === "colorize" ? "colorize" : uiMode === "healthbar" ? "healthbar" : uiMode === "hitmarker" ? "hitmarker" : elementType,
         prompt: animPrompt || prompt,
         frame_count: frameCount,
         source_image_b64: refImageB64 ? refImageB64.replace(/^data:image\/\w+;base64,/, "") : undefined,
@@ -1007,35 +1019,58 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     }
   }, [busy, uiMode, elementType, prompt, refImageB64, addColor, noColor, modelId, styleLibraryFolder, styleLibraryFolders, styleFusion, collectRefImagesB64, addToast, refImageDims]);
 
-  const handleRegenAnimFrame = useCallback(async (frameId: string) => {
+  const handleRegenAnimFrame = useCallback(async (frameId: string, opts?: RegenOptions) => {
     const idx = animFrames.findIndex((f) => f.id === frameId);
     if (idx < 0) return;
     busy.start("gen");
     try {
       const before = idx > 0 ? animFrames[idx - 1].image_b64 : undefined;
       const after = idx < animFrames.length - 1 ? animFrames[idx + 1].image_b64 : undefined;
-      const body = JSON.stringify({
-        before_frame_b64: before,
-        after_frame_b64: after,
-        source_image_b64: refImageB64 ? refImageB64.replace(/^data:image\/\w+;base64,/, "") : undefined,
-        prompt: prompt,
-        frame_index: idx,
-        total_frames: animFrames.length,
-        model_id: modelId || undefined,
-        style_context: styleLibraryFolder || undefined,
-      });
-      const res = await apiFetch<{ frame_b64?: string; width?: number; height?: number; error?: string }>(
-        "/uilab/regenerate-animation-frame", { method: "POST", body },
+      const count = opts?.count ?? 1;
+      const useModelId = opts?.modelId || modelId || undefined;
+      const extraNotes = opts?.notes ? `\n${opts.notes}` : "";
+
+      const makeRequest = () => apiFetch<{ frame_b64?: string; width?: number; height?: number; error?: string }>(
+        "/uilab/regenerate-animation-frame", {
+          method: "POST",
+          body: JSON.stringify({
+            before_frame_b64: before,
+            after_frame_b64: after,
+            source_image_b64: refImageB64 ? refImageB64.replace(/^data:image\/\w+;base64,/, "") : undefined,
+            prompt: prompt + extraNotes,
+            frame_index: idx,
+            total_frames: animFrames.length,
+            model_id: useModelId,
+            style_context: styleLibraryFolder || undefined,
+          }),
+        },
       );
-      if (res.error) { addToast(res.error, "error"); return; }
-      if (res.frame_b64) {
-        setAnimFrames((prev) => prev.map((f, i) =>
-          i === idx
-            ? { ...f, image_b64: res.frame_b64!, width: res.width || 256, height: res.height || 256 }
-            : f
-        ));
-        addToast(`Frame ${idx + 1} regenerated`, "success");
+
+      const results = await Promise.all(Array.from({ length: count }, () => makeRequest()));
+      const validResults = results.filter((r) => r.frame_b64 && !r.error);
+
+      if (validResults.length === 0) {
+        const errMsg = results.find((r) => r.error)?.error || "All regeneration attempts failed";
+        addToast(errMsg, "error");
+        return;
       }
+
+      setAnimFrames((prev) => prev.map((f, i) => {
+        if (i !== idx) return f;
+        const primary = validResults[0];
+        const alts = validResults.length > 1
+          ? validResults.slice(1).map((r) => r.frame_b64!)
+          : f.alternatives;
+        return {
+          ...f,
+          image_b64: primary.frame_b64!,
+          width: primary.width || 256,
+          height: primary.height || 256,
+          alternatives: alts,
+          activeAltIdx: 0,
+        };
+      }));
+      addToast(`Frame ${idx + 1} regenerated (${validResults.length} result${validResults.length > 1 ? "s" : ""})`, "success");
     } catch (e) {
       addToast(e instanceof Error ? e.message : "Frame regeneration failed", "error");
     } finally {
@@ -1056,6 +1091,109 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     setActiveTab("animation");
     addToast("Image sent to Animation tab", "info");
   }, [addToast]);
+
+  // --- Hit Marker handler (all sheets generated in parallel) ---
+  const handleGenerateHitMarker = useCallback(async () => {
+    if (busy.any || !refImageB64) return;
+    busy.start("gen");
+    setHmSheets([]);
+
+    try {
+      const fusionContext = buildFusionBrief(styleFusion);
+      const refImagesB64 = collectRefImagesB64();
+      const cleanRef = refImageB64.replace(/^data:image\/\w+;base64,/, "");
+      const guidanceText = styleLibraryFolder ? (styleLibraryFolders.find((f) => f.name === styleLibraryFolder)?.guidance_text || "") : "";
+
+      const sheetPromises = Array.from({ length: hmSheetCount }, (_, i) => {
+        const body = JSON.stringify({
+          element_type: "hitmarker",
+          prompt,
+          frame_count: hmFrameCount,
+          source_image_b64: cleanRef,
+          reference_image_b64: cleanRef,
+          ref_images: refImagesB64.length > 0 ? refImagesB64 : undefined,
+          riff_mode: true,
+          strict_reference_adherence: true,
+          match_ref_dims: true,
+          add_color: addColor,
+          no_color: noColor,
+          model_id: modelId || undefined,
+          style_context: styleLibraryFolder || undefined,
+          style_guidance: guidanceText,
+          fusion_context: fusionContext || undefined,
+          ref_original_width: refImageDims?.w || undefined,
+          ref_original_height: refImageDims?.h || undefined,
+        });
+        return apiFetch<{ frames?: string[]; frame_width?: number; frame_height?: number; error?: string }>(
+          "/uilab/generate-animation-frames", { method: "POST", body },
+        ).then((res) => ({ idx: i, res }));
+      });
+
+      const results = await Promise.allSettled(sheetPromises);
+
+      const buildPreview = async (frames: AnimationFrame[], fw: number, fh: number): Promise<string> => {
+        const previewCanvas = document.createElement("canvas");
+        const cols = Math.min(frames.length, 8);
+        const thumbH = 64;
+        const thumbW = Math.round((fw / fh) * thumbH);
+        previewCanvas.width = cols * thumbW;
+        previewCanvas.height = Math.ceil(frames.length / cols) * thumbH;
+        const ctx = previewCanvas.getContext("2d");
+        if (ctx) {
+          await Promise.all(frames.map((f, fi) =>
+            new Promise<void>((resolve) => {
+              const img = new Image();
+              img.onload = () => { ctx.drawImage(img, (fi % cols) * thumbW, Math.floor(fi / cols) * thumbH, thumbW, thumbH); resolve(); };
+              img.onerror = () => resolve();
+              img.src = `data:image/png;base64,${f.image_b64}`;
+            }),
+          ));
+        }
+        return previewCanvas.toDataURL("image/png").replace(/^data:image\/\w+;base64,/, "");
+      };
+
+      const sheets: typeof hmSheets = [];
+      const ts = Date.now();
+      for (const r of results) {
+        if (r.status === "rejected") continue;
+        const { idx, res } = r.value;
+        if (res.error) { addToast(`Sheet ${idx + 1}: ${res.error}`, "error"); continue; }
+        if (!res.frames || res.frames.length === 0) continue;
+
+        const fw = res.frame_width || 256;
+        const fh = res.frame_height || 256;
+        const frames: AnimationFrame[] = res.frames.map((b64, fi) => ({
+          id: `hm_${ts}_${idx}_${fi}`,
+          image_b64: b64,
+          width: fw,
+          height: fh,
+          duration_ms: 100,
+          label: `Frame ${fi + 1}`,
+        }));
+
+        const previewB64 = await buildPreview(frames, fw, fh);
+        sheets.push({ id: `hmsheet_${ts}_${idx}`, frames, previewB64 });
+      }
+
+      sheets.sort((a, b) => a.id.localeCompare(b.id));
+      setHmSheets(sheets);
+      if (sheets.length > 0) setActiveTab("grid");
+      addToast(`${sheets.length} of ${hmSheetCount} sheets generated`, sheets.length > 0 ? "success" : "error");
+    } catch (e) {
+      if (e instanceof Error && e.message.includes("abort")) return;
+      addToast(e instanceof Error ? e.message : "Hit Marker generation failed", "error");
+    } finally {
+      busy.end("gen");
+    }
+  }, [busy, hmSheetCount, hmFrameCount, prompt, refImageB64, addColor, noColor, modelId, styleLibraryFolder, styleLibraryFolders, styleFusion, collectRefImagesB64, addToast, refImageDims]);
+
+  const handleSendSheetToAnimation = useCallback((sheetId: string) => {
+    const sheet = hmSheets.find((s) => s.id === sheetId);
+    if (!sheet) return;
+    setAnimFrames(sheet.frames);
+    setActiveTab("animation");
+    addToast("Sheet sent to Animation tab", "info");
+  }, [hmSheets, addToast]);
 
   // --- Health Bar Animation handlers ---
   const handleGenerateHealthBarAnim = useCallback(async () => {
@@ -1374,7 +1512,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
       if (s === null) { handleReset(); return; }
       sessionLoadingRef.current = true;
       const d = s as Record<string, unknown>;
-      if (typeof d.uiMode === "string") setUiMode(d.uiMode as "create" | "colorize" | "riff" | "healthbar" | "animateHB");
+      if (typeof d.uiMode === "string") setUiMode(d.uiMode as "create" | "colorize" | "riff" | "healthbar" | "animateHB" | "hitmarker");
       if (typeof d.elementType === "string") setElementType(d.elementType);
       if (typeof d.prompt === "string") setPrompt(d.prompt);
       if (typeof d.genCount === "number") setGenCount(d.genCount);
@@ -1521,6 +1659,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     const isRiff = uiMode === "riff";
     const isHealthbar = uiMode === "healthbar";
     const isAnimateHB = uiMode === "animateHB";
+    const isHitMarker = uiMode === "hitmarker";
 
     const colorMode = addColor ? "color" : noColor ? "bw" : "natural";
     const handleColorMode = (mode: string) => {
@@ -1531,7 +1670,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
     return (
       <>
         {/* Element type sub-dropdown (Create / Riff only, hidden in Health Bar / AnimateHB mode) */}
-        {(isCreate || isRiff) && !isHealthbar && !isAnimateHB && (
+        {(isCreate || isRiff) && !isHealthbar && !isAnimateHB && !isHitMarker && (
           <div>
             <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Element Type</label>
             <Select
@@ -1571,14 +1710,14 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           rows={3}
-          placeholder={isAnimateHB ? "Optional: describe animation style, damage effects, color changes..." : isHealthbar ? "Describe the health bar style, mood, or visual treatment..." : isRiff ? "What directions should the variations explore? e.g. different art styles, materials, eras..." : isColorize ? "Optional: describe color preferences, mood, or palette direction..." : 'Describe the element — use "quotes" for button label text'}
+          placeholder={isHitMarker ? "Describe the animation — e.g. pulsing glow, shaking impact, EQ bars bouncing..." : isAnimateHB ? "Optional: describe animation style, damage effects, color changes..." : isHealthbar ? "Describe the health bar style, mood, or visual treatment..." : isRiff ? "What directions should the variations explore? e.g. different art styles, materials, eras..." : isColorize ? "Optional: describe color preferences, mood, or palette direction..." : 'Describe the element — use "quotes" for button label text'}
           disabled={busy.any}
           data-voice-target="uiPrompt"
         />
         <Button size="sm" className="w-full" generating={busy.is("enhance")} generatingText="Enhancing..." onClick={handleEnhancePrompt} title="Use AI to enrich and expand your element description">Enhance Description</Button>
 
         {/* Color mode — unified 3-way dropdown for all modes (hidden for colorize and animateHB) */}
-        {!isColorize && !isAnimateHB && (
+        {!isColorize && !isAnimateHB && !isHitMarker && (
           <div>
             <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>Color</label>
             <select
@@ -1664,7 +1803,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
         )}
 
         {/* Output size — single image only, not for animateHB */}
-        {!useGrid && !isAnimateHB && (
+        {!useGrid && !isAnimateHB && !isHitMarker && (
           <div className="flex gap-2">
             <div className="flex-1 min-w-0">
               <label className="text-[10px] font-medium block mb-0.5" style={{ color: "var(--color-text-muted)" }}>
@@ -1801,6 +1940,25 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
           </>
         )}
 
+        {/* Hit Marker controls */}
+        {isHitMarker && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-medium" style={{ color: "var(--color-text-muted)" }}>Sheets to Generate</label>
+              <NumberStepper value={hmSheetCount} min={1} max={8} onChange={setHmSheetCount} label="" />
+            </div>
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-medium" style={{ color: "var(--color-text-muted)" }}>Frames per Sheet</label>
+              <NumberStepper value={hmFrameCount} min={4} max={16} onChange={setHmFrameCount} label="" />
+            </div>
+            {!refImageB64 && (
+              <p className="text-[9px] px-1 py-1 rounded" style={{ color: "var(--color-warning)", background: "rgba(255,180,0,0.08)" }}>
+                Drop a source icon in the Source Image section below to get started.
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Generate button */}
         <div className="pt-0.5 flex flex-col gap-1.5">
           {isAnimateHB ? (
@@ -1815,6 +1973,19 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
               title={hbInputType === "single" ? "Generate all health bar animation states from the source image" : "Parse the sprite sheet into individual animation frames"}
             >
               {hbInputType === "single" ? "Generate Animation" : "Import & Parse"}
+            </Button>
+          ) : isHitMarker ? (
+            <Button
+              variant="primary"
+              className="w-full"
+              size="lg"
+              generating={busy.is("gen")}
+              generatingText={`Generating Sheet ${(hmSheets.length + 1)} of ${hmSheetCount}...`}
+              onClick={() => handleGenerateHitMarker()}
+              disabled={busy.is("gen") || !refImageB64}
+              title="Generate animation sprite sheets from the source icon"
+            >
+              Generate Animation Sheets
             </Button>
           ) : (
             <Button
@@ -1871,13 +2042,14 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-[11px] font-medium truncate" style={{ color: "var(--color-text-primary)" }}>
-                {uiMode === "colorize" ? "Source image loaded" : uiMode === "riff" ? "Source element loaded" : uiMode === "healthbar" ? "Health bar template loaded" : uiMode === "animateHB" ? (hbInputType === "single" ? "Health bar image loaded" : "Sprite sheet loaded") : "Reference loaded"}
+                {uiMode === "colorize" ? "Source image loaded" : uiMode === "riff" ? "Source element loaded" : uiMode === "healthbar" ? "Health bar template loaded" : uiMode === "animateHB" ? (hbInputType === "single" ? "Health bar image loaded" : "Sprite sheet loaded") : uiMode === "hitmarker" ? "Source icon loaded" : "Reference loaded"}
               </p>
               <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
                 {uiMode === "colorize" ? "Will be colorized"
                   : uiMode === "riff" ? "Variations will match this element"
                   : uiMode === "healthbar" ? "AI will paintover this base shape"
                   : uiMode === "animateHB" ? (hbInputType === "single" ? "AI will generate all depletion states" : "Will be parsed into individual frames")
+                  : uiMode === "hitmarker" ? "AI will animate this icon into sprite sheets"
                   : "Used as visual inspiration"}
               </p>
             </div>
@@ -1901,6 +2073,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
         {uiMode === "colorize" ? "This image will be colorized — structure and proportions are preserved."
           : uiMode === "riff" ? "Variations will respect this image's dimensions, structure, and identity."
           : uiMode === "healthbar" ? "The AI sees this health bar shape and generates paintovers and variations."
+          : uiMode === "hitmarker" ? "The AI will faithfully reproduce this icon and animate it into sprite sheets."
           : "Used as visual inspiration alongside your prompt and style library."}
       </p>
     </div>
@@ -2402,7 +2575,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
                 <Select
                   options={UI_MODE_OPTIONS}
                   value={uiMode}
-                  onChange={(e) => setUiMode(e.target.value as "create" | "colorize" | "riff" | "healthbar" | "animateHB")}
+                  onChange={(e) => setUiMode(e.target.value as "create" | "colorize" | "riff" | "healthbar" | "animateHB" | "hitmarker")}
                   disabled={busy.any}
                 />
               </div>
@@ -2416,11 +2589,13 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
                     ? "Generate health bar variations with style paintovers. Reference image is auto-loaded."
                     : uiMode === "animateHB"
                       ? "Create an animated health bar sequence from a single image, or import an existing sprite sheet."
-                      : "Take an existing icon or element and generate new ideas that respect its dimensions and structure."}
+                      : uiMode === "hitmarker"
+                        ? "Drop in any icon and generate animation sprite sheets. Send results to the Animation tab."
+                        : "Take an existing icon or element and generate new ideas that respect its dimensions and structure."}
             </p>
           </div>
-          {/* Row 2: View + Count (hidden for animateHB — goes to Animation tab directly) */}
-          {uiMode !== "animateHB" && (
+          {/* Row 2: View + Count (hidden for animateHB / hitmarker — they use dedicated generation) */}
+          {uiMode !== "animateHB" && uiMode !== "hitmarker" && (
             <div className="flex items-center gap-2">
               <label className="text-[10px] font-semibold uppercase tracking-wider shrink-0 w-10" style={{ color: "var(--color-text-secondary)" }}>View</label>
               <div className="flex-1 min-w-0">
@@ -2441,7 +2616,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
             </div>
           )}
           {/* Row 2a: Grid Layout (only when grid enabled) */}
-          {useGrid && uiMode !== "animateHB" && (
+          {useGrid && uiMode !== "animateHB" && uiMode !== "hitmarker" && (
             <div className="flex items-center gap-2">
               <label className="text-[10px] font-semibold uppercase tracking-wider shrink-0 w-10" style={{ color: "var(--color-text-secondary)" }}>Layout</label>
               <div className="flex-1 min-w-0">
@@ -2462,7 +2637,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
             </div>
           )}
           {/* Row 2b: Grid Intent (only when grid enabled) */}
-          {useGrid && uiMode !== "animateHB" && (
+          {useGrid && uiMode !== "animateHB" && uiMode !== "hitmarker" && (
             <div className="flex items-center gap-2">
               <label className="text-[10px] font-semibold uppercase tracking-wider shrink-0 w-10" style={{ color: "var(--color-text-secondary)" }}>Goal</label>
               <div className="flex-1 min-w-0">
@@ -2509,8 +2684,8 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
           const canToggle = TOGGLEABLE_SECTIONS.has(sectionId);
           const enabled = isSectionEnabled(sectionId);
           const label = sectionId === "generate"
-            ? (uiMode === "colorize" ? "Colorize Options" : uiMode === "riff" ? "Variation Options" : uiMode === "healthbar" ? "Health Bar Options" : uiMode === "animateHB" ? "Health Bar Animation" : "Generate Options")
-            : sectionId === "refImage" && (uiMode === "colorize" || uiMode === "riff" || uiMode === "animateHB") ? "Source Image"
+            ? (uiMode === "colorize" ? "Colorize Options" : uiMode === "riff" ? "Variation Options" : uiMode === "healthbar" ? "Health Bar Options" : uiMode === "animateHB" ? "Health Bar Animation" : uiMode === "hitmarker" ? "Hit Marker Options" : "Generate Options")
+            : sectionId === "refImage" && (uiMode === "colorize" || uiMode === "riff" || uiMode === "animateHB" || uiMode === "hitmarker") ? "Source Image"
             : SECTION_LABELS[sectionId];
           const sectionColor = getSectionColor("uilab", sectionId);
 
@@ -2734,7 +2909,51 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
               )}
             </div>
           )}
-          {activeTab === "grid" && (
+          {activeTab === "grid" && uiMode === "hitmarker" ? (
+            <div className="flex-1 overflow-auto p-3 space-y-3">
+              {hmSheets.length > 0 ? (
+                <>
+                  <h3 className="text-xs font-semibold" style={{ color: "var(--color-text-secondary)" }}>
+                    Hit Marker Sheets ({hmSheets.length})
+                  </h3>
+                  <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
+                    {hmSheets.map((sheet, si) => (
+                      <div
+                        key={sheet.id}
+                        className="rounded overflow-hidden"
+                        style={{ border: "1px solid var(--color-border)", background: "var(--color-card)" }}
+                      >
+                        <div className="p-1" style={{ background: "#00b140" }}>
+                          <img
+                            src={`data:image/png;base64,${sheet.previewB64}`}
+                            alt={`Sheet ${si + 1}`}
+                            className="w-full rounded"
+                            style={{ imageRendering: "pixelated" }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between px-2 py-1.5">
+                          <span className="text-[10px] font-medium" style={{ color: "var(--color-text-primary)" }}>
+                            Sheet {si + 1} — {sheet.frames.length} frames
+                          </span>
+                          <button
+                            className="text-[10px] px-2 py-0.5 rounded cursor-pointer"
+                            style={{ background: "var(--color-primary)", color: "#fff", border: "none" }}
+                            onClick={() => handleSendSheetToAnimation(sheet.id)}
+                          >
+                            Send to Animation
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-center justify-center h-full text-xs" style={{ color: "var(--color-text-tertiary)" }}>
+                  {busy.is("gen") ? "Generating sheets..." : "No sheets yet. Add a source image and click Generate Animation Sheets."}
+                </div>
+              )}
+            </div>
+          ) : activeTab === "grid" ? (
             <GridGallery
               results={galleryResults}
               title="UI Generator Results"
@@ -2766,7 +2985,7 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
               }}
               onNotify={addToast}
             />
-          )}
+          ) : null}
           {activeTab === "animation" && (
             <AnimationPanel
               frames={animFrames}
@@ -2776,6 +2995,8 @@ export function UILabPage({ instanceId = 0, active = true, projectUid }: UILabPa
               onRegenerateFrame={handleRegenAnimFrame}
               sourceImage={refImageB64}
               onNotify={addToast}
+              models={models}
+              defaultModelId={defaultModelId}
             />
           )}
           {activeTab === "artboard" && <ArtboardCanvas />}

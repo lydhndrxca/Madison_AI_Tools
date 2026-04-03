@@ -33,11 +33,15 @@ def _save_root() -> Path:
 # Tree
 # ---------------------------------------------------------------------------
 
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+_VIDEO_EXTS = {".mp4", ".webm", ".mov"}
+_ALL_MEDIA_EXTS = _IMAGE_EXTS | _VIDEO_EXTS
+
+
 @router.get("/tree")
 async def gallery_tree():
     root = _save_root()
     tools = []
-    _exts = {".png", ".jpg", ".jpeg", ".webp"}
     if root.is_dir():
         for tool_dir in sorted(root.iterdir()):
             if not tool_dir.is_dir():
@@ -46,7 +50,7 @@ async def gallery_tree():
             for date_dir in sorted(tool_dir.iterdir(), reverse=True):
                 if not date_dir.is_dir():
                     continue
-                count = sum(1 for f in date_dir.iterdir() if f.suffix.lower() in _exts)
+                count = sum(1 for f in date_dir.iterdir() if f.suffix.lower() in _ALL_MEDIA_EXTS)
                 if count > 0:
                     dates.append({"date": date_dir.name, "count": count})
             if dates:
@@ -119,7 +123,7 @@ def _read_image_meta(image_path: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 def _build_image_entry(f: Path) -> dict | None:
-    """Build a single image entry dict (runs in thread pool)."""
+    """Build a single media entry dict (runs in thread pool)."""
     meta = {}
     json_path = f.with_suffix(".json")
     if json_path.is_file():
@@ -128,9 +132,11 @@ def _build_image_entry(f: Path) -> dict | None:
         except Exception:
             pass
 
-    _ensure_thumb(f)
+    is_video = f.suffix.lower() in _VIDEO_EXTS
+    if not is_video:
+        _ensure_thumb(f)
 
-    dims = _read_image_meta(f)
+    dims = _read_image_meta(f) if not is_video else {"w": 0, "h": 0}
     return {
         "filename": f.name,
         "width": meta.get("width", dims["w"]),
@@ -140,6 +146,7 @@ def _build_image_entry(f: Path) -> dict | None:
         "generation_type": meta.get("generation_type", ""),
         "timestamp": meta.get("timestamp", ""),
         "prompt": meta.get("description", meta.get("prompt", "")),
+        "media_type": "video" if is_video else "image",
     }
 
 
@@ -150,15 +157,14 @@ def _validate_segment(seg: str) -> bool:
 
 @router.get("/images")
 async def gallery_images(tool: str = Query(...), date: str = Query(...)):
-    """Return image metadata (no thumbnails). Thumbnails are fetched via /thumb."""
+    """Return media metadata (no thumbnails). Thumbnails are fetched via /thumb."""
     if not _validate_segment(tool) or not _validate_segment(date):
         return {"images": []}
     folder = _save_root() / tool / date
     if not folder.is_dir():
         return {"images": []}
-    _exts = {".png", ".jpg", ".jpeg", ".webp"}
     files = sorted(
-        [f for f in folder.iterdir() if f.suffix.lower() in _exts],
+        [f for f in folder.iterdir() if f.suffix.lower() in _ALL_MEDIA_EXTS],
         reverse=True,
     )
 
@@ -182,11 +188,47 @@ async def gallery_thumb(tool: str = Query(...), date: str = Query(...), filename
     if ".." in filename or "/" in filename or "\\" in filename:
         return Response(status_code=400, content=b"Invalid filename")
 
-    image_path = _save_root() / tool / date / filename
-    if not image_path.is_file():
+    media_path = _save_root() / tool / date / filename
+    if not media_path.is_file():
         return Response(status_code=404, content=b"Not found")
 
-    thumb_path = _ensure_thumb(image_path)
+    is_video = media_path.suffix.lower() in _VIDEO_EXTS
+
+    # For videos, check pre-generated thumb from .thumbs/
+    if is_video:
+        thumb_dir = media_path.parent / THUMB_DIR_NAME
+        thumb_file = thumb_dir / (media_path.stem + ".thumb.jpg")
+        if thumb_file.is_file():
+            return Response(
+                content=thumb_file.read_bytes(),
+                media_type="image/jpeg",
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+        # Try generating thumbnail with ffmpeg on-demand
+        try:
+            import subprocess
+            thumb_dir.mkdir(exist_ok=True)
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", str(media_path), "-vframes", "1",
+                 "-vf", "scale=160:-1", str(thumb_file)],
+                capture_output=True, timeout=10,
+            )
+            if thumb_file.is_file() and thumb_file.stat().st_size > 0:
+                return Response(
+                    content=thumb_file.read_bytes(),
+                    media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=86400"},
+                )
+        except Exception:
+            pass
+        # 1x1 transparent pixel fallback for videos without ffmpeg
+        return Response(
+            content=b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00",
+            media_type="image/jpeg",
+        )
+
+    # Image thumbnails
+    thumb_path = _ensure_thumb(media_path)
     if thumb_path and thumb_path.is_file():
         return Response(
             content=thumb_path.read_bytes(),
@@ -196,7 +238,7 @@ async def gallery_thumb(tool: str = Query(...), date: str = Query(...), filename
 
     # Fallback: generate in memory
     try:
-        img = Image.open(image_path)
+        img = Image.open(media_path)
         img.thumbnail((THUMB_SIZE, THUMB_SIZE), Image.LANCZOS)
         if img.mode == "RGBA":
             img = img.convert("RGB")
@@ -236,7 +278,13 @@ async def gallery_image(tool: str = Query(...), date: str = Query(...), filename
             except Exception:
                 pass
 
-        return {"image_b64": b64, "filename": filename, "meta": meta}
+        is_video = file_path.suffix.lower() in _VIDEO_EXTS
+        return {
+            "image_b64": b64,
+            "filename": filename,
+            "meta": meta,
+            "media_type": "video" if is_video else "image",
+        }
     except Exception as e:
         return {"error": str(e), "image_b64": ""}
 

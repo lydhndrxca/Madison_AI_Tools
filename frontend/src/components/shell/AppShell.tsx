@@ -26,12 +26,16 @@ interface AppShellProps {
 }
 
 /* ── Reusable menu-bar dropdown ───────────────────────────────── */
-interface MenuItem { label: string; shortcut?: string; onClick: () => void; separator?: false }
+interface MenuItem { label: string; shortcut?: string; onClick: () => void; separator?: false; disabled?: boolean }
+interface MenuSubmenu { label: string; children: MenuItem[]; separator?: false }
 interface MenuSeparator { separator: true }
-type MenuEntry = MenuItem | MenuSeparator;
+type MenuEntry = MenuItem | MenuSubmenu | MenuSeparator;
+
+function isSubmenu(e: MenuEntry): e is MenuSubmenu { return !("separator" in e && e.separator) && "children" in e; }
 
 function MenuBarDropdown({ label, items }: { label: string; items: MenuEntry[] }) {
   const [open, setOpen] = useState(false);
+  const [subOpen, setSubOpen] = useState<number | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -56,20 +60,58 @@ function MenuBarDropdown({ label, items }: { label: string; items: MenuEntry[] }
           style={{ background: "var(--color-card)", border: "1px solid var(--color-border)", minWidth: 220 }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          {items.map((item, i) =>
-            item.separator
-              ? <div key={i} style={{ borderTop: "1px solid var(--color-border)", margin: "3px 0" }} />
-              : (
-                <button
+          {items.map((item, i) => {
+            if ("separator" in item && item.separator) {
+              return <div key={i} style={{ borderTop: "1px solid var(--color-border)", margin: "3px 0" }} />;
+            }
+            if (isSubmenu(item)) {
+              return (
+                <div
                   key={i}
-                  className="ctx-menu-item flex items-center justify-between w-full text-left"
-                  onClick={() => { item.onClick(); setOpen(false); }}
+                  className="relative"
+                  onMouseEnter={() => setSubOpen(i)}
+                  onMouseLeave={() => setSubOpen(null)}
                 >
-                  <span>{item.label}</span>
-                  {item.shortcut && <span className="text-[10px] ml-4" style={{ color: "var(--color-text-muted)", opacity: 0.7 }}>{item.shortcut}</span>}
-                </button>
-              ),
-          )}
+                  <button
+                    className="ctx-menu-item flex items-center justify-between w-full text-left"
+                    style={{ cursor: item.children.length > 0 ? "default" : "not-allowed", opacity: item.children.length > 0 ? 1 : 0.4 }}
+                  >
+                    <span>{item.label}</span>
+                    <span className="text-[10px] ml-4" style={{ color: "var(--color-text-muted)" }}>▸</span>
+                  </button>
+                  {subOpen === i && item.children.length > 0 && (
+                    <div
+                      className="absolute left-full top-0 z-[10000] rounded shadow-lg py-1"
+                      style={{ background: "var(--color-card)", border: "1px solid var(--color-border)", minWidth: 200, maxWidth: 340 }}
+                    >
+                      {item.children.map((child, ci) => (
+                        <button
+                          key={ci}
+                          className="ctx-menu-item flex items-center w-full text-left"
+                          onClick={() => { child.onClick(); setOpen(false); setSubOpen(null); }}
+                          title={child.label}
+                        >
+                          <span className="truncate">{child.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            const mi = item as MenuItem;
+            return (
+              <button
+                key={i}
+                className="ctx-menu-item flex items-center justify-between w-full text-left"
+                onClick={() => { if (!mi.disabled) { mi.onClick(); setOpen(false); } }}
+                style={mi.disabled ? { opacity: 0.4, cursor: "default" } : undefined}
+              >
+                <span>{mi.label}</span>
+                {mi.shortcut && <span className="text-[10px] ml-4" style={{ color: "var(--color-text-muted)", opacity: 0.7 }}>{mi.shortcut}</span>}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
@@ -235,6 +277,7 @@ const PAGE_LABELS: Record<PageId, string> = {
   "transcripts": "Art Direction Logs",
   "brainstorm": "Idea Brainstorming",
   "writingroom": "Writing Room",
+  "veo": "Veo Video",
   "help": "Help Wiki",
 };
 
@@ -244,7 +287,7 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [audioSettingsOpen, setAudioSettingsOpen] = useState(false);
-  const { triggerSave, triggerOpen } = useSessionContext();
+  const { triggerSave, triggerSaveAs, triggerOpen, triggerOpenRecent, recentFiles, refreshRecentFiles, currentFilePath } = useSessionContext();
   const voice = useVoiceToText();
   const [voiceCtxMenu, setVoiceCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [voiceRestartPending, setVoiceRestartPending] = useState(false);
@@ -433,6 +476,7 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
     registerAction("openSettings", () => setSettingsOpen((p) => !p));
     registerAction("toggleConsole", () => setConsoleOpen((p) => !p));
     registerAction("saveSession", () => triggerSave());
+    registerAction("saveAsSession", () => triggerSaveAs());
     registerAction("openSession", () => triggerOpen());
     registerAction("navGenerate", () => onNavigate("gemini"));
     registerAction("navMultiview", () => onNavigate("multiview"));
@@ -446,7 +490,7 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
         unregisterAction(id);
       }
     };
-  }, [registerAction, unregisterAction, onNavigate, triggerSave, triggerOpen]);
+  }, [registerAction, unregisterAction, onNavigate, triggerSave, triggerSaveAs, triggerOpen]);
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -482,8 +526,11 @@ export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
             </button>
           )}
           <MenuBarDropdown label="File" items={[
-            { label: "Save Session", shortcut: "Ctrl+S", onClick: () => triggerSave() },
-            { label: "Open Session", shortcut: "Ctrl+O", onClick: () => triggerOpen() },
+            { label: currentFilePath ? `Save "${currentFilePath.replace(/^.*[\\/]/, "").replace(/\.json$/, "")}"` : "Save", shortcut: "Ctrl+S", onClick: () => triggerSave() },
+            { label: "Save As...", shortcut: "Ctrl+Shift+S", onClick: () => triggerSaveAs() },
+            { separator: true },
+            { label: "Open...", shortcut: "Ctrl+O", onClick: () => triggerOpen() },
+            { label: "Open Recent", children: recentFiles.length > 0 ? recentFiles.map((f) => ({ label: f.name, onClick: () => triggerOpenRecent(f.path) })) : [{ label: "No recent files", onClick: () => {}, disabled: true }] },
             { separator: true },
             { label: "Save User Profile", onClick: handleSaveProfile },
             { label: "Load User Profile", onClick: handleLoadProfile },
